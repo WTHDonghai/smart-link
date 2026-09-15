@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Production & Build Output
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Tests & Coverage
+coverage/
+test-results/
+playwright-report/
+
+# Logs
+logs/
+*.log
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# IDEs & AI Assistants
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.antigravity/
+.gemini/
+.cursor/
+.claude/
+.history/
