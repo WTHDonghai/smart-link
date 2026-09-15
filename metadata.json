@@ -1,0 +1,6 @@
+{
+  "name": "Smart Link Auto - OTA搬单后台",
+  "description": "基于 Electron + React + TypeScript + Redux Toolkit + Playwright 自动采集的跨平台 OTA 搬单后台管理系统",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

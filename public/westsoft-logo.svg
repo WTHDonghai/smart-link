@@ -1,0 +1,78 @@
+<svg viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#007dfc" />
+      <stop offset="45%" stopColor="#0055d4" />
+      <stop offset="100%" stopColor="#00359e" />
+    </linearGradient>
+    <linearGradient id="lensGrad" x1="280" y1="380" x2="720" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#0052cc" />
+      <stop offset="55%" stopColor="#0099ff" />
+      <stop offset="100%" stopColor="#00e5ff" />
+    </linearGradient>
+    <linearGradient id="hudGlow" x1="300" y1="400" x2="700" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#00e5ff" stopOpacity="0.4" />
+      <stop offset="70%" stopColor="#38efff" stopOpacity="0.9" />
+      <stop offset="100%" stopColor="#ffffff" stopOpacity="0.95" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="192" fill="url(#bgGrad)" />
+
+  <!-- Logo Graphics Group -->
+  <g transform="translate(160, 350) scale(2.7)">
+    <!-- Lens HUD -->
+    <path
+      d="M 68 25 L 182 25 C 192 25 197 32 192 41 L 173 70 C 170 75 164 77 158 77 L 142 77 C 134 77 129 60 120 48 C 114 41 106 41 100 48 C 91 60 86 77 78 77 L 72 77 C 65 77 60 72 63 64 L 68 25 Z"
+      fill="url(#lensGrad)"
+    />
+    <path
+      d="M 78 33 L 165 33 L 180 50 L 166 66 L 146 66 L 136 44 L 104 44 L 96 55 L 82 55 Z"
+      fill="#0044bb"
+      fill-opacity="0.45"
+    />
+    <path
+      d="M 82 36 L 142 36 L 150 48 L 174 48"
+      stroke="url(#hudGlow)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M 96 46 L 110 46 L 118 58"
+      stroke="#38efff"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      stroke-opacity="0.8"
+    />
+
+    <!-- Outer White Frame: X on Left -->
+    <path
+      d="M 5 20 L 26 20 L 50 50 L 26 82 L 5 82 L 32 50 Z"
+      fill="#FFFFFF"
+    />
+    <path
+      d="M 28 20 L 49 20 L 72 50 L 54 75 L 42 75 L 58 53 Z"
+      fill="#FFFFFF"
+    />
+
+    <!-- Outer White Visor Frame -->
+    <path
+      fill-rule="evenodd"
+      clip-rule="evenodd"
+      d="M 56 12 L 188 12 C 205 12 215 25 205 40 L 184 75 C 176 88 165 92 153 92 L 142 92 C 133 92 127 80 120 71 C 116 66 110 66 106 71 C 99 80 93 92 84 92 L 68 92 C 51 92 42 80 48 64 L 56 12 Z M 70 26 L 65 65 C 63 71 67 76 74 76 L 80 76 C 87 76 92 61 101 49 C 107 41 117 41 123 49 C 132 61 137 76 144 76 L 156 76 C 161 76 166 73 169 68 L 188 38 C 192 31 187 26 178 26 L 70 26 Z"
+      fill="#FFFFFF"
+    />
+
+    <!-- Chevron Arrow on Right -->
+    <path
+      d="M 198 20 L 216 20 L 242 53 L 216 86 L 198 86 L 222 53 Z"
+      fill="#FFFFFF"
+    />
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="170" y="660" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-weight="900" font-size="76" letter-spacing="4">杭州西软</text>
+  <text x="530" y="660" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-weight="600" font-size="64" letter-spacing="2">OTA智能搬单</text>
+</svg>
