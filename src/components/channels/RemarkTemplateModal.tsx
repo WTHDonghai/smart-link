@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { setSelectedChannelForTemplate, updateRemarkTemplate } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { X, Sparkles, Tag, Check, HelpCircle, Eye } from 'lucide-react';
+import { X, Tag, Check, Eye } from 'lucide-react';
 
 export const RemarkTemplateModal: React.FC = () => {
   const dispatch = useAppDispatch();

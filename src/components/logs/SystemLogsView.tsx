@@ -16,10 +16,6 @@ import {
   Play, 
   Pause, 
   Bot, 
-  Info, 
-  AlertTriangle, 
-  XCircle, 
-  CheckCircle2,
   RefreshCw
 } from 'lucide-react';
 

@@ -126,17 +126,6 @@ export const productSlice = createSlice({
     batchDeleteProducts: (state, action: PayloadAction<string[]>) => {
       const set = new Set(action.payload);
       state.products = state.products.filter(p => !set.has(p.id));
-    },
-    batchUpdateProducts: (state, action: PayloadAction<{ ids: string[]; updates: Partial<ProductMapping> }>) => {
-      const { ids, updates } = action.payload;
-      const set = new Set(ids);
-      state.products = state.products.map(p => set.has(p.id) ? { ...p, ...updates } : p);
-    },
-    toggleInventorySync: (state, action: PayloadAction<string>) => {
-      const prod = state.products.find(p => p.id === action.payload);
-      if (prod) {
-        prod.autoSyncInventory = !prod.autoSyncInventory;
-      }
     }
   }
 });
@@ -147,9 +136,7 @@ export const {
   setProductSearch,
   updateProductMapping,
   deleteProduct,
-  batchDeleteProducts,
-  batchUpdateProducts,
-  toggleInventorySync
+  batchDeleteProducts
 } = productSlice.actions;
 
 export default productSlice.reducer;

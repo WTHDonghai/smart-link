@@ -11,15 +11,13 @@ import {
   X, 
   Bot, 
   Cpu, 
-  ShieldCheck, 
   KeyRound, 
   RefreshCw, 
   Play, 
   Pause, 
   CheckCircle2, 
   AlertCircle,
-  Sparkles,
-  Layers
+  Sparkles
 } from 'lucide-react';
 
 export const PlaywrightStatusDrawer: React.FC = () => {

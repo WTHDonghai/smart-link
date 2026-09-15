@@ -24,10 +24,7 @@ import {
   Trash2, 
   Ban, 
   Copy, 
-  RotateCw, 
-  Check, 
   Play, 
-  Pause,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
@@ -49,7 +46,6 @@ export const OrderGuardianView: React.FC = () => {
   
   // Dropdown menu state
   const [activeMenuOrderId, setActiveMenuOrderId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Edit modal state
   const [editingOrder, setEditingOrder] = useState<GuardianOrder | null>(null);
@@ -175,10 +171,8 @@ export const OrderGuardianView: React.FC = () => {
     return range;
   };
 
-  const handleCopy = (text: string, orderId: string) => {
+  const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
-    setCopiedId(orderId);
-    setTimeout(() => setCopiedId(null), 1500);
     dispatch(showToast({
       title: '已复制单号',
       description: text,
@@ -530,7 +524,7 @@ export const OrderGuardianView: React.FC = () => {
                       <td className="py-3.5 px-4 align-top sticky left-[180px] z-10 bg-white group-hover:bg-[#fafafa] w-[210px] min-w-[210px] max-w-[210px] border-b border-r border-[#e5e7eb] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
                         <div className="flex flex-col">
                           <span 
-                            onClick={() => handleCopy(ord.otaOrderNo, ord.id)}
+                            onClick={() => handleCopy(ord.otaOrderNo)}
                             className="font-bold text-[#3b82f6] text-xs hover:underline cursor-pointer tracking-tight truncate"
                             title="点击复制 OTA 订单号"
                           >

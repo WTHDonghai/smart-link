@@ -4,9 +4,7 @@ import { GuardianOrder, OrderStatus } from '../../types';
 interface OrderGuardianState {
   orders: GuardianOrder[];
   isAutoGuarding: boolean;
-  selectedOrder: GuardianOrder | null;
   filterStatus: 'all' | OrderStatus;
-  filterChannel: string;
   searchKeyword: string;
   startDate: string;
   endDate: string;
@@ -25,9 +23,7 @@ interface OrderGuardianState {
 
 const initialState: OrderGuardianState = {
   isAutoGuarding: false,
-  selectedOrder: null,
   filterStatus: 'all',
-  filterChannel: 'all',
   searchKeyword: '',
   startDate: '',
   endDate: '',
@@ -423,12 +419,6 @@ export const orderGuardianSlice = createSlice({
     setOrderFilterStatus: (state, action: PayloadAction<'all' | OrderStatus>) => {
       state.filterStatus = action.payload;
     },
-    setOrderFilterChannel: (state, action: PayloadAction<string>) => {
-      state.filterChannel = action.payload;
-    },
-    setSelectedOrder: (state, action: PayloadAction<GuardianOrder | null>) => {
-      state.selectedOrder = action.payload;
-    },
     retryOrderTransfer: (state, action: PayloadAction<string>) => {
       const ord = state.orders.find(o => o.id === action.payload);
       if (ord) {
@@ -484,16 +474,6 @@ export const orderGuardianSlice = createSlice({
         ord.failureReason = '用户手动取消';
       }
     },
-    addNewScrapedOrder: (state, action: PayloadAction<GuardianOrder>) => {
-      state.orders.unshift(action.payload);
-      state.stats.todayTotal += 1;
-      if (action.payload.status === 'transferred' || action.payload.status === 'confirmed' || action.payload.status === 'success') {
-        state.stats.todaySuccess += 1;
-        state.stats.imported += 1;
-      } else {
-        state.stats.failed += 1;
-      }
-    },
     setSearchKeyword: (state, action: PayloadAction<string>) => {
       state.searchKeyword = action.payload;
     },
@@ -503,7 +483,6 @@ export const orderGuardianSlice = createSlice({
     },
     resetFilters: (state) => {
       state.filterStatus = 'all';
-      state.filterChannel = 'all';
       state.searchKeyword = '';
       state.startDate = '';
       state.endDate = '';
@@ -514,14 +493,11 @@ export const orderGuardianSlice = createSlice({
 export const {
   toggleAutoGuarding,
   setOrderFilterStatus,
-  setOrderFilterChannel,
-  setSelectedOrder,
   retryOrderTransfer,
   importOrderDirectly,
   updateOrder,
   deleteOrder,
   cancelOrder,
-  addNewScrapedOrder,
   setSearchKeyword,
   setDateRange,
   resetFilters

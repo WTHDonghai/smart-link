@@ -83,12 +83,10 @@ export const AVAILABLE_CHANNELS_CATALOG: Omit<OTAChannel, 'targetSystem' | 'toda
 interface ChannelState {
   channels: OTAChannel[];
   selectedChannelForTemplate: string | null;
-  searchQuery: string;
 }
 
 const initialState: ChannelState = {
   selectedChannelForTemplate: null,
-  searchQuery: '',
   channels: [
     {
       id: 'meituan',
@@ -182,15 +180,6 @@ export const channelSlice = createSlice({
     },
     setSelectedChannelForTemplate: (state, action: PayloadAction<string | null>) => {
       state.selectedChannelForTemplate = action.payload;
-    },
-    setSearchQuery: (state, action: PayloadAction<string>) => {
-      state.searchQuery = action.payload;
-    },
-    toggleChannelStatus: (state, action: PayloadAction<string>) => {
-      const ch = state.channels.find(c => c.id === action.payload);
-      if (ch) {
-        ch.status = ch.status === 'active' ? 'paused' : 'active';
-      }
     }
   }
 });
@@ -200,9 +189,7 @@ export const {
   removeChannel,
   updateChannelTargetSystem,
   updateRemarkTemplate,
-  setSelectedChannelForTemplate,
-  setSearchQuery,
-  toggleChannelStatus
+  setSelectedChannelForTemplate
 } = channelSlice.actions;
 
 export default channelSlice.reducer;

@@ -20,8 +20,7 @@ import {
   Menu,
   Download,
   RefreshCw,
-  CheckCircle2,
-  RotateCcw
+  CheckCircle2
 } from 'lucide-react';
 import { XiruanLogoMark } from '../common/XiruanLogo';
 

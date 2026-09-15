@@ -1,12 +1,10 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { NavTab, OSPlatform, PlaywrightConfig } from '../../types';
+import { NavTab, PlaywrightConfig } from '../../types';
 
 interface AppState {
   currentTab: NavTab;
-  platform: OSPlatform;
   sidebarCollapsed: boolean;
   playwrightModalOpen: boolean;
-  updateModalOpen: boolean;
   tenantId: string;
   version: string;
   hasUpdate: boolean;
@@ -24,10 +22,8 @@ interface AppState {
 
 const initialState: AppState = {
   currentTab: 'channel-mapping',
-  platform: 'macos',
   sidebarCollapsed: false,
   playwrightModalOpen: false,
-  updateModalOpen: false,
   tenantId: 'XR-89201',
   version: 'v2.4.1',
   hasUpdate: true,
@@ -61,20 +57,11 @@ export const appSlice = createSlice({
     setCurrentTab: (state, action: PayloadAction<NavTab>) => {
       state.currentTab = action.payload;
     },
-    setPlatform: (state, action: PayloadAction<OSPlatform>) => {
-      state.platform = action.payload;
-    },
     toggleSidebar: (state) => {
       state.sidebarCollapsed = !state.sidebarCollapsed;
     },
     setPlaywrightModalOpen: (state, action: PayloadAction<boolean>) => {
       state.playwrightModalOpen = action.payload;
-    },
-    setUpdateModalOpen: (state, action: PayloadAction<boolean>) => {
-      state.updateModalOpen = action.payload;
-    },
-    setTenantId: (state, action: PayloadAction<string>) => {
-      state.tenantId = action.payload;
     },
     startAutoUpdate: (state) => {
       state.isUpdating = true;
@@ -112,11 +99,8 @@ export const appSlice = createSlice({
 
 export const {
   setCurrentTab,
-  setPlatform,
   toggleSidebar,
   setPlaywrightModalOpen,
-  setUpdateModalOpen,
-  setTenantId,
   startAutoUpdate,
   setUpdateProgress,
   finishAutoUpdate,

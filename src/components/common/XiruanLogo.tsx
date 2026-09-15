@@ -1,11 +1,5 @@
 import React from 'react';
 
-interface XiruanLogoProps {
-  className?: string;
-  size?: number;
-  showText?: boolean;
-}
-
 /**
  * 杭州西软 OTA智能搬单 Logo 图标
  * 严格按照 1024x1024 品牌标识还原：
@@ -147,43 +141,5 @@ export const XiruanLogoMark: React.FC<{ className?: string }> = ({ className = '
         fill="#FFFFFF"
       />
     </svg>
-  );
-};
-
-/**
- * 侧边栏图标规格组件
- */
-export const XiruanLogoBadge: React.FC<{ className?: string }> = ({ className = 'w-9 h-9' }) => {
-  return (
-    <div
-      className={`rounded-lg bg-gradient-to-br from-[#0076f5] via-[#0052cc] to-[#003da5] flex items-center justify-center p-1.5 shadow-sm shrink-0 select-none overflow-hidden ${className}`}
-      title="杭州西软 OTA智能搬单"
-    >
-      <XiruanLogoMark className="w-full h-full object-contain" />
-    </div>
-  );
-};
-
-/**
- * 侧边栏展开时的完整品牌标识
- */
-export const XiruanBrandHeader: React.FC = () => {
-  return (
-    <div className="flex items-center gap-2.5 overflow-hidden">
-      <XiruanLogoBadge className="w-9 h-9" />
-      <div className="flex flex-col min-w-0 justify-center">
-        <div className="flex items-center gap-1.5">
-          <span className="font-extrabold text-sm text-[#0b1c30] leading-none tracking-tight whitespace-nowrap">
-            杭州西软
-          </span>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#edf4ff] text-[#004ac6] border border-[#d2e3fc] leading-none">
-            OTA
-          </span>
-        </div>
-        <span className="text-[11px] font-semibold text-[#525f7f] mt-1 tracking-wider whitespace-nowrap">
-          OTA智能搬单系统
-        </span>
-      </div>
-    </div>
   );
 };

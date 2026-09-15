@@ -1,5 +1,3 @@
-export type OSPlatform = 'macos' | 'windows';
-
 export type NavTab = 
   | 'channel-mapping' 
   | 'hotel-sync' 
@@ -53,10 +51,6 @@ export interface ProductMapping {
   priceRule?: 'direct' | 'markup_fixed' | 'markup_percent';
   markupValue?: number;
   autoSyncInventory?: boolean;
-  otaRoomName?: string;
-  otaRoomCode?: string;
-  pmsRoomName?: string;
-  pmsRoomCode?: string;
 }
 
 export type OrderStatus = 'transferred' | 'processing' | 'confirmed' | 'failed' | 'manual_review' | 'pending' | 'success' | 'cancelled' | 'importing';
