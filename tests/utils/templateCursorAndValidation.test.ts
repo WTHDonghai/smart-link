@@ -92,11 +92,28 @@ describe('Template Syntax, Cursor Insertion, and Unknown Variable Detection', ()
       expect(newText).toBe('单号:{美团单号} | 状态:成功');
       expect(nextCursorPos).toBe(initial.length + ' | 状态:成功'.length);
     });
+
+    it('defensively clamps negative and out-of-bounds cursor indices in insertAtCursor', () => {
+      const initial = '单号:{美团单号}';
+
+      // 负数光标限制到 0
+      const negativeResult = insertAtCursor(initial, '前缀:', -5, -2);
+      expect(negativeResult.newText).toBe('前缀:单号:{美团单号}');
+      expect(negativeResult.nextCursorPos).toBe(3);
+
+      // 超长光标限制到 text.length
+      const overflowResult = insertAtCursor(initial, ':后缀', 100, 200);
+      expect(overflowResult.newText).toBe('单号:{美团单号}:后缀');
+      expect(overflowResult.nextCursorPos).toBe(initial.length + 3);
+
+      // 倒序选区 selectionStart > selectionEnd 自动调换保证 start <= end
+      const invertedResult = insertAtCursor('ABCDE', 'X', 4, 1);
+      expect(invertedResult.newText).toBe('AXE');
+      expect(invertedResult.nextCursorPos).toBe(2);
+    });
   });
 
   describe('Task 3: Unknown Variable Detection Logic', () => {
-
-
     it('returns empty list for default Meituan template against Meituan schema', () => {
       const meituanTemplate =
         '【美团搬单】单号:{美团单号} | 房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话}) | 入住:{入住日期}至{离店日期} | 底价:¥{结算底价} | 早餐:{早餐说明}' +
@@ -168,6 +185,26 @@ describe('Template Syntax, Cursor Insertion, and Unknown Variable Detection', ()
       );
 
       expect(unknown).toEqual([]);
+    });
+
+    it('does not falsely report array wildcard or indexed variables like guests[*].name or guests[0].name', () => {
+      const template = '入住人:{guests[*].name} | 首位客人:{guests[0].name}';
+      const unknown = detectUnknownVariables(
+        template,
+        [{ key: 'guests', label: '入住人列表', enabled: true }],
+        { guests: [{ name: '张三' }] }
+      );
+      expect(unknown).toEqual([]);
+    });
+
+    it('detects unknown variable in if condition like {{#if 未知变量 > 10}}', () => {
+      const template = '{{#if 未知变量 > 10}}高价单{{/if}}';
+      const unknown = detectUnknownVariables(
+        template,
+        DEFAULT_MEITUAN_PROTOCOL_SCHEMA.fields,
+        { 美团单号: '123' }
+      );
+      expect(unknown).toContain('未知变量');
     });
 
     it('handles Douyin schema with Douyin fields accurately', () => {

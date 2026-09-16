@@ -18,6 +18,10 @@ export type AppErrorCode =
   // 系统与通用网络域 (NET_* / SYS_*)
   | 'NET_OFFLINE'
   | 'NET_REQUEST_TIMEOUT'
+  | 'NET_NOT_FOUND'
+  | 'NET_BAD_REQUEST'
+  | 'NET_FORBIDDEN'
+  | 'NET_SERVER_ERROR'
   | 'SYS_CONFIG_MISSING'
   | 'SYS_UNKNOWN_ERROR';
 

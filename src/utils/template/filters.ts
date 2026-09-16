@@ -35,9 +35,11 @@ export function formatDate(
     date = new Date(ms);
   } else {
     const trimmed = input.trim();
-    // 纯数字且长度为 10 位，判定为秒级时间戳
-    if (/^\d{10}$/.test(trimmed)) {
-      date = new Date(Number(trimmed) * 1000);
+    // 纯数字且长度为 10~13 位，判定为时间戳 (10 位为秒级，13 位为毫秒级)
+    if (/^\d{10,13}$/.test(trimmed)) {
+      const num = Number(trimmed);
+      const ms = num < 10000000000 ? num * 1000 : num;
+      date = new Date(ms);
     } else {
       // 兼容类似 "2026-09-15 00:00:00" 的标准格式或 ISO 串
       const cleaned = trimmed.replace(/-/g, '/');

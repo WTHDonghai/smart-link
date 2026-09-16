@@ -32,11 +32,26 @@ function extractRawMessage(error: unknown): string {
   return String(error);
 }
 
-function extractStatusCode(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object') return undefined;
-  const obj = error as ErrorLikeObject;
-  if (typeof obj.statusCode === 'number') return obj.statusCode;
-  if (typeof obj.status === 'number') return obj.status;
+function extractStatusCode(error: unknown, rawMessage?: string): number | undefined {
+  if (error && typeof error === 'object') {
+    const obj = error as ErrorLikeObject;
+    if (typeof obj.statusCode === 'number') return obj.statusCode;
+    if (typeof obj.status === 'number') return obj.status;
+  }
+  if (rawMessage) {
+    // 匹配如 "(404)"、"调用失败 (404)"、"status 404"、"code: 404"、"http 404"
+    const match = rawMessage.match(/\b(?:status(?:\s+code)?|http|调用失败|\(|code:?)\s*([45]\d{2})\b/i);
+    if (match && match[1]) {
+      const code = parseInt(match[1], 10);
+      if (!isNaN(code)) return code;
+    }
+    // 匹配如 "404 NOT_FOUND"、"500 Internal Server Error"、"403 Forbidden"、"400 Bad Request"
+    const phraseMatch = rawMessage.match(/\b([45]\d{2})\s*(?:not[ _-]?found|bad[ _-]?request|forbidden|unauthorized|internal[ _-]?server[ _-]?error)\b/i);
+    if (phraseMatch && phraseMatch[1]) {
+      const code = parseInt(phraseMatch[1], 10);
+      if (!isNaN(code)) return code;
+    }
+  }
   return undefined;
 }
 
@@ -49,7 +64,7 @@ export function normalizeAppError(
   fallbackDomain: ErrorDomain = 'SYS'
 ): AppError {
   const rawMessage = extractRawMessage(error);
-  const statusCode = extractStatusCode(error);
+  const statusCode = extractStatusCode(error, rawMessage);
   const lowerMsg = rawMessage.toLowerCase();
   const timestamp = new Date().toISOString();
 
@@ -202,6 +217,69 @@ export function normalizeAppError(
   }
 
   // 4. 系统与网络域特征匹配
+  // 4.1 HTTP 404 资源或服务接口未找到
+  if (
+    statusCode === 404 ||
+    lowerMsg.includes('404 not_found') ||
+    lowerMsg.includes('404 not found') ||
+    lowerMsg.includes('no static resource') ||
+    lowerMsg.includes('接口不存在') ||
+    lowerMsg.includes('资源未找到')
+  ) {
+    return {
+      ...ERROR_DICTIONARY.NET_NOT_FOUND,
+      rawMessage,
+      statusCode: statusCode ?? 404,
+      timestamp,
+    };
+  }
+
+  // 4.2 HTTP 400 请求参数校验失败
+  if (
+    statusCode === 400 ||
+    lowerMsg.includes('400 bad request') ||
+    lowerMsg.includes('bad request') ||
+    lowerMsg.includes('请求参数错误')
+  ) {
+    return {
+      ...ERROR_DICTIONARY.NET_BAD_REQUEST,
+      rawMessage,
+      statusCode: statusCode ?? 400,
+      timestamp,
+    };
+  }
+
+  // 4.3 HTTP 403 访问权限受限
+  if (
+    statusCode === 403 ||
+    lowerMsg.includes('403 forbidden') ||
+    lowerMsg.includes('access denied') ||
+    lowerMsg.includes('没有权限') ||
+    lowerMsg.includes('无权访问')
+  ) {
+    return {
+      ...ERROR_DICTIONARY.NET_FORBIDDEN,
+      rawMessage,
+      statusCode: statusCode ?? 403,
+      timestamp,
+    };
+  }
+
+  // 4.4 HTTP 500 远端服务内部错误
+  if (
+    statusCode === 500 ||
+    lowerMsg.includes('500 internal server error') ||
+    lowerMsg.includes('internal server error') ||
+    lowerMsg.includes('服务器内部错误')
+  ) {
+    return {
+      ...ERROR_DICTIONARY.NET_SERVER_ERROR,
+      rawMessage,
+      statusCode: statusCode ?? 500,
+      timestamp,
+    };
+  }
+
   if (
     lowerMsg.includes('failed to fetch') ||
     lowerMsg.includes('network error') ||

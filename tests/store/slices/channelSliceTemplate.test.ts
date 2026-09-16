@@ -4,6 +4,8 @@ import channelReducer, {
   toggleChannelField,
   resetChannelProtocol,
   updateRemarkTemplate,
+  saveRemarkTemplateAsync,
+  fetchRemarkTemplateAsync,
   updateChannelProtocolSchema,
   getSavedProtocolSchema,
   saveProtocolSchemaToStorage,
@@ -18,7 +20,8 @@ import channelReducer, {
 } from '../../../src/store/slices/channelSlice';
 import { createAppStore } from '../../../src/store';
 import { DEFAULT_MEITUAN_PROTOCOL_SCHEMA } from '../../../src/services/protocols/meituanProtocol';
-import { ChannelProtocolSchema } from '../../../src/types';
+import { ChannelProtocolSchema, PlatformAuthTokens } from '../../../src/types';
+import { saveTokensToStorage } from '../../../src/services/platformAuth';
 
 describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Persistence)', () => {
   beforeEach(() => {
@@ -233,6 +236,194 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
 
       const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
       expect(saved).toBe('【美团中间件持久化模板】单号:{OTA订单号}');
+    });
+
+    it('dispatches saveRemarkTemplateAsync and successfully updates template in Redux and localStorage', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: '模板已保存成功',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团API保存】客人:{入住人}' },
+          }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '【美团API保存】客人:{入住人}',
+        })
+      );
+
+      expect(saveRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+
+      // 验证 Redux 状态
+      const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
+      expect(meituan?.remarkTemplate).toBe('【美团API保存】客人:{入住人}');
+      expect(store.getState().channel.isSavingTemplate).toBe(false);
+
+      // 验证 Listener 中间件安全写入 localStorage
+      const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
+      expect(saved).toBe('【美团API保存】客人:{入住人}');
+    });
+
+    it('handles saveRemarkTemplateAsync.rejected when remote API fails', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const originalTemplate = store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate;
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 500,
+            success: false,
+            msg: '远端服务异常: 模板保存受限',
+          }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '【错误测试模板】',
+        })
+      );
+
+      expect(saveRemarkTemplateAsync.rejected.match(result)).toBe(true);
+      expect(store.getState().channel.isSavingTemplate).toBe(false);
+      expect(store.getState().channel.error).toContain('远端服务异常: 模板保存受限');
+
+      // 验证原始模板未被破坏
+      const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
+      expect(meituan?.remarkTemplate).toBe(originalTemplate);
+    });
+
+    it('dispatches fetchRemarkTemplateAsync and updates template in Redux and localStorage when remote template exists', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: 'success',
+            data: {
+              otaChannelCode: 'MEITUAN',
+              remarkTemplate: '【美团云端拉取】外部单号:{OTA订单号}',
+            },
+          }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        fetchRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+        })
+      );
+
+      expect(fetchRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+
+      // 验证 Redux 状态
+      const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
+      expect(meituan?.remarkTemplate).toBe('【美团云端拉取】外部单号:{OTA订单号}');
+      expect(store.getState().channel.isLoadingTemplate).toBe(false);
+
+      // 验证 Listener 中间件同步写入 localStorage
+      const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
+      expect(saved).toBe('【美团云端拉取】外部单号:{OTA订单号}');
+    });
+
+    it('dispatches fetchRemarkTemplateAsync and handles 404 (null template) by keeping default template', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const defaultTemplate = store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate;
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 404,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 404,
+            msg: 'No static resource channel-remark-templates/MEITUAN.',
+          }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        fetchRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+        })
+      );
+
+      expect(fetchRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+      if (fetchRemarkTemplateAsync.fulfilled.match(result)) {
+        expect(result.payload.remarkTemplate).toBeNull();
+      }
+
+      // 验证保持原默认模板不被覆盖为 null
+      const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
+      expect(meituan?.remarkTemplate).toBe(defaultTemplate);
+      expect(store.getState().channel.isLoadingTemplate).toBe(false);
     });
 
     it('auto-initializes protocolSchema when updating a channel that initially lacked protocolSchema', () => {

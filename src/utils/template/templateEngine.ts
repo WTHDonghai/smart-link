@@ -4,7 +4,12 @@
  */
 
 import { applyFilter } from './filters';
-import { getNestedValue, evaluateCondition } from './evaluator';
+import {
+  getNestedValue,
+  evaluateCondition,
+  validateExpression,
+  tokenizeExpr,
+} from './evaluator';
 
 interface ASTTextNode {
   type: 'TEXT';
@@ -44,12 +49,21 @@ export function parseTemplate(template: string): ASTNode[] {
       }
 
       // 1. 条件分支起始: {{#if ...}}
-      if (template.startsWith('{{#if ', index)) {
+      if (template.startsWith('{{#if ', index) || template.startsWith('{{#if}}', index)) {
         const closeIdx = template.indexOf('}}', index);
         if (closeIdx === -1) {
           throw new Error(`[Template Compile Error] 未闭合的 {{#if 标签 (位置 ${index})`);
         }
-        const condition = template.slice(index + 6, closeIdx).trim();
+        const condition = template.slice(index + 5, closeIdx).trim();
+        if (!condition) {
+          throw new Error(`[Template Compile Error] {{#if}} 条件表达式不能为空 (位置 ${index})`);
+        }
+        try {
+          validateExpression(condition);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(`[Template Compile Error] 条件表达式语法错误: ${message}`);
+        }
         index = closeIdx + 2;
 
         const consequent = parseBlock();
@@ -165,6 +179,11 @@ function renderNodes(nodes: ASTNode[], context: Record<string, unknown>): string
     if (node.type === 'TEXT') {
       result += node.content;
     } else if (node.type === 'VARIABLE') {
+      // 空变量 key 直接跳过，避免输出 [object Object]
+      if (!node.variableKey) {
+        continue;
+      }
+
       // 1. 尝试直接从 context 取值 (支持中文键或英文标识符)
       let val: unknown = undefined;
       if (Object.prototype.hasOwnProperty.call(context, node.variableKey)) {
@@ -254,8 +273,24 @@ export function extractTemplateVariables(
     function walk(nodes: ASTNode[]) {
       for (const node of nodes) {
         if (node.type === 'VARIABLE') {
-          vars.add(node.variableKey);
+          if (node.variableKey) {
+            vars.add(node.variableKey);
+          }
         } else if (node.type === 'IF_BLOCK') {
+          if (node.condition) {
+            try {
+              const conditionTokens = tokenizeExpr(node.condition);
+              for (const token of conditionTokens) {
+                if (token.type === 'IDENTIFIER') {
+                  vars.add(token.value);
+                }
+              }
+            } catch (err) {
+              if (options?.throwOnError) {
+                throw err;
+              }
+            }
+          }
           walk(node.consequent);
           if (node.alternate) walk(node.alternate);
         }

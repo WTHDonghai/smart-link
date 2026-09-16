@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { requestPlatformApi } from '../../src/services/platformApi';
+import {
+  requestPlatformApi,
+  PlatformApiError,
+  PLATFORM_MODULES,
+  TOOLKIT_MODULE,
+} from '../../src/services/platformApi';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
 import { PlatformAuthTokens } from '../../src/types';
 
@@ -125,9 +130,20 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
       json: async () => ({ msg: '内部数据库连接超时' }),
     } as unknown as Response);
 
-    await expect(
-      requestPlatformApi('/api/v1/orders/push', { baseUrl: 'https://pms.example.com' })
-    ).rejects.toThrow('平台接口调用失败 (500): 内部数据库连接超时');
+    let caughtError: unknown;
+    try {
+      await requestPlatformApi('/api/v1/orders/push', { baseUrl: 'https://pms.example.com' });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(PlatformApiError);
+    const apiErr = caughtError as PlatformApiError;
+    expect(apiErr.status).toBe(500);
+    expect(apiErr.statusCode).toBe(500);
+    expect(apiErr.url).toBe('https://pms.example.com/api/v1/orders/push');
+    expect(apiErr.errorDetail).toBe('内部数据库连接超时');
+    expect(apiErr.message).toBe('平台接口调用失败 (500): 内部数据库连接超时');
   });
 
   it('未显式传入 baseUrl 时自动使用会话/环境变量中的 Base URL', async () => {
@@ -157,5 +173,12 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     await requestPlatformApi('/api/v1/toolkit/import');
 
     expect(requestedUrl).toBe('https://session-effective-pms.hotel.com/api/v1/toolkit/import');
+  });
+
+  it('导出标准的 PLATFORM_MODULES 常量与 TOOLKIT_MODULE 别名', () => {
+    expect(PLATFORM_MODULES.TOOLKIT).toBe('toolkit');
+    expect(PLATFORM_MODULES.RATE_MANAGEMENT).toBe('rate-management');
+    expect(PLATFORM_MODULES.IDENTITY).toBe('identity');
+    expect(TOOLKIT_MODULE).toBe('toolkit');
   });
 });

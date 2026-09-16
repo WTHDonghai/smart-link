@@ -11,6 +11,8 @@ import {
   fetchCulturalTourismChannels,
   fetchChannelMappings,
   saveChannelMappingsBatch,
+  saveChannelRemarkTemplate,
+  fetchChannelRemarkTemplate,
 } from '../../services/channelApi';
 import {
   DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
@@ -274,6 +276,8 @@ export interface ChannelState {
   savingChannelId: string | null;
   error: string | null;
   selectedChannelForTemplate: string | null;
+  isSavingTemplate: boolean;
+  isLoadingTemplate: boolean;
 }
 
 export const createInitialChannels = (): OTAChannel[] => {
@@ -318,6 +322,8 @@ const initialState: ChannelState = {
   savingChannelId: null,
   error: null,
   channels: createInitialChannels(),
+  isSavingTemplate: false,
+  isLoadingTemplate: false,
 };
 
 // 异步 Thunk：加载文旅渠道候选与已映射记录
@@ -386,6 +392,63 @@ export const saveChannelMapping = createAsyncThunk<
       savedPayload: payload,
       message: res.message,
       mappingId: returnedMappingId,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return rejectWithValue(message);
+  }
+});
+
+// 异步 Thunk：调用远程接口保存渠道备注模板
+export const saveRemarkTemplateAsync = createAsyncThunk<
+  {
+    channelId: string;
+    otaChannelCode: string;
+    template: string;
+    message: string;
+  },
+  {
+    channelId: string;
+    otaChannelCode: string;
+    template: string;
+  },
+  { rejectValue: string }
+>('channel/saveRemarkTemplateAsync', async (param, { rejectWithValue }) => {
+  try {
+    const res = await saveChannelRemarkTemplate(param.otaChannelCode, {
+      remarkTemplate: param.template,
+    });
+    return {
+      channelId: param.channelId,
+      otaChannelCode: param.otaChannelCode,
+      template: param.template,
+      message: res.message,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return rejectWithValue(message);
+  }
+});
+
+// 异步 Thunk：根据 OTA 渠道编码查询备注模板
+export const fetchRemarkTemplateAsync = createAsyncThunk<
+  {
+    channelId: string;
+    otaChannelCode: string;
+    remarkTemplate: string | null;
+  },
+  {
+    channelId: string;
+    otaChannelCode: string;
+  },
+  { rejectValue: string }
+>('channel/fetchRemarkTemplateAsync', async (param, { rejectWithValue }) => {
+  try {
+    const res = await fetchChannelRemarkTemplate(param.otaChannelCode);
+    return {
+      channelId: param.channelId,
+      otaChannelCode: param.otaChannelCode,
+      remarkTemplate: res.remarkTemplate,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -712,6 +775,50 @@ export const channelSlice = createSlice({
         state.isSaving = false;
         state.savingChannelId = null;
         state.error = action.payload || action.error.message || '保存渠道映射失败';
+      })
+
+      // saveRemarkTemplateAsync
+      .addCase(saveRemarkTemplateAsync.pending, (state) => {
+        state.isSavingTemplate = true;
+        state.error = null;
+      })
+      .addCase(saveRemarkTemplateAsync.fulfilled, (state, action) => {
+        state.isSavingTemplate = false;
+        const ch = state.channels.find(
+          (c) =>
+            c.id === action.payload.channelId ||
+            c.code.toUpperCase() === action.payload.otaChannelCode.toUpperCase()
+        );
+        if (ch) {
+          ch.remarkTemplate = action.payload.template;
+        }
+      })
+      .addCase(saveRemarkTemplateAsync.rejected, (state, action) => {
+        state.isSavingTemplate = false;
+        state.error = action.payload || action.error.message || '保存渠道备注模板失败';
+      })
+
+      // fetchRemarkTemplateAsync
+      .addCase(fetchRemarkTemplateAsync.pending, (state) => {
+        state.isLoadingTemplate = true;
+        state.error = null;
+      })
+      .addCase(fetchRemarkTemplateAsync.fulfilled, (state, action) => {
+        state.isLoadingTemplate = false;
+        if (action.payload.remarkTemplate !== null) {
+          const ch = state.channels.find(
+            (c) =>
+              c.id === action.payload.channelId ||
+              c.code.toUpperCase() === action.payload.otaChannelCode.toUpperCase()
+          );
+          if (ch) {
+            ch.remarkTemplate = action.payload.remarkTemplate;
+          }
+        }
+      })
+      .addCase(fetchRemarkTemplateAsync.rejected, (state, action) => {
+        state.isLoadingTemplate = false;
+        state.error = action.payload || action.error.message || '获取渠道备注模板失败';
       });
   }
 });

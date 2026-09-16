@@ -5,7 +5,13 @@ import {
   extractTemplateVariables,
 } from '../../src/utils/template/templateEngine';
 import { evaluateCondition, getNestedValue } from '../../src/utils/template/evaluator';
-import { centsToYuan, formatDate, maskPhone, defaultVal } from '../../src/utils/template/filters';
+import {
+  centsToYuan,
+  formatDate,
+  maskPhone,
+  defaultVal,
+  applyFilter,
+} from '../../src/utils/template/filters';
 
 describe('templateEngine & filters', () => {
   describe('filters', () => {
@@ -25,6 +31,19 @@ describe('templateEngine & filters', () => {
     it('formats date correctly', () => {
       expect(formatDate('2026-09-15 00:00:00', 'YYYY-MM-DD')).toBe('2026-09-15');
       expect(formatDate('2026-09-15 14:30:00', 'HH:mm')).toBe('14:30');
+    });
+
+    it('correctly handles 13-digit timestamp string in formatDate', () => {
+      const formatted = formatDate('1789401600000', 'YYYY-MM-DD');
+      expect(formatted).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('throws error when formatDate receives invalid date string', () => {
+      expect(() => formatDate('not-a-valid-date')).toThrowError('[Filter Error] 无法解析有效日期: not-a-valid-date');
+    });
+
+    it('throws error for unsupported filter in applyFilter', () => {
+      expect(() => applyFilter(100, 'unknownFilter')).toThrowError('[Filter Error] 不支持的过滤器: unknownFilter');
     });
 
     it('masks phone number correctly', () => {
@@ -68,6 +87,15 @@ describe('templateEngine & filters', () => {
       expect(evaluateCondition("status != 'CANCELLED'", ctx)).toBe(true);
       expect(evaluateCondition('data.invoiceParty == 3', ctx)).toBe(true);
       expect(evaluateCondition('data.items.length == 3', ctx)).toBe(true);
+    });
+
+    it('evaluates strict equality (===) and strict inequality (!==)', () => {
+      expect(evaluateCondition('price === 26555', ctx)).toBe(true);
+      expect(evaluateCondition("price === '26555'", ctx)).toBe(false);
+      expect(evaluateCondition("price !== '26555'", ctx)).toBe(true);
+      expect(evaluateCondition('price !== 26555', ctx)).toBe(false);
+      expect(evaluateCondition("status === 'CONSUMED'", ctx)).toBe(true);
+      expect(evaluateCondition("status !== 'CANCELLED'", ctx)).toBe(true);
     });
 
     it('evaluates logical AND (&&) and OR (||)', () => {
@@ -216,12 +244,34 @@ describe('templateEngine & filters', () => {
       expect(invalidRes.error).toContain('[Template Compile Error]');
     });
 
-    it('extracts all referenced variables', () => {
+    it('catches condition syntax errors in validateTemplate and renderTemplate', () => {
+      const invalidCondTemplate = '{{#if price > }}内容{{/if}}';
+      const res = validateTemplate(invalidCondTemplate);
+      expect(res.valid).toBe(false);
+      expect(res.error).toContain('[Template Compile Error]');
+      expect(() => renderTemplate(invalidCondTemplate, { price: 100 })).toThrowError(
+        '[Template Compile Error]'
+      );
+    });
+
+    it('throws error for unsupported filter in renderTemplate', () => {
+      expect(() => renderTemplate('{{ price | unknownFilter }}', { price: 100 })).toThrowError(
+        '[Filter Error] 不支持的过滤器'
+      );
+    });
+
+    it('handles empty double braces {{}} safely without rendering [object Object]', () => {
+      expect(renderTemplate('单号:{{}}', {})).toBe('单号:');
+      expect(renderTemplate('{{   }}', {})).toBe('');
+    });
+
+    it('extracts all referenced variables including condition variables', () => {
       const template = '单号:{orderNo} 房型:{{ roomName }} {{#if needInvoice}}发票:{{ invoiceAmount }}{{/if}}';
       const vars = extractTemplateVariables(template);
       expect(vars).toContain('orderNo');
       expect(vars).toContain('roomName');
       expect(vars).toContain('invoiceAmount');
+      expect(vars).toContain('needInvoice');
     });
 
     it('extractTemplateVariables provides best-effort UI tolerance by default and throws when throwOnError is true', () => {
@@ -239,10 +289,11 @@ describe('templateEngine & filters', () => {
         extractTemplateVariables(malformedTemplate, { throwOnError: true })
       ).toThrowError('[Template Compile Error]');
 
-      // 合法模板在 throwOnError: true 下正常提取变量
+      // 合法模板在 throwOnError: true 下正常提取变量（包括 IF 条件中的 isVip 变量）
       const validTemplate = '{{#if isVip}}VIP单号:{{ orderNo }}{{/if}}';
       const validVars = extractTemplateVariables(validTemplate, { throwOnError: true });
-      expect(validVars).toEqual(['orderNo']);
+      expect(validVars).toEqual(expect.arrayContaining(['isVip', 'orderNo']));
+      expect(validVars.length).toBe(2);
     });
 
   });

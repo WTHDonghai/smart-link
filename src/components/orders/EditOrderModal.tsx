@@ -40,8 +40,6 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({
   onClose,
   onSave,
 }) => {
-  if (!isOpen) return null;
-
   // Form states initialized from order
   const [guestName, setGuestName] = useState(order.guestName || '');
   const [guestPhone, setGuestPhone] = useState(order.guestPhone || '');

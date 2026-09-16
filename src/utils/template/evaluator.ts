@@ -10,7 +10,7 @@
 export function getNestedValue(target: unknown, path: string): unknown {
   if (target === null || target === undefined) return undefined;
   const trimmed = path.trim();
-  if (!trimmed) return target;
+  if (!trimmed) return undefined;
 
   // 将 array index 格式如 a[0].b 转换为统一的 a.0.b，将 a[*].b 或 a[].b 转换为 a.*.b
   const normalizedPath = trimmed
@@ -67,7 +67,7 @@ export function getNestedValue(target: unknown, path: string): unknown {
 /**
  * 表达式 Token 类型
  */
-type TokenType =
+export type TokenType =
   | 'STRING'
   | 'NUMBER'
   | 'BOOLEAN'
@@ -78,7 +78,7 @@ type TokenType =
   | 'RPAREN'
   | 'NOT';
 
-interface Token {
+export interface Token {
   type: TokenType;
   value: string;
   raw: string;
@@ -87,7 +87,7 @@ interface Token {
 /**
  * 表达式词法分词器
  */
-function tokenizeExpr(expr: string): Token[] {
+export function tokenizeExpr(expr: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   const len = expr.length;
@@ -140,7 +140,7 @@ function tokenizeExpr(expr: string): Token[] {
     const threeChars = expr.slice(i, i + 3);
 
     if (threeChars === '===' || threeChars === '!==') {
-      tokens.push({ type: 'OPERATOR', value: threeChars.slice(0, 2), raw: threeChars });
+      tokens.push({ type: 'OPERATOR', value: threeChars, raw: threeChars });
       i += 3;
       continue;
     }
@@ -253,11 +253,13 @@ class ExpressionParser {
     return left;
   }
 
-  // Comparison 级: ==, !=, >, <, >=, <=
+  // Comparison 级: ===, !==, ==, !=, >, <, >=, <=
   private parseComparison(): unknown {
     const left = this.parseUnary();
 
     if (
+      this.checkOperator('===') ||
+      this.checkOperator('!==') ||
       this.checkOperator('==') ||
       this.checkOperator('!=') ||
       this.checkOperator('>') ||
@@ -324,14 +326,20 @@ class ExpressionParser {
   }
 
   private computeComparison(left: unknown, op: string, right: unknown): boolean {
-    // 针对数值做宽松比对处理 (如 "26555" == 26555)
-    if (typeof left === 'number' && typeof right === 'string' && !isNaN(Number(right))) {
-      right = Number(right);
-    } else if (typeof right === 'number' && typeof left === 'string' && !isNaN(Number(left))) {
-      left = Number(left);
+    // 针对数值做宽松比对处理 (如 "26555" == 26555)，仅在非严格比较下生效
+    if (op !== '===' && op !== '!==') {
+      if (typeof left === 'number' && typeof right === 'string' && !isNaN(Number(right))) {
+        right = Number(right);
+      } else if (typeof right === 'number' && typeof left === 'string' && !isNaN(Number(left))) {
+        left = Number(left);
+      }
     }
 
     switch (op) {
+      case '===':
+        return left === right;
+      case '!==':
+        return left !== right;
       case '==':
         return left == right; // eslint-disable-line eqeqeq
       case '!=':
@@ -384,6 +392,25 @@ class ExpressionParser {
     if (!this.isAtEnd()) this.current++;
     return this.tokens[this.current - 1];
   }
+}
+
+/**
+ * 校验条件表达式语法有效性
+ * 若存在语法错误或未识别字符，抛出 [Expression Error]
+ */
+export function validateExpression(expr: string): void {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    throw new Error('[Expression Error] 条件表达式不能为空');
+  }
+
+  const tokens = tokenizeExpr(trimmed);
+  if (tokens.length === 0) {
+    throw new Error('[Expression Error] 条件表达式不能为空');
+  }
+
+  const parser = new ExpressionParser(tokens, {});
+  parser.evaluate();
 }
 
 /**

@@ -32,12 +32,21 @@ export function insertAtCursor(
   selectionStart?: number,
   selectionEnd?: number
 ): CursorInsertionResult {
-  let start = currentText.length;
-  let end = currentText.length;
+  const len = currentText.length;
+  let start = len;
+  let end = len;
 
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
-    start = selectionStart;
-    end = selectionEnd;
+    let s = Math.max(0, Math.min(selectionStart, len));
+    let e = Math.max(0, Math.min(selectionEnd, len));
+    if (s > e) {
+      [s, e] = [e, s];
+    }
+    start = s;
+    end = e;
+  } else if (typeof selectionStart === 'number') {
+    start = Math.max(0, Math.min(selectionStart, len));
+    end = start;
   }
 
   const newText = currentText.slice(0, start) + textToInsert + currentText.slice(end);
@@ -56,7 +65,7 @@ export function insertAtCursor(
  */
 export function detectUnknownVariables(
   template: string,
-  schemaFields: Array<{ key?: string; label?: string; enabled?: boolean }>,
+  schemaFields: TemplateSchemaField[],
   cleanContext: Record<string, unknown>
 ): string[] {
   const validation = validateTemplate(template);
@@ -80,10 +89,9 @@ export function detectUnknownVariables(
 
   return usedVars.filter((v) => {
     if (validSet.has(v)) return false;
-    if (v.includes('.')) {
-      const root = v.split('.')[0];
-      if (root && validSet.has(root)) return false;
-    }
+    // 截取点号前的 root 时剔除中括号及其内容，避免将合法的列表投影变量误报为未知变量
+    const root = v.split('.')[0].replace(/\[.*\]/g, '');
+    if (root && validSet.has(root)) return false;
     return true;
   });
 }

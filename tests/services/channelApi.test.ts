@@ -3,11 +3,14 @@ import {
   fetchCulturalTourismChannels,
   fetchChannelMappings,
   saveChannelMappingsBatch,
+  saveChannelRemarkTemplate,
+  fetchChannelRemarkTemplate,
   extractDataItems,
   normalizeCulturalTourismChannel,
   normalizeOTAChannelMappingRecord,
   validateAndBuildChannelMappingPayload,
   CHANNEL_ENDPOINTS,
+  TOOLKIT_MODULE,
 } from '../../src/services/channelApi';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
 import { PlatformAuthTokens, SaveChannelMappingPayloadItem } from '../../src/types';
@@ -31,6 +34,13 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
   });
 
   describe('extractDataItems & Normalizers', () => {
+    it('TOOLKIT_MODULE 常量与 CHANNEL_ENDPOINTS 配置正确', () => {
+      expect(TOOLKIT_MODULE).toBe('toolkit');
+      expect(CHANNEL_ENDPOINTS.CHANNEL_REMARK_TEMPLATES).toBe('/toolkit/channel-remark-templates');
+      expect(CHANNEL_ENDPOINTS.OTA_CHANNEL_MAPPINGS).toBe('/toolkit/channel-mappings');
+      expect(CHANNEL_ENDPOINTS.OTA_CHANNEL_MAPPINGS_BATCH).toBe('/toolkit/channel-mappings/batch');
+    });
+
     it('extractDataItems 支持直接数组、{ data: [...] } 与 { data: { records: [...] } }', () => {
       expect(extractDataItems(null)).toEqual([]);
       expect(extractDataItems([ { id: 1 } ])).toEqual([ { id: 1 } ]);
@@ -432,6 +442,219 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
           },
         ])
       ).rejects.toThrow('保存渠道映射失败: 文旅平台底层服务异常');
+    });
+  });
+
+  describe('saveChannelRemarkTemplate (PUT /toolkit/channel-remark-templates/{otaChannelCode})', () => {
+    it('成功调用保存渠道备注模板接口并返回结构化结果', async () => {
+      let interceptedUrl = '';
+      let interceptedMethod = '';
+      let interceptedBody = '';
+      let interceptedAuth = '';
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        interceptedUrl = url;
+        interceptedMethod = init?.method || '';
+        interceptedBody = init?.body as string;
+        interceptedAuth = (init?.headers as Headers)?.get('App-Auth') || '';
+
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: '模板保存成功',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团】单号:{OTA订单号}' },
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await saveChannelRemarkTemplate('meituan', {
+        remarkTemplate: '【美团】单号:{OTA订单号}',
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.otaChannelCode).toBe('meituan');
+      expect(res.remarkTemplate).toBe('【美团】单号:{OTA订单号}');
+      expect(res.message).toBe('模板保存成功');
+
+      // 验证真实请求参数，确认包含文旅后台 toolkit 业务模块前缀
+      expect(interceptedUrl).toBe('https://pms.example.com/toolkit/channel-remark-templates/MEITUAN');
+      expect(interceptedMethod).toBe('PUT');
+      expect(interceptedAuth).toBe('bearer test-token');
+      expect(JSON.parse(interceptedBody)).toEqual({
+        remarkTemplate: '【美团】单号:{OTA订单号}',
+      });
+    });
+
+    it('当缺少 otaChannelCode 时 Fail-Fast 阻断，不发起网络调用', async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      await expect(
+        saveChannelRemarkTemplate('', { remarkTemplate: 'test' })
+      ).rejects.toThrow('保存渠道备注模板缺少必填参数: otaChannelCode');
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('当缺少 remarkTemplate 字段时 Fail-Fast 阻断', async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      await expect(
+        saveChannelRemarkTemplate('MEITUAN', null as unknown as { remarkTemplate: string })
+      ).rejects.toThrow('保存渠道备注模板缺少必填字段: remarkTemplate');
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('当后端返回业务失败信封（code: 500, success: false）时抛出异常', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 500,
+            success: false,
+            msg: '渠道不存在或已被禁用',
+          }),
+        } as unknown as Response;
+      });
+
+      await expect(
+        saveChannelRemarkTemplate('UNKNOWN_CHANNEL', {
+          remarkTemplate: 'test',
+        })
+      ).rejects.toThrow('保存渠道备注模板失败: 渠道不存在或已被禁用');
+    });
+  });
+
+  describe('fetchChannelRemarkTemplate (GET /toolkit/channel-remark-templates/{otaChannelCode})', () => {
+    it('成功调用获取渠道备注模板接口并返回有效模板', async () => {
+      let interceptedUrl = '';
+      let interceptedMethod = '';
+      let interceptedAuth = '';
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        interceptedUrl = url;
+        interceptedMethod = init?.method || '';
+        interceptedAuth = (init?.headers as Headers)?.get('App-Auth') || '';
+
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: 'success',
+            data: {
+              otaChannelCode: 'MEITUAN',
+              remarkTemplate: '【美团后台模板】外部单号:{OTA订单号}，客人:{入住人}',
+            },
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await fetchChannelRemarkTemplate('meituan');
+
+      expect(res.otaChannelCode).toBe('meituan');
+      expect(res.remarkTemplate).toBe('【美团后台模板】外部单号:{OTA订单号}，客人:{入住人}');
+      expect(interceptedUrl).toBe('https://pms.example.com/toolkit/channel-remark-templates/MEITUAN');
+      expect(interceptedMethod).toBe('GET');
+      expect(interceptedAuth).toBe('bearer test-token');
+    });
+
+    it('当服务端返回 404 NOT_FOUND 时，优雅解析为 remarkTemplate: null 供展示默认模板', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 404,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 404,
+            msg: 'No static resource channel-remark-templates/UNKNOWN.',
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await fetchChannelRemarkTemplate('UNKNOWN');
+
+      expect(res.otaChannelCode).toBe('UNKNOWN');
+      expect(res.remarkTemplate).toBeNull();
+    });
+
+    it('当服务端返回 200 但 data 为 null 或空串时，返回 remarkTemplate: null', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: 'success',
+            data: {
+              otaChannelCode: 'DOUYIN',
+              remarkTemplate: '   ',
+            },
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await fetchChannelRemarkTemplate('douyin');
+
+      expect(res.otaChannelCode).toBe('douyin');
+      expect(res.remarkTemplate).toBeNull();
+    });
+
+    it('当缺少 otaChannelCode 时 Fail-Fast 阻断，不发起网络调用', async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      await expect(fetchChannelRemarkTemplate('')).rejects.toThrow(
+        '查询渠道备注模板缺少必填参数: otaChannelCode'
+      );
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('当遇到 500 等不可恢复的后端错误时 Fail-Fast 抛出异常', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 500,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 500,
+            msg: '内部数据库异常',
+          }),
+        } as unknown as Response;
+      });
+
+      await expect(fetchChannelRemarkTemplate('MEITUAN')).rejects.toThrow(
+        '平台接口调用失败 (500)'
+      );
+    });
+
+    it('当服务端返回 HTTP 200 但业务信封标记失败（success: false）时 Fail-Fast 抛出异常', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 500,
+            success: false,
+            msg: '远端服务异常: 数据库连接丢失',
+          }),
+        } as unknown as Response;
+      });
+
+      await expect(fetchChannelRemarkTemplate('MEITUAN')).rejects.toThrow(
+        '获取渠道备注模板失败: 远端服务异常: 数据库连接丢失'
+      );
     });
   });
 });

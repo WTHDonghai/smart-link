@@ -74,6 +74,57 @@ describe('errorNormalizer - 统一错误智能归一化解析器', () => {
     expect(normalized.userTitle).toBe('网络请求超时');
   });
 
+  it('应当精准解析用户真实遭遇的 404 NOT_FOUND 报错为 NET_NOT_FOUND 而非未知异常', () => {
+    // 真实报错样本（与用户截图报错 100% 一致）
+    const notFoundSample =
+      '平台接口调用失败 (404): Failed to handle request [PUT https://xctp-api.devops.foxhis.com/channel-remark-templates/MEITUAN]: 404 NOT_FOUND "No static resource channel-remark-templates/MEITUAN."';
+
+    const normalized = normalizeAppError(notFoundSample, 'NET');
+
+    expect(normalized.code).toBe('NET_NOT_FOUND');
+    expect(normalized.domain).toBe('NET');
+    expect(normalized.statusCode).toBe(404);
+    expect(normalized.userTitle).toBe('服务接口或资源不存在 (404)');
+    expect(normalized.userMessage).toContain('未找到 (HTTP 404)');
+    expect(normalized.suggestion).toContain('检查服务模块配置');
+    expect(normalized.retryable).toBe(false);
+    expect(normalized.rawMessage).toBe(notFoundSample);
+  });
+
+  it('应当识别 HTTP 400 请求参数校验失败为 NET_BAD_REQUEST', () => {
+    const errorWith400 = {
+      message: '平台接口调用失败 (400): Bad Request: Field remarkTemplate is required',
+      statusCode: 400,
+    };
+    const normalized = normalizeAppError(errorWith400, 'NET');
+
+    expect(normalized.code).toBe('NET_BAD_REQUEST');
+    expect(normalized.domain).toBe('NET');
+    expect(normalized.statusCode).toBe(400);
+    expect(normalized.userTitle).toBe('请求参数校验失败 (400)');
+    expect(normalized.retryable).toBe(false);
+  });
+
+  it('应当识别 HTTP 403 权限受限为 NET_FORBIDDEN', () => {
+    const normalized = normalizeAppError('平台接口调用失败 (403): 403 Forbidden - Access denied to module', 'NET');
+
+    expect(normalized.code).toBe('NET_FORBIDDEN');
+    expect(normalized.domain).toBe('NET');
+    expect(normalized.statusCode).toBe(403);
+    expect(normalized.userTitle).toBe('操作权限受限 (403)');
+    expect(normalized.retryable).toBe(false);
+  });
+
+  it('应当识别 HTTP 500 远端服务错误为 NET_SERVER_ERROR', () => {
+    const normalized = normalizeAppError('平台接口调用失败 (500): Internal Server Error', 'NET');
+
+    expect(normalized.code).toBe('NET_SERVER_ERROR');
+    expect(normalized.domain).toBe('NET');
+    expect(normalized.statusCode).toBe(500);
+    expect(normalized.userTitle).toBe('平台服务处理异常 (500)');
+    expect(normalized.retryable).toBe(true);
+  });
+
   it('应当对未知异常安全兜底为 SYS_UNKNOWN_ERROR 并保持 domain: SYS 一致性', () => {
     const unknownError = new Error('Some unexpected internal failure code: 0x999');
     const normalized = normalizeAppError(unknownError, 'ORDER');

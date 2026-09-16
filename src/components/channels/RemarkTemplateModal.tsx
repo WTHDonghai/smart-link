@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   setSelectedChannelForTemplate,
-  updateRemarkTemplate,
+  saveRemarkTemplateAsync,
+  fetchRemarkTemplateAsync,
 } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { Check, Eye, SlidersHorizontal, TriangleAlert, Lightbulb } from 'lucide-react';
+import { Check, Eye, SlidersHorizontal, TriangleAlert, Lightbulb, Loader2 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { TemplateVariablePicker } from './TemplateVariablePicker';
 import { ProtocolFieldManagerModal } from './ProtocolFieldManagerModal';
@@ -29,11 +30,14 @@ import {
   detectUnknownVariables,
 } from '../../utils/template/templateEditor';
 import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
+import { normalizeAppError } from '../../utils/errorNormalizer';
 
 export const RemarkTemplateModal: React.FC = () => {
   const dispatch = useAppDispatch();
   const selectedChannelId = useAppSelector((state) => state.channel.selectedChannelForTemplate);
   const channels = useAppSelector((state) => state.channel.channels);
+  const isSavingTemplate = useAppSelector((state) => state.channel.isSavingTemplate);
+  const isLoadingTemplate = useAppSelector((state) => state.channel.isLoadingTemplate);
 
   const currentChannel = channels.find((c) => c.id === selectedChannelId);
 
@@ -52,11 +56,42 @@ export const RemarkTemplateModal: React.FC = () => {
   }, [isDouyin]);
 
   useEffect(() => {
-    if (currentChannel) {
-      setTemplateText(currentChannel.remarkTemplate || defaultTemplate);
-      isTextareaFocusedRef.current = false;
-    }
-  }, [currentChannel, defaultTemplate]);
+    if (!currentChannel) return;
+
+    // 先初始化为渠道已有模板或系统默认模板
+    const initialText = currentChannel.remarkTemplate || defaultTemplate;
+    setTemplateText(initialText);
+    isTextareaFocusedRef.current = false;
+
+    // 从远端后台异步拉取最新备注模板，未配置时保持默认模板
+    let isMounted = true;
+    dispatch(
+      fetchRemarkTemplateAsync({
+        channelId: currentChannel.id,
+        otaChannelCode: currentChannel.code,
+      })
+    )
+      .unwrap()
+      .then((res) => {
+        if (!isMounted) return;
+        if (res.remarkTemplate) {
+          setTemplateText((prev) => {
+            // 仅在用户尚未输入自定义修改时载入云端模板，防止弱网延迟覆盖用户草稿
+            if (prev === initialText || prev === defaultTemplate) {
+              return res.remarkTemplate!;
+            }
+            return prev;
+          });
+        }
+      })
+      .catch(() => {
+        // 异常保持当前/默认模板，不覆盖用户正在输入的内容
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentChannel?.id, currentChannel?.code, defaultTemplate, dispatch]);
 
   // 获取当前渠道的协议 Schema (优先取渠道已保存的，否则按渠道类型匹配默认预设)
   const schema = useMemo(() => {
@@ -175,7 +210,9 @@ export const RemarkTemplateModal: React.FC = () => {
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (!currentChannel) return;
+
     if (normalizationError) {
       dispatch(
         showToast({
@@ -198,20 +235,45 @@ export const RemarkTemplateModal: React.FC = () => {
       return;
     }
 
-    dispatch(
-      updateRemarkTemplate({
-        channelId: currentChannel.id,
-        template: templateText,
-      })
-    );
-    dispatch(
-      showToast({
-        title: `已更新「${currentChannel.name}」备注模板`,
-        description: '后续来自该渠道的订单将自动经过条件表达式引擎计算并注入文旅系统',
-        type: 'success',
-      })
-    );
-    dispatch(setSelectedChannelForTemplate(null));
+    try {
+      const resultAction = await dispatch(
+        saveRemarkTemplateAsync({
+          channelId: currentChannel.id,
+          otaChannelCode: currentChannel.code,
+          template: templateText,
+        })
+      );
+
+      if (saveRemarkTemplateAsync.fulfilled.match(resultAction)) {
+        dispatch(
+          showToast({
+            title: `已更新「${currentChannel.name}」备注模板`,
+            description: resultAction.payload.message || '远程模板已成功同步，后续订单将自动计算注入',
+            type: 'success',
+          })
+        );
+        dispatch(setSelectedChannelForTemplate(null));
+      } else {
+        const rawError = resultAction.payload || '保存备注模板失败，请重试';
+        const appError = normalizeAppError(rawError, 'NET');
+        dispatch(
+          showToast({
+            title: `保存备注模板失败 (${appError.userTitle})`,
+            description: `${appError.userMessage} ${appError.suggestion}`,
+            type: 'error',
+          })
+        );
+      }
+    } catch (err) {
+      const appError = normalizeAppError(err, 'NET');
+      dispatch(
+        showToast({
+          title: `网络或服务异常 (${appError.userTitle})`,
+          description: `${appError.userMessage} ${appError.suggestion}`,
+          type: 'error',
+        })
+      );
+    }
   };
 
   const handleClose = () => {
@@ -233,18 +295,28 @@ export const RemarkTemplateModal: React.FC = () => {
         <button
           type="button"
           onClick={handleClose}
-          className="px-4 py-2 text-xs font-semibold text-[#434655] hover:bg-[#eff4ff] rounded-lg transition-colors cursor-pointer"
+          disabled={isSavingTemplate}
+          className="px-4 py-2 text-xs font-semibold text-[#434655] hover:bg-[#eff4ff] rounded-lg transition-colors cursor-pointer disabled:opacity-50"
         >
           取消
         </button>
         <button
           type="button"
           onClick={handleSave}
-          disabled={!validation.valid || Boolean(normalizationError)}
+          disabled={!validation.valid || Boolean(normalizationError) || isSavingTemplate || isLoadingTemplate}
           className="px-5 py-2 text-xs font-semibold text-white bg-[#004ac6] hover:bg-[#003da6] rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Check className="w-3.5 h-3.5" />
-          <span>保存模板</span>
+          {isSavingTemplate ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>保存中...</span>
+            </>
+          ) : (
+            <>
+              <Check className="w-3.5 h-3.5" />
+              <span>保存模板</span>
+            </>
+          )}
         </button>
       </div>
     </div>
@@ -286,7 +358,7 @@ export const RemarkTemplateModal: React.FC = () => {
             <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
               <TriangleAlert className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
               <div>
-                <span className="font-semibold">协议解析契约报警 (Fail-Fast)：</span>
+                <span className="font-semibold">协议解析契约报警：</span>
                 <span>{normalizationError}</span>
               </div>
             </div>
@@ -301,9 +373,17 @@ export const RemarkTemplateModal: React.FC = () => {
           {/* 模板文本编辑区 */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-[#0b1c30] block">
-                备注模板文本与条件表达式
-              </label>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-[#0b1c30] block">
+                  备注模板文本与条件表达式
+                </label>
+                {isLoadingTemplate && (
+                  <span className="flex items-center gap-1 text-[11px] text-[#004ac6] bg-[#eff4ff] px-2 py-0.5 rounded animate-pulse">
+                    <Loader2 className="w-3 h-3 animate-spin text-[#004ac6]" />
+                    正在同步云端模板...
+                  </span>
+                )}
+              </div>
               <span className="text-[11px] text-[#737686]">
                 支持 {'{变量名}'}、{'{{ 变量 | 过滤器 }}'} 及 {'{{#if 条件}}...{{/if}}'}
               </span>

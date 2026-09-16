@@ -6,6 +6,46 @@ export interface PlatformApiOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+/**
+ * 文旅平台微服务/业务功能模块路由常量 (Microservice Route Modules)
+ * 供系统所有业务服务层（channelApi、hotelApi、orderApi 等）统一复用
+ */
+export const PLATFORM_MODULES = {
+  /** 工具箱/渠道接入与模板管理模块 */
+  TOOLKIT: 'toolkit',
+  /** 价格与渠道字典管理模块 */
+  RATE_MANAGEMENT: 'rate-management',
+  /** 统一身份认证与授权中心模块 */
+  IDENTITY: 'identity',
+} as const;
+
+export type PlatformModuleName = (typeof PLATFORM_MODULES)[keyof typeof PLATFORM_MODULES];
+
+/**
+ * 工具箱/渠道接入业务模块路由常量快捷引用
+ */
+export const TOOLKIT_MODULE = PLATFORM_MODULES.TOOLKIT;
+
+/**
+ * 平台 API 异常类，包含 HTTP 状态码、请求 URL 与详细错误说明
+ */
+export class PlatformApiError extends Error {
+  public readonly status: number;
+  public readonly statusCode: number;
+  public readonly url: string;
+  public readonly errorDetail?: string;
+
+  constructor(status: number, message: string, options: { url: string; errorDetail?: string }) {
+    super(message);
+    this.name = 'PlatformApiError';
+    this.status = status;
+    this.statusCode = status;
+    this.url = options.url;
+    this.errorDetail = options.errorDetail;
+    Object.setPrototypeOf(this, PlatformApiError.prototype);
+  }
+}
+
 export async function requestPlatformApi<T = unknown>(
   path: string,
   options: PlatformApiOptions = {}
@@ -54,8 +94,10 @@ export async function requestPlatformApi<T = unknown>(
     } catch {
       // 无法解析 JSON 则采用状态码
     }
-    throw new Error(
-      `平台接口调用失败 (${response.status})${errorDetail ? `: ${errorDetail}` : ''}`
+    throw new PlatformApiError(
+      response.status,
+      `平台接口调用失败 (${response.status})${errorDetail ? `: ${errorDetail}` : ''}`,
+      { url: fullUrl, errorDetail }
     );
   }
 

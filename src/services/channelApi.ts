@@ -1,14 +1,18 @@
-import { requestPlatformApi } from './platformApi';
+import { requestPlatformApi, PLATFORM_MODULES, TOOLKIT_MODULE } from './platformApi';
 import {
   CulturalTourismChannel,
   OTAChannelMappingRecord,
   SaveChannelMappingPayloadItem,
 } from '../types';
 
+// 重新导出供已有调用方保持兼容
+export { PLATFORM_MODULES, TOOLKIT_MODULE };
+
 export const CHANNEL_ENDPOINTS = {
-  RATE_MANAGEMENT_CHANNELS: '/rate-management/channels',
-  OTA_CHANNEL_MAPPINGS: '/toolkit/channel-mappings',
-  OTA_CHANNEL_MAPPINGS_BATCH: '/toolkit/channel-mappings/batch',
+  RATE_MANAGEMENT_CHANNELS: `/${PLATFORM_MODULES.RATE_MANAGEMENT}/channels`,
+  OTA_CHANNEL_MAPPINGS: `/${PLATFORM_MODULES.TOOLKIT}/channel-mappings`,
+  OTA_CHANNEL_MAPPINGS_BATCH: `/${PLATFORM_MODULES.TOOLKIT}/channel-mappings/batch`,
+  CHANNEL_REMARK_TEMPLATES: `/${PLATFORM_MODULES.TOOLKIT}/channel-remark-templates`,
 } as const;
 
 /**
@@ -352,3 +356,172 @@ export async function saveChannelMappingsBatch(
     records,
   };
 }
+
+export interface SaveChannelRemarkTemplatePayload {
+  remarkTemplate: string;
+}
+
+export interface SaveChannelRemarkTemplateResult {
+  ok: boolean;
+  message: string;
+  otaChannelCode: string;
+  remarkTemplate: string;
+}
+
+/**
+ * 保存 OTA 渠道备注模板
+ * PUT /toolkit/channel-remark-templates/{otaChannelCode}
+ * 接口ID：506024742
+ */
+export async function saveChannelRemarkTemplate(
+  otaChannelCode: string,
+  payload: SaveChannelRemarkTemplatePayload
+): Promise<SaveChannelRemarkTemplateResult> {
+  const code = encodeURIComponent(String(otaChannelCode || '').trim().toUpperCase());
+  if (!code) {
+    throw new Error('保存渠道备注模板缺少必填参数: otaChannelCode');
+  }
+
+  if (typeof payload?.remarkTemplate !== 'string') {
+    throw new Error('保存渠道备注模板缺少必填字段: remarkTemplate');
+  }
+
+  const endpoint = `${CHANNEL_ENDPOINTS.CHANNEL_REMARK_TEMPLATES}/${code}`;
+
+  const response = await requestPlatformApi<{
+    code?: number | string;
+    msg?: string;
+    message?: string;
+    success?: boolean;
+    data?: unknown;
+  }>(endpoint, {
+    method: 'PUT',
+    body: JSON.stringify({
+      remarkTemplate: payload.remarkTemplate,
+    }),
+  });
+
+  // 严格 Fail-Fast 校验：遇到业务失败立即阻断抛错，绝不返回伪造成功
+  if (
+    response?.success === false ||
+    (response?.code !== undefined &&
+      response?.code !== null &&
+      String(response.code) !== '0' &&
+      String(response.code) !== '200')
+  ) {
+    const errorMsg =
+      response?.msg ||
+      response?.message ||
+      `业务状态异常 (code: ${response?.code})`;
+    throw new Error(`保存渠道备注模板失败: ${errorMsg}`);
+  }
+
+  const message =
+    response?.msg ||
+    response?.message ||
+    `「${otaChannelCode}」备注模板已保存`;
+
+  return {
+    ok: true,
+    message,
+    otaChannelCode,
+    remarkTemplate: payload.remarkTemplate,
+  };
+}
+
+export interface FetchChannelRemarkTemplateResult {
+  otaChannelCode: string;
+  remarkTemplate: string | null;
+}
+
+/**
+ * 根据 OTA 渠道编码查询备注模板
+ * GET /toolkit/channel-remark-templates/{otaChannelCode}
+ * 接口ID：507972669
+ * 
+ * 规则：若后台未配置或资源不存在 (404/空)，返回 remarkTemplate: null，由调用方回退展示默认模板
+ */
+export async function fetchChannelRemarkTemplate(
+  otaChannelCode: string
+): Promise<FetchChannelRemarkTemplateResult> {
+  const code = encodeURIComponent(String(otaChannelCode || '').trim().toUpperCase());
+  if (!code) {
+    throw new Error('查询渠道备注模板缺少必填参数: otaChannelCode');
+  }
+
+  const endpoint = `${CHANNEL_ENDPOINTS.CHANNEL_REMARK_TEMPLATES}/${code}`;
+
+  try {
+    const response = await requestPlatformApi<unknown>(endpoint, {
+      method: 'GET',
+    });
+
+    let template: string | null = null;
+    if (typeof response === 'string') {
+      template = response;
+    } else if (response && typeof response === 'object') {
+      const respObj = response as Record<string, unknown>;
+
+      // 业务信封失败 Fail-Fast 阻断，避免业务异常被静默误判为未配置模板
+      if (
+        respObj.success === false ||
+        (respObj.code !== undefined &&
+          respObj.code !== null &&
+          String(respObj.code) !== '0' &&
+          String(respObj.code) !== '200')
+      ) {
+        const errorMsg =
+          typeof respObj.msg === 'string'
+            ? respObj.msg
+            : typeof respObj.message === 'string'
+            ? respObj.message
+            : `业务状态异常 (code: ${String(respObj.code)})`;
+        throw new Error(`获取渠道备注模板失败: ${errorMsg}`);
+      }
+
+      const data = respObj.data !== undefined ? respObj.data : respObj;
+
+      if (typeof data === 'string') {
+        template = data;
+      } else if (data && typeof data === 'object') {
+        const dataObj = data as Record<string, unknown>;
+        if (typeof dataObj.remarkTemplate === 'string') {
+          template = dataObj.remarkTemplate;
+        }
+      }
+    }
+
+    return {
+      otaChannelCode,
+      remarkTemplate: template && template.trim() ? template : null,
+    };
+  } catch (error) {
+    // 若服务端返回 404 (资源/模板不存在) 或明确包含未配置相关描述，按设计返回 null 触发默认模板回退
+    const status =
+      error && typeof error === 'object' && 'statusCode' in error && typeof (error as { statusCode?: unknown }).statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : error && typeof error === 'object' && 'status' in error && typeof (error as { status?: unknown }).status === 'number'
+        ? (error as { status: number }).status
+        : undefined;
+
+    const msg = error instanceof Error ? error.message : String(error);
+
+    if (
+      status === 404 ||
+      msg.includes('404') ||
+      msg.includes('NOT_FOUND') ||
+      msg.includes('No static resource') ||
+      msg.includes('未找到') ||
+      msg.includes('不存在')
+    ) {
+      return {
+        otaChannelCode,
+        remarkTemplate: null,
+      };
+    }
+
+    // 其他真实网络/服务器异常 (如 500/网络中断/401) 遵循 Fail-Fast 抛出
+    throw error;
+  }
+}
+

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   normalizeOrderPayload,
   ProtocolNormalizationError,
@@ -12,6 +12,17 @@ import { renderTemplate } from '../../src/utils/template/templateEngine';
 import { formatDate } from '../../src/utils/template/filters';
 
 describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
+  const originalTZ = process.env.TZ;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (originalTZ !== undefined) {
+      process.env.TZ = originalTZ;
+    } else {
+      delete process.env.TZ;
+    }
+  });
+
   it('correctly handles 10-digit Unix timestamp (seconds) into standard YYYY-MM-DD', () => {
     vi.stubEnv('TZ', 'Asia/Shanghai');
     process.env.TZ = 'Asia/Shanghai';
