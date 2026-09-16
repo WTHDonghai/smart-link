@@ -28,6 +28,7 @@ describe('authSlice - 同步 Reducers 状态机流转', () => {
       isAuthorizing: false,
       isRefreshing: false,
       failureReason: null,
+      failureError: null,
     };
   });
 
@@ -129,7 +130,7 @@ describe('authSlice - 同步 Reducers 状态机流转', () => {
     expect(nextState.tokens?.accessToken).toBe('new-token');
   });
 
-  it('authFailed 正确捕获并暴露失败原因 (Fail-Fast)', () => {
+  it('authFailed 正确捕获并暴露失败原因 (Fail-Fast) 及结构化 failureError', () => {
     const nextState = authReducer(
       initialState,
       authFailed('文旅平台授权已过期，Refresh Token 失效 [401 invalid_grant]')
@@ -138,6 +139,9 @@ describe('authSlice - 同步 Reducers 状态机流转', () => {
     expect(nextState.failureReason).toBe(
       '文旅平台授权已过期，Refresh Token 失效 [401 invalid_grant]'
     );
+    expect(nextState.failureError?.code).toBe('AUTH_CRED_INVALID');
+    expect(nextState.failureError?.userTitle).toBe('登录凭据已失效');
+    expect(nextState.failureError?.retryable).toBe(false);
   });
 
   it('logout 彻底清除 Token 与状态', () => {
@@ -187,6 +191,7 @@ describe('authSlice - 异步 ExtraReducers 状态流转', () => {
       isAuthorizing: true,
       isRefreshing: false,
       failureReason: null,
+      failureError: null,
     };
 
     const nextState = authReducer(
@@ -198,5 +203,38 @@ describe('authSlice - 异步 ExtraReducers 状态流转', () => {
     expect(nextState.isAuthorizing).toBe(false);
     expect(nextState.tokens?.accessToken).toBe('thunk-access');
     expect(nextState.tenantId).toBe('XR-THUNK');
+    expect(nextState.failureError).toBeNull();
+  });
+
+  it('startDeviceLogin.rejected 针对网关超时正确解析为 AUTH_NET_TIMEOUT 结构化错误', () => {
+    const startState: AuthState = {
+      status: 'authorizing',
+      platformBaseUrl: 'https://pms-api.xiruan.com',
+      tenantId: 'XR-89201',
+      tokens: null,
+      tokenState: null,
+      deviceCodeInfo: null,
+      isAuthorizing: true,
+      isRefreshing: false,
+      failureReason: null,
+      failureError: null,
+    };
+
+    const rawError =
+      '刷新 Token 失败: Failed to handle request [POST https://xctp-api.devops.foxhis.com/identity/oauth/token]: connection timed out after 30000 ms: /10.233.109.82:8090';
+
+    const nextState = authReducer(
+      startState,
+      startDeviceLogin.rejected(new Error(rawError), 'requestId', { baseUrl: 'https://pms-api.xiruan.com' }, rawError)
+    );
+
+    expect(nextState.status).toBe('login-required');
+    expect(nextState.isAuthorizing).toBe(false);
+    expect(nextState.failureReason).toBe(rawError);
+    expect(nextState.failureError).toBeDefined();
+    expect(nextState.failureError?.code).toBe('AUTH_NET_TIMEOUT');
+    expect(nextState.failureError?.userTitle).toBe('授权服务响应超时');
+    expect(nextState.failureError?.retryable).toBe(true);
+    expect(nextState.failureError?.rawMessage).toBe(rawError);
   });
 });

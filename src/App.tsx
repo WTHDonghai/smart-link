@@ -61,7 +61,7 @@ export default function App() {
         {/* Dynamic Content Area */}
         <main
           className={`flex-1 transition-all duration-300 h-full min-h-0 ${
-            currentTab === 'order-guardian'
+            currentTab === 'order-guardian' || currentTab === 'product-mapping'
               ? 'overflow-hidden flex flex-col'
               : 'overflow-y-auto'
           } ${collapsed ? 'pl-20' : 'pl-64'}`}

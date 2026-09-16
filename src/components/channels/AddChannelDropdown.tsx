@@ -44,13 +44,13 @@ export const AddChannelDropdown: React.FC = () => {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#004ac6] hover:bg-[#2563eb] text-white font-semibold text-sm shadow-xs hover:shadow transition-all cursor-pointer"
+        className="h-8.5 px-3.5 rounded-lg bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80] text-white font-semibold text-xs shadow-2xs transition-colors inline-flex items-center gap-1.5 cursor-pointer select-none"
         type="button"
         id="add-channel-btn"
       >
-        <Plus className="w-4 h-4" />
+        <Plus className="w-3.5 h-3.5" />
         <span>添加渠道</span>
-        <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (

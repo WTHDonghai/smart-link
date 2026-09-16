@@ -140,3 +140,5 @@ export type PlatformAuthStatus =
   | 'authorizing'
   | 'authorized';
 
+export * from './error';
+

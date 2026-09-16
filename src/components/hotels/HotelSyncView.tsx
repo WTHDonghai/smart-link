@@ -3,8 +3,10 @@ import { useAppDispatch, useAppSelector } from '../../store';
 import { setIsScraping, setFilterChannel, setSearchKeyword, updateHotelMapping, addDiscoveredHotel } from '../../store/slices/hotelSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { addLog } from '../../store/slices/systemLogSlice';
-import { Search, RefreshCw, ChevronDown, Save } from 'lucide-react';
+import { Search, RefreshCw, ChevronDown, Save, X } from 'lucide-react';
 import { HotelMapping } from '../../types';
+import { SearchableSelect } from '../common/SearchableSelect';
+import { EmptyState } from '../common/EmptyState';
 
 const PMS_HOTEL_OPTIONS = [
   { id: 'PMS-HZ-001', name: '华住全季-杭州湖滨店' },
@@ -26,6 +28,15 @@ export const HotelSyncView: React.FC = () => {
   const channels = useAppSelector((state) => state.channel.channels);
 
   const [selectedPmsMap, setSelectedPmsMap] = useState<Record<string, string>>({});
+
+  const channelOptions = useMemo(() => [
+    { label: '全部渠道', value: 'all' },
+    ...channels.map((ch) => ({
+      label: ch.name,
+      value: ch.id,
+      subtext: ch.code
+    }))
+  ], [channels]);
 
   const filteredHotels = useMemo(() => {
     return hotels.filter((h) => {
@@ -117,29 +128,35 @@ export const HotelSyncView: React.FC = () => {
     }, 2200);
   };
 
+  const handleResetFilters = () => {
+    dispatch(setSearchKeyword(''));
+    dispatch(setFilterChannel('all'));
+  };
+
   return (
-    <div className="flex flex-col gap-5 max-w-[1400px] mx-auto w-full p-6">
-      {/* Header */}
+    <div className="flex flex-col gap-5 max-w-[1400px] mx-auto w-full p-6 text-[#0b1c30]">
+      {/* 1. 统一标准页面头部 */}
       <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#e2e8f0]">
         <div className="flex items-center gap-2.5">
           <div className="w-1.5 h-4.5 rounded-full bg-[#004ac6] shrink-0" />
           <h1 className="text-xl font-bold text-[#0b1c30] tracking-tight">
             门店采集
           </h1>
-          <span className="text-xs text-[#737686] ml-2">
+          <span className="text-xs text-[#737686] ml-2 font-mono">
             共 {hotels.length} 家酒店
           </span>
         </div>
 
+        {/* 顶部主操作动作组：统一高度与主要按钮样式 */}
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handleStartPlaywrightCrawl}
             disabled={isScraping}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white font-medium text-xs shadow-2xs transition-all cursor-pointer ${
+            className={`h-8.5 px-3.5 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5 ${
               isScraping
                 ? 'bg-[#2170e4] cursor-wait opacity-80'
-                : 'bg-[#004ac6] hover:bg-[#2563eb]'
+                : 'bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80]'
             }`}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
@@ -148,114 +165,148 @@ export const HotelSyncView: React.FC = () => {
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <div className="relative flex-1">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#737686]" />
-            <input
-              type="text"
-              value={searchKeyword}
-              onChange={(e) => dispatch(setSearchKeyword(e.target.value))}
-              placeholder="搜索酒店名称或城市..."
-              className="w-full pl-8 pr-3 py-1.5 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] placeholder-[#737686] outline-none focus:border-[#004ac6]"
-            />
+      {/* 2. 主卡片：内嵌统一搜索与渠道过滤栏 + 酒店映射列表 */}
+      <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] overflow-hidden divide-y divide-[#edf2f9]">
+        {/* 表格内嵌搜索与渠道过滤栏（与产品采集保持完全一致的规格） */}
+        <div className="p-3 bg-[#f8faff] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+            {/* 统一规范搜索输入框 */}
+            <div className="relative flex-1 max-w-sm">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#737686] pointer-events-none" />
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => dispatch(setSearchKeyword(e.target.value))}
+                placeholder="搜索酒店名称、PMS酒店或城市..."
+                className="w-full h-8.5 pl-8.5 pr-8 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] placeholder-[#94a3b8] outline-hidden focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] transition-colors"
+              />
+              {searchKeyword && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(setSearchKeyword(''))}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-[#0b1c30] p-0.5 cursor-pointer"
+                  title="清空搜索"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* 统一渠道选择器：使用 SearchableSelect 保持全站下拉交互一致 */}
+            <div className="w-48">
+              <SearchableSelect
+                value={filterChannel}
+                onChange={(val) => dispatch(setFilterChannel(val))}
+                options={channelOptions}
+                placeholder="全部渠道"
+                searchPlaceholder="搜索渠道名称、代码..."
+                size="sm"
+                buttonClassName="font-medium text-[#0b1c30]"
+              />
+            </div>
+
+            {/* 重置条件按钮 */}
+            {(searchKeyword || filterChannel !== 'all') && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="text-xs text-[#737686] hover:text-[#004ac6] flex items-center gap-1 cursor-pointer shrink-0 ml-1"
+              >
+                <span>重置条件</span>
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center">
-            <select
-              value={filterChannel}
-              onChange={(e) => dispatch(setFilterChannel(e.target.value))}
-              className="py-1.5 px-2.5 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] outline-none focus:border-[#004ac6]"
-            >
-              <option value="all">所有渠道</option>
-              {channels.map((ch) => (
-                <option key={ch.id} value={ch.id}>
-                  {ch.name}
-                </option>
-              ))}
-            </select>
+          <div className="text-xs text-[#737686] font-mono shrink-0">
+            共显示 <strong className="text-[#004ac6] font-bold">{filteredHotels.length}</strong> / {hotels.length} 家酒店
           </div>
         </div>
 
-        <div className="text-xs text-[#737686]">
-          共显示 {filteredHotels.length} 家酒店
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] overflow-hidden">
+        {/* 酒店列表表格 */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-[#f8faff] text-[#434655] text-xs font-semibold border-b border-[#e5edfa]">
-                <th className="py-3 px-6">OTA 渠道与酒店</th>
-                <th className="py-3 px-4 w-36 whitespace-nowrap">OTA ID</th>
-                <th className="py-3 px-4 min-w-[240px]">中台对应酒店</th>
-                <th className="py-3 px-6 text-right whitespace-nowrap w-28">操作</th>
+          <table className="w-full text-left border-separate border-spacing-0">
+            <thead className="sticky top-0 z-20 bg-[#f8faff]">
+              <tr className="bg-[#f8faff] text-[#434655] text-xs font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+                <th className="py-2.5 px-6 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 渠道与酒店</th>
+                <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA ID</th>
+                <th className="py-2.5 px-4 min-w-[240px] sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">中台对应酒店</th>
+                <th className="py-2.5 px-6 text-right whitespace-nowrap w-28 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edf3fc] text-sm text-[#0b1c30]">
-              {filteredHotels.map((h) => {
-                const ch = channels.find(c => c.id === h.otaChannelId);
-                const currentPmsId = selectedPmsMap[h.id] ?? h.pmsHotelId;
-                const options = getHotelOptions(h.pmsHotelId, h.pmsHotelName);
+              {filteredHotels.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-12 text-center">
+                    <EmptyState
+                      title="暂无匹配的酒店门店数据"
+                      description="可以尝试调整搜索关键字或渠道筛选条件"
+                      actionText={searchKeyword || filterChannel !== 'all' ? '清除过滤条件' : undefined}
+                      onAction={handleResetFilters}
+                    />
+                  </td>
+                </tr>
+              ) : (
+                filteredHotels.map((h) => {
+                  const ch = channels.find(c => c.id === h.otaChannelId);
+                  const currentPmsId = selectedPmsMap[h.id] ?? h.pmsHotelId;
+                  const options = getHotelOptions(h.pmsHotelId, h.pmsHotelName);
 
-                return (
-                  <tr key={h.id} className="hover:bg-[#f8faff] transition-colors">
-                    <td className="py-3.5 px-6">
-                      <div className="flex items-center gap-2.5">
-                        <div className={`w-7 h-7 rounded-md ${ch?.bgColor || 'bg-blue-100'} ${ch?.textColor || 'text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0`}>
-                          {ch?.short || 'OTA'}
+                  return (
+                    <tr key={h.id} className="hover:bg-[#f8faff] transition-colors">
+                      <td className="py-3 px-6 border-b border-[#edf2f9]">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-7 h-7 rounded-md ${ch?.bgColor || 'bg-blue-100'} ${ch?.textColor || 'text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0`}>
+                            {ch?.short || 'OTA'}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-xs text-[#0b1c30]">{h.otaHotelName}</span>
+                            <span className="text-[11px] text-[#737686]">{h.starRating}</span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-xs text-[#0b1c30]">{h.otaHotelName}</span>
-                          <span className="text-[11px] text-[#737686]">{h.starRating}</span>
+                      </td>
+
+                      <td className="py-3 px-4 font-mono text-xs text-[#737686] whitespace-nowrap border-b border-[#edf2f9]">
+                        {h.otaHotelId}
+                      </td>
+
+                      {/* 中台对应酒店 - 下拉框 */}
+                      <td className="py-3 px-4 border-b border-[#edf2f9]">
+                        <div className="relative w-full max-w-xs">
+                          <select
+                            value={currentPmsId}
+                            onChange={(e) => handlePmsChange(h.id, e.target.value)}
+                            className="w-full h-8.5 pl-3 pr-8 rounded-lg bg-white text-[#0b1c30] text-xs shadow-2xs focus:ring-1 focus:ring-[#004ac6] focus:outline-hidden appearance-none cursor-pointer border border-[#dce9ff] hover:border-[#004ac6]/60 transition-colors font-medium truncate"
+                          >
+                            {options.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.name} ({opt.id})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#737686]">
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="py-3.5 px-4 font-mono text-xs text-[#737686] whitespace-nowrap">
-                      {h.otaHotelId}
-                    </td>
-
-                    {/* 中台对应酒店 - 下拉框 */}
-                    <td className="py-3.5 px-4">
-                      <div className="relative w-full max-w-xs">
-                        <select
-                          value={currentPmsId}
-                          onChange={(e) => handlePmsChange(h.id, e.target.value)}
-                          className="w-full h-8.5 pl-3 pr-8 rounded-lg bg-white text-[#0b1c30] text-xs shadow-2xs focus:ring-1 focus:ring-[#004ac6] focus:outline-hidden appearance-none cursor-pointer border border-[#dce9ff] hover:border-[#004ac6]/60 transition-colors font-medium truncate"
-                        >
-                          {options.map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {opt.name} ({opt.id})
-                            </option>
-                          ))}
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#737686]">
-                          <ChevronDown className="w-3.5 h-3.5" />
+                      {/* 操作列 */}
+                      <td className="py-3 px-6 text-right whitespace-nowrap border-b border-[#edf2f9]">
+                        <div className="flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveRow(h)}
+                            className="inline-flex items-center justify-center gap-1.5 h-7.5 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003da6] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
+                            title="保存酒店映射"
+                          >
+                            <Save className="w-3.5 h-3.5 shrink-0" />
+                            <span>保存</span>
+                          </button>
                         </div>
-                      </div>
-                    </td>
-
-                    {/* 操作列提供保存按钮，去掉状态显示 */}
-                    <td className="py-3.5 px-6 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end">
-                        <button
-                          type="button"
-                          onClick={() => handleSaveRow(h)}
-                          className="inline-flex items-center justify-center gap-1.5 h-8 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003ea8] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
-                          title="保存酒店映射"
-                        >
-                          <Save className="w-3.5 h-3.5 shrink-0" />
-                          <span>保存</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>

@@ -88,7 +88,7 @@ export const RemarkTemplateModal: React.FC = () => {
         <button
           type="button"
           onClick={handleSave}
-          className="px-5 py-2 text-xs font-semibold text-white bg-[#004ac6] hover:bg-[#2563eb] rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+          className="px-5 py-2 text-xs font-semibold text-white bg-[#004ac6] hover:bg-[#003da6] rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
         >
           <Check className="w-3.5 h-3.5" />
           <span>保存模板</span>
@@ -156,7 +156,7 @@ export const RemarkTemplateModal: React.FC = () => {
             <Eye className="w-3.5 h-3.5 text-emerald-700" />
             <span>实时效果预览 (到达文旅大中台接收系统的备注展示)</span>
           </div>
-          <div className="p-3 bg-white rounded-lg border border-emerald-100 text-xs text-gray-800 font-mono leading-relaxed break-all shadow-2xs">
+          <div className="p-3 bg-white rounded-lg border border-emerald-100 text-xs text-[#0b1c30] font-mono leading-relaxed break-all shadow-2xs">
             {renderPreview() || '<空模板>'}
           </div>
         </div>

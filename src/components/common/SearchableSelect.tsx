@@ -19,6 +19,7 @@ interface SearchableSelectProps {
   disabled?: boolean;
   size?: 'sm' | 'md';
   clearable?: boolean;
+  placement?: 'bottom' | 'top';
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -32,7 +33,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   dropdownClassName = '',
   disabled = false,
   size = 'sm',
-  clearable = false
+  clearable = false,
+  placement = 'bottom'
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -141,7 +143,9 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
       {/* Dropdown Popover */}
       {isOpen && (
         <div
-          className={`absolute left-0 top-full mt-1.5 w-full min-w-[200px] max-w-[340px] bg-white rounded-lg shadow-lg border border-[#dce9ff] z-50 overflow-hidden animate-in fade-in-50 zoom-in-95 duration-100 ${dropdownClassName}`}
+          className={`absolute left-0 ${
+            placement === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+          } w-full min-w-[200px] max-w-[340px] bg-white rounded-lg shadow-lg border border-[#dce9ff] z-50 overflow-hidden animate-in fade-in-50 zoom-in-95 duration-100 ${dropdownClassName}`}
         >
           {/* Search Header */}
           <div className="p-2 border-b border-[#edf3fc] bg-[#fafafa]">

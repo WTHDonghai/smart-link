@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
 
 export interface ModalProps {
@@ -34,7 +34,6 @@ export const Modal: React.FC<ModalProps> = ({
   footer,
   closeOnBackdrop = true,
 }) => {
-  const modalRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape key press
   useEffect(() => {
@@ -76,7 +75,6 @@ export const Modal: React.FC<ModalProps> = ({
       }}
     >
       <div
-        ref={modalRef}
         className={`bg-white rounded-2xl shadow-2xl border border-[#dce9ff] w-full ${MAX_WIDTH_MAP[maxWidth]} overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-150`}
       >
         {/* Modal Header */}

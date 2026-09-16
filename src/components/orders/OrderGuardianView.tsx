@@ -22,7 +22,7 @@ import { OrderStatsCards } from './OrderStatsCards';
 import { OrderFilterBar } from './OrderFilterBar';
 import { OrderBatchBar } from './OrderBatchBar';
 import { OrderTable } from './OrderTable';
-import { OrderPagination } from './OrderPagination';
+import { Pagination } from '../common/Pagination';
 
 export const OrderGuardianView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -42,7 +42,6 @@ export const OrderGuardianView: React.FC = () => {
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [jumpInput, setJumpInput] = useState('');
 
   // Selection states for batch actions
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
@@ -107,21 +106,6 @@ export const OrderGuardianView: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleJumpSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const target = parseInt(jumpInput, 10);
-    if (!isNaN(target) && target >= 1 && target <= totalPages) {
-      setCurrentPage(target);
-      setJumpInput('');
-    } else {
-      dispatch(showToast({
-        title: '页码无效',
-        description: `请输入 1 至 ${totalPages} 之间的有效页码`,
-        type: 'info'
-      }));
-    }
-  };
-
   const handleSearch = () => {
     setCurrentPage(1);
     dispatch(setSearchKeyword(keywordInput));
@@ -139,20 +123,6 @@ export const OrderGuardianView: React.FC = () => {
   const handleTabChange = (status: 'all' | OrderStatus) => {
     setCurrentPage(1);
     dispatch(setOrderFilterStatus(status));
-  };
-
-  // Generate pagination range with smart ellipsis
-  const getPaginationRange = (): (number | string)[] => {
-    const delta = 1;
-    const range: (number | string)[] = [];
-    for (let i = 1; i <= totalPages; i++) {
-      if (i === 1 || i === totalPages || (i >= safeCurrentPage - delta && i <= safeCurrentPage + delta)) {
-        range.push(i);
-      } else if (range[range.length - 1] !== '...') {
-        range.push('...');
-      }
-    }
-    return range;
   };
 
   const handleCopy = (text: string) => {
@@ -315,7 +285,20 @@ export const OrderGuardianView: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full flex flex-col p-5 bg-[#f8f9fc] text-[#0b1c30] overflow-hidden min-h-0">
+    <div className="w-full h-full max-w-[1400px] mx-auto flex flex-col p-6 text-[#0b1c30] overflow-hidden min-h-0">
+      {/* 统一页面头部 */}
+      <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#e2e8f0] shrink-0 mb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-1.5 h-4.5 rounded-full bg-[#004ac6] shrink-0" />
+          <h1 className="text-xl font-bold text-[#0b1c30] tracking-tight">
+            订单值守
+          </h1>
+          <span className="text-xs text-[#737686] ml-2 font-mono">
+            共 {orders.length} 笔订单
+          </span>
+        </div>
+      </div>
+
       {/* 顶部统计卡片 */}
       <OrderStatsCards stats={stats} />
 
@@ -344,8 +327,8 @@ export const OrderGuardianView: React.FC = () => {
         onBatchCancel={handleBatchCancel}
       />
 
-      {/* 订单表格容器 */}
-      <div className="flex-1 min-h-0 bg-white rounded-md border border-[#e5e7eb] flex flex-col overflow-hidden shadow-2xs">
+      {/* 订单表格与分页一体化容器 */}
+      <div className="flex-1 min-h-0 bg-white rounded-xl border border-[#dce9ff] flex flex-col overflow-hidden shadow-xs">
         <OrderTable
           orders={paginatedOrders}
           selectedOrderIds={selectedOrderIds}
@@ -360,19 +343,14 @@ export const OrderGuardianView: React.FC = () => {
         />
 
         {/* 底部分页条 */}
-        <OrderPagination
+        <Pagination
           totalItems={totalItems}
-          startIndex={startIndex}
-          endIndex={endIndex}
+          currentPage={safeCurrentPage}
           pageSize={pageSize}
-          onPageSizeChange={handlePageSizeChange}
-          safeCurrentPage={safeCurrentPage}
-          totalPages={totalPages}
           onPageChange={handlePageChange}
-          paginationRange={getPaginationRange()}
-          jumpInput={jumpInput}
-          setJumpInput={setJumpInput}
-          onJumpSubmit={handleJumpSubmit}
+          onPageSizeChange={handlePageSizeChange}
+          pageSizeOptions={[5, 10, 20, 50]}
+          itemUnit="条订单"
         />
       </div>
 

@@ -4,6 +4,7 @@ import {
   PlatformDeviceCodeInfo,
   PlatformTokenState,
   PlatformAuthStatus,
+  AppError,
 } from '../../types';
 import {
   platformAuthService,
@@ -13,6 +14,7 @@ import {
   clearTokensFromStorage,
   saveTokensToStorage,
 } from '../../services/platformAuth';
+import { normalizeAppError } from '../../utils/errorNormalizer';
 
 export interface AuthState {
   status: PlatformAuthStatus;
@@ -24,6 +26,7 @@ export interface AuthState {
   isAuthorizing: boolean;
   isRefreshing: boolean;
   failureReason: string | null;
+  failureError: AppError | null;
 }
 
 const initialTokens = loadTokensFromStorage();
@@ -49,6 +52,7 @@ const initialState: AuthState = {
   isAuthorizing: false,
   isRefreshing: false,
   failureReason: null,
+  failureError: null,
 };
 
 // 异步 Thunk：发起设备授权码并启动轮询
@@ -101,6 +105,7 @@ export const authSlice = createSlice({
         state.status = 'authorizing';
         state.isAuthorizing = true;
         state.failureReason = null;
+        state.failureError = null;
       }
     },
     cancelDeviceLogin: (state) => {
@@ -128,6 +133,7 @@ export const authSlice = createSlice({
       state.isAuthorizing = false;
       state.deviceCodeInfo = null;
       state.failureReason = null;
+      state.failureError = null;
       saveTokensToStorage(action.payload);
     },
     tokenRefreshed: (state, action: PayloadAction<PlatformAuthTokens>) => {
@@ -136,6 +142,7 @@ export const authSlice = createSlice({
       state.isRefreshing = false;
       state.status = 'authorized';
       state.failureReason = null;
+      state.failureError = null;
       saveTokensToStorage(action.payload);
     },
     authFailed: (state, action: PayloadAction<string>) => {
@@ -144,6 +151,7 @@ export const authSlice = createSlice({
       state.isRefreshing = false;
       state.deviceCodeInfo = null;
       state.failureReason = action.payload;
+      state.failureError = normalizeAppError(action.payload, 'AUTH');
     },
     logout: (state) => {
       state.tokens = null;
@@ -154,6 +162,7 @@ export const authSlice = createSlice({
       state.isRefreshing = false;
       state.deviceCodeInfo = null;
       state.failureReason = null;
+      state.failureError = null;
       clearTokensFromStorage();
       platformAuthService.stopRefreshScheduler();
     },
@@ -164,6 +173,7 @@ export const authSlice = createSlice({
       .addCase(startDeviceLogin.pending, (state) => {
         state.isAuthorizing = true;
         state.failureReason = null;
+        state.failureError = null;
       })
       .addCase(startDeviceLogin.fulfilled, (state, action) => {
         state.tokens = action.payload;
@@ -174,13 +184,16 @@ export const authSlice = createSlice({
         state.isAuthorizing = false;
         state.deviceCodeInfo = null;
         state.failureReason = null;
+        state.failureError = null;
         saveTokensToStorage(action.payload);
       })
       .addCase(startDeviceLogin.rejected, (state, action) => {
+        const errorPayload = action.payload || '平台授权申请失败';
         state.isAuthorizing = false;
         state.status = 'login-required';
         state.deviceCodeInfo = null;
-        state.failureReason = action.payload || '平台授权申请失败';
+        state.failureReason = errorPayload;
+        state.failureError = normalizeAppError(errorPayload, 'AUTH');
       });
   },
 });

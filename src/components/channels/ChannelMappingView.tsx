@@ -58,7 +58,7 @@ export const ChannelMappingView: React.FC = () => {
             渠道映射
           </h1>
           <span className="text-xs text-[#737686] ml-2">
-            共 {channels.length} 个渠道
+            共 <span className="font-mono font-medium text-[#0b1c30]">{channels.length}</span> 个渠道
           </span>
         </div>
 
@@ -162,7 +162,7 @@ export const ChannelMappingView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleSave(ch)}
-                          className="inline-flex items-center justify-center gap-1.5 h-8 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003ea8] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
+                          className="inline-flex items-center justify-center gap-1.5 h-8 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003da6] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
                           title="保存配置"
                         >
                           <Save className="w-3.5 h-3.5 shrink-0" />

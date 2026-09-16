@@ -1,8 +1,7 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import {
   KeyRound,
   ExternalLink,
-  AlertCircle,
   Loader2,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -11,7 +10,10 @@ import {
   cancelDeviceLogin,
 } from '../../store/slices/authSlice';
 import { showToast } from '../../store/slices/appSlice';
+import { addLog } from '../../store/slices/systemLogSlice';
 import { XiruanLogoMark } from '../common/XiruanLogo';
+import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
+import { normalizeAppError } from '../../utils/errorNormalizer';
 
 export const PlatformLoginView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -20,9 +22,16 @@ export const PlatformLoginView: React.FC = () => {
     deviceCodeInfo,
     isAuthorizing,
     failureReason,
+    failureError,
   } = useAppSelector((state) => state.auth);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleStartLogin = useCallback(async () => {
     abortControllerRef.current = new AbortController();
@@ -43,6 +52,15 @@ export const PlatformLoginView: React.FC = () => {
             type: 'success',
           })
         );
+      } else if (startDeviceLogin.rejected.match(resultAction)) {
+        const errorText = resultAction.payload || '授权请求失败';
+        dispatch(
+          addLog({
+            level: 'ERROR',
+            message: `[Auth] 文旅平台授权失败: ${errorText}`,
+            details: errorText,
+          })
+        );
       }
     } catch {
       // 错误已由 Redux extraReducer 记录并在界面展现
@@ -58,6 +76,10 @@ export const PlatformLoginView: React.FC = () => {
     if (!deviceCodeInfo?.verificationUri) return;
     window.open(deviceCodeInfo.verificationUri, '_blank', 'noopener,noreferrer');
   }, [deviceCodeInfo]);
+
+  // 获取生效的标准错误对象 (若 failureError 存在则直取，否则对 failureReason 进行安全归一化解析)
+  const displayError =
+    failureError || (failureReason ? normalizeAppError(failureReason, 'AUTH') : null);
 
   return (
     <div className="min-h-screen w-full bg-[#f8f9ff] flex flex-col justify-between items-center p-4 sm:p-6 antialiased selection:bg-[#004ac6] selection:text-white">
@@ -94,17 +116,12 @@ export const PlatformLoginView: React.FC = () => {
             </p>
           </div>
 
-          {/* 异常提示卡片 */}
-          {failureReason && !isAuthorizing && (
-            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-left animate-shake">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div className="flex-1 text-xs">
-                <span className="font-semibold text-rose-800">授权失败：</span>
-                <p className="text-rose-700 mt-0.5 leading-relaxed font-mono select-text break-all">
-                  {failureReason}
-                </p>
-              </div>
-            </div>
+          {/* 统一规范的异常提示卡片 */}
+          {displayError && !isAuthorizing && (
+            <FriendlyErrorAlert
+              error={displayError}
+              onRetry={handleStartLogin}
+            />
           )}
 
           {/* 状态一：准备授权，仅放置单一核心授权登录按钮 */}
