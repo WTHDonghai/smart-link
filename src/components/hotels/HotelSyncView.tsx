@@ -1,14 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   setFilterChannel,
   setSearchKeyword,
   setSelectedCrawlChannel,
-  updateHotelMapping,
   crawlHotelsByChannel,
+  fetchHotelMappingsThunk,
+  saveHotelMappingThunk,
+  deleteHotelMappingThunk,
 } from '../../store/slices/hotelSlice';
-import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
 import {
   Search,
   RefreshCw,
@@ -16,6 +16,7 @@ import {
   Save,
   X,
   CheckCircle2,
+  Trash2,
 } from 'lucide-react';
 import type { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
@@ -41,7 +42,10 @@ export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
   const hotels = useAppSelector((state) => state.hotel.hotels);
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
+  const isFetching = useAppSelector((state) => state.hotel.isFetching);
+  const isSaving = useAppSelector((state) => state.hotel.isSaving);
   const crawlError = useAppSelector((state) => state.hotel.crawlError);
+  const fetchError = useAppSelector((state) => state.hotel.fetchError);
   const selectedCrawlChannel = useAppSelector((state) => state.hotel.selectedCrawlChannel);
   const lastCrawlSummary = useAppSelector((state) => state.hotel.lastCrawlSummary);
   const filterChannel = useAppSelector((state) => state.hotel.filterChannel);
@@ -49,6 +53,12 @@ export const HotelSyncView: React.FC = () => {
   const channels = useAppSelector((state) => state.channel.channels);
 
   const [selectedPmsMap, setSelectedPmsMap] = useState<Record<string, string>>({});
+
+  // 页面挂载与筛选渠道切换时，自动从文旅中台拉取真实门店映射
+  useEffect(() => {
+    const channelParam = filterChannel === 'all' ? undefined : filterChannel;
+    dispatch(fetchHotelMappingsThunk(channelParam));
+  }, [dispatch, filterChannel]);
 
   // 获取当前选中的采集渠道对象
   const activeChannel = useMemo(() => {
@@ -83,7 +93,7 @@ export const HotelSyncView: React.FC = () => {
     }));
   }, [channels]);
 
-  // 过滤后的酒店列表
+  // 过滤后的酒店/门店列表
   const filteredHotels = useMemo(() => {
     return hotels.filter((h) => {
       const matchesChannel = filterChannel === 'all' || h.otaChannelId === filterChannel;
@@ -92,7 +102,7 @@ export const HotelSyncView: React.FC = () => {
         h.otaHotelName.toLowerCase().includes(searchKeyword.toLowerCase()) ||
         h.pmsHotelName.toLowerCase().includes(searchKeyword.toLowerCase()) ||
         h.otaHotelId.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-        h.city.toLowerCase().includes(searchKeyword.toLowerCase());
+        (h.city && h.city.toLowerCase().includes(searchKeyword.toLowerCase()));
       return matchesChannel && matchesKeyword;
     });
   }, [hotels, filterChannel, searchKeyword]);
@@ -111,33 +121,36 @@ export const HotelSyncView: React.FC = () => {
     setSelectedPmsMap((prev) => ({ ...prev, [hotelId]: pmsId }));
   };
 
-  const handleSaveRow = (hotel: HotelMapping) => {
+  const handleSaveRow = async (hotel: HotelMapping) => {
     const pmsId = selectedPmsMap[hotel.id] ?? hotel.pmsHotelId;
     const options = getHotelOptions(hotel.pmsHotelId, hotel.pmsHotelName);
     const matched = options.find((o) => o.id === pmsId);
     const pmsName = matched ? matched.name : hotel.pmsHotelName;
 
-    dispatch(
-      updateHotelMapping({
+    const otaChannelCode = hotel.otaChannelCode || hotel.otaChannelId.toUpperCase();
+    const extUnitCode = hotel.extUnitCode || hotel.otaHotelId;
+
+    await dispatch(
+      saveHotelMappingThunk({
         id: hotel.id,
-        pmsHotelId: pmsId,
+        mappingId: hotel.mappingId,
+        otaChannelCode,
+        extUnitCode,
+        otaHotelName: hotel.otaHotelName,
+        unitId: pmsId || undefined,
+        unitType: hotel.unitType || 'Property',
         pmsHotelName: pmsName,
       })
     );
+  };
 
-    dispatch(
-      showToast({
-        title: `已保存「${hotel.otaHotelName}」映射`,
-        description: `对应中台酒店：${pmsName} (${pmsId})`,
-        type: 'success',
-      })
-    );
-
-    dispatch(
-      addLog({
-        level: 'INFO',
-        channelId: hotel.otaChannelId,
-        message: `[HotelSync] Saved mapping for ${hotel.otaHotelName} (${hotel.otaHotelId}) -> ${pmsName} (${pmsId})`,
+  const handleDeleteRow = async (hotel: HotelMapping) => {
+    if (!hotel.mappingId) return;
+    await dispatch(
+      deleteHotelMappingThunk({
+        mappingId: hotel.mappingId,
+        localId: hotel.id,
+        otaHotelName: hotel.otaHotelName,
       })
     );
   };
@@ -158,6 +171,11 @@ export const HotelSyncView: React.FC = () => {
     dispatch(setFilterChannel('all'));
   };
 
+  const handleRefreshMappings = () => {
+    const channelParam = filterChannel === 'all' ? undefined : filterChannel;
+    dispatch(fetchHotelMappingsThunk(channelParam));
+  };
+
   return (
     <div className="flex flex-col gap-5 max-w-[1400px] mx-auto w-full p-6 text-[#0b1c30]">
       {/* 1. 统一标准页面头部 */}
@@ -168,7 +186,7 @@ export const HotelSyncView: React.FC = () => {
             门店采集
           </h1>
           <span className="text-xs text-[#737686] ml-2 font-mono">
-            共 {hotels.length} 家酒店候选
+            共 {hotels.length} 家门店
           </span>
         </div>
       </div>
@@ -227,7 +245,17 @@ export const HotelSyncView: React.FC = () => {
           </div>
         )}
 
-        {/* 4. 最近一次采集简报 */}
+        {/* 4. 获取门店映射列表失败提示 */}
+        {fetchError && (
+          <div className="pt-2">
+            <FriendlyErrorAlert
+              error={normalizeAppError(fetchError, 'MAPPING')}
+              onRetry={handleRefreshMappings}
+            />
+          </div>
+        )}
+
+        {/* 5. 最近一次采集简报 */}
         {lastCrawlSummary && !crawlError && !isScraping && (
           <div className="flex items-center justify-between px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800">
             <div className="flex items-center gap-2">
@@ -245,7 +273,7 @@ export const HotelSyncView: React.FC = () => {
         )}
       </div>
 
-      {/* 5. 酒店列表主卡片：搜索过滤 + 表格 */}
+      {/* 6. 门店列表主卡片：搜索过滤 + 表格 */}
       <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] overflow-hidden divide-y divide-[#edf2f9]">
         {/* 表格内嵌搜索与渠道过滤栏 */}
         <div className="p-3 bg-[#f8faff] flex flex-wrap items-center justify-between gap-3">
@@ -257,7 +285,7 @@ export const HotelSyncView: React.FC = () => {
                 type="text"
                 value={searchKeyword}
                 onChange={(e) => dispatch(setSearchKeyword(e.target.value))}
-                placeholder="搜索酒店名称、门店ID、PMS酒店或城市..."
+                placeholder="搜索门店名称、OTA 门店 ID、PMS 酒店或城市..."
                 className="w-full h-8.5 pl-8.5 pr-8 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] placeholder-[#94a3b8] outline-hidden focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] transition-colors"
               />
               {searchKeyword && (
@@ -285,6 +313,18 @@ export const HotelSyncView: React.FC = () => {
               />
             </div>
 
+            {/* 刷新远程映射按钮 */}
+            <button
+              type="button"
+              onClick={handleRefreshMappings}
+              disabled={isFetching}
+              className="text-xs text-[#737686] hover:text-[#004ac6] flex items-center gap-1 cursor-pointer shrink-0 ml-1 disabled:opacity-50"
+              title="从文旅中台重新拉取门店映射数据"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+              <span>刷新</span>
+            </button>
+
             {/* 重置条件按钮 */}
             {(searchKeyword || filterChannel !== 'all') && (
               <button
@@ -298,11 +338,11 @@ export const HotelSyncView: React.FC = () => {
           </div>
 
           <div className="text-xs text-[#737686] font-mono shrink-0">
-            共显示 <strong className="text-[#004ac6] font-bold">{filteredHotels.length}</strong> / {hotels.length} 家酒店
+            共显示 <strong className="text-[#004ac6] font-bold">{filteredHotels.length}</strong> / {hotels.length} 家门店
           </div>
         </div>
 
-        {/* 酒店列表表格 */}
+        {/* 门店列表表格 */}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-separate border-spacing-0">
             <thead className="sticky top-0 z-20 bg-[#f8faff]">
@@ -311,16 +351,15 @@ export const HotelSyncView: React.FC = () => {
                 <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 门店 ID</th>
                 <th className="py-2.5 px-4 w-28 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">状态</th>
                 <th className="py-2.5 px-4 min-w-[240px] sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">中台对应酒店</th>
-                <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">采集时间</th>
-                <th className="py-2.5 px-6 text-right whitespace-nowrap w-24 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
+                <th className="py-2.5 px-6 text-right whitespace-nowrap w-28 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edf3fc] text-sm text-[#0b1c30]">
               {filteredHotels.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center">
+                  <td colSpan={5} className="py-12 text-center">
                     <EmptyState
-                      title="暂无匹配的酒店门店数据"
+                      title="暂无匹配的门店数据"
                       description="可以尝试调整搜索关键字，或点击上方「启动采集」按钮拉取最新数据"
                       actionText={searchKeyword || filterChannel !== 'all' ? '清除过滤条件' : undefined}
                       onAction={handleResetFilters}
@@ -399,23 +438,29 @@ export const HotelSyncView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* 上次采集时间 */}
-                      <td className="py-3 px-4 text-xs text-[#737686] whitespace-nowrap border-b border-[#edf2f9]">
-                        {h.lastScraped}
-                      </td>
-
                       {/* 操作列 */}
                       <td className="py-3 px-6 text-right whitespace-nowrap border-b border-[#edf2f9]">
-                        <div className="flex items-center justify-end">
+                        <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
                             onClick={() => handleSaveRow(h)}
-                            className="inline-flex items-center justify-center gap-1.5 h-7.5 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003da6] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
-                            title="保存酒店映射"
+                            disabled={isSaving}
+                            className="inline-flex items-center justify-center gap-1.5 h-7.5 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003da6] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none disabled:opacity-50"
+                            title="保存门店映射至文旅平台"
                           >
                             <Save className="w-3.5 h-3.5 shrink-0" />
                             <span>保存</span>
                           </button>
+                          {h.mappingId && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRow(h)}
+                              className="inline-flex items-center justify-center h-7.5 w-7.5 text-xs font-medium text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md shadow-2xs transition-colors shrink-0 cursor-pointer select-none"
+                              title="删除此门店映射记录"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

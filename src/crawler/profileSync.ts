@@ -107,6 +107,7 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     '--exclude=/Session Storage/',
     '--exclude=/Sessions/',
     '--exclude=/ShaderCache/',
+    '--exclude=/Shared Dictionary/',
     '--exclude=/Shortcuts*',
     '--exclude=/Storage/ext/',
     '--exclude=/Sync Data/',
@@ -153,6 +154,52 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     if (fs.existsSync(item)) {
       fs.rmSync(item, { recursive: true, force: true });
     }
+  }
+
+  // 4.1 清除 Chrome 根目录单例锁与套接字，防止实例冲突
+  const rootLocksToClean = [
+    path.join(targetRoot, 'SingletonLock'),
+    path.join(targetRoot, 'SingletonCookie'),
+    path.join(targetRoot, 'SingletonSocket'),
+  ];
+  for (const item of rootLocksToClean) {
+    if (fs.existsSync(item)) {
+      try {
+        fs.rmSync(item, { recursive: true, force: true });
+      } catch {
+        // 忽略非致命锁清理异常
+      }
+    }
+  }
+
+  // 4.2 若存在 SQLite 格式的 Cookies 数据库，执行 WAL Checkpoint 合并并清理日志文件
+  const targetCookiesCandidate = [
+    path.join(targetProfileDir, 'Network', 'Cookies'),
+    path.join(targetProfileDir, 'Cookies'),
+  ].find((c) => fs.existsSync(c));
+
+  if (targetCookiesCandidate) {
+    try {
+      const header = fs.readFileSync(targetCookiesCandidate).subarray(0, 16);
+      if (header.equals(Buffer.from('SQLite format 3\0'))) {
+        execSync(`sqlite3 "${targetCookiesCandidate}" "PRAGMA wal_checkpoint(TRUNCATE);"`, {
+          stdio: 'ignore',
+        });
+        const walFile = `${targetCookiesCandidate}-wal`;
+        const shmFile = `${targetCookiesCandidate}-shm`;
+        if (fs.existsSync(walFile)) fs.rmSync(walFile, { force: true });
+        if (fs.existsSync(shmFile)) fs.rmSync(shmFile, { force: true });
+      }
+    } catch {
+      // 忽略非致命 sqlite3 检查点异常
+    }
+  }
+
+  // 4.3 赋予目标目录全部写权限，避免源只读文件导致 Playwright 无法写入
+  try {
+    execSync(`chmod -R u+w "${targetRoot}"`, { stdio: 'ignore' });
+  } catch {
+    // 忽略在 Windows/非类 Unix 环境下的 chmod
   }
 
   // 5. 规范化写入 targetRoot/Local State
