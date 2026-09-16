@@ -55,6 +55,7 @@ export interface OTAChannel {
   mappingId?: string;
   isMapped?: boolean;
   protocolSchema?: ChannelProtocolSchema;
+  storeCrawlUrl?: string;
 }
 
 export interface HotelMapping {
@@ -69,6 +70,9 @@ export interface HotelMapping {
   status: 'mapped' | 'pending' | 'error';
   lastScraped: string;
   roomCount: number;
+  partnerId?: string;
+  source?: string;
+  failureReason?: string;
 }
 
 export interface ProductMapping {

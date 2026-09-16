@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
+node_modules
 .pnpm-store/
+.chrome-profile/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -24,7 +26,7 @@ test-results/
 playwright-report/
 
 # Logs
-logs/
+/logs/
 *.log
 
 # OS Files

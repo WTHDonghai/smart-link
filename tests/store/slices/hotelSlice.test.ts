@@ -3,8 +3,11 @@ import hotelReducer, {
   setFilterChannel,
   setSearchKeyword,
   setIsScraping,
+  setSelectedCrawlChannel,
+  clearCrawlError,
   updateHotelMapping,
   addDiscoveredHotel,
+  upsertDiscoveredHotels,
 } from '../../../src/store/slices/hotelSlice';
 import { HotelMapping } from '../../../src/types';
 
@@ -124,6 +127,142 @@ describe('hotelSlice', () => {
       expect(nextState.hotels.length).toBe(7);
       expect(nextState.hotels[0]).toEqual(newHotel);
       expect(nextState.hotels[1].id).toBe('hm-00');
+    });
+  });
+
+  describe('setSelectedCrawlChannel and clearCrawlError', () => {
+    it('updates selected crawl channel correctly', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      expect(initialState.selectedCrawlChannel).toBe('meituan');
+
+      const nextState = hotelReducer(initialState, setSelectedCrawlChannel('douyin'));
+      expect(nextState.selectedCrawlChannel).toBe('douyin');
+    });
+
+    it('clears crawl error when clearCrawlError is dispatched', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const errorState = { ...initialState, crawlError: '网络超时异常' };
+
+      const cleared = hotelReducer(errorState, clearCrawlError());
+      expect(cleared.crawlError).toBeNull();
+    });
+  });
+
+  describe('upsertDiscoveredHotels', () => {
+    it('inserts a brand new candidate as pending status', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const nextState = hotelReducer(
+        initialState,
+        upsertDiscoveredHotels([
+          {
+            otaChannelId: 'meituan',
+            otaChannelCode: 'MEITUAN',
+            otaHotelId: 'MT-NEW-8888',
+            otaHotelName: '西湖国宾馆美团直营店',
+            city: '杭州',
+            starRating: '豪华五星',
+            partnerId: '990011',
+            source: 'meituan-network',
+          },
+        ])
+      );
+
+      expect(nextState.hotels.length).toBe(initialState.hotels.length + 1);
+      const inserted = nextState.hotels[0];
+      expect(inserted.otaHotelId).toBe('MT-NEW-8888');
+      expect(inserted.otaHotelName).toBe('西湖国宾馆美团直营店');
+      expect(inserted.status).toBe('pending');
+      expect(inserted.partnerId).toBe('990011');
+      expect(inserted.pmsHotelName).toBe('待关联中台酒店');
+    });
+
+    it('updates existing hotel metadata while preserving user configured PMS binding', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const target = initialState.hotels.find((h) => h.otaHotelId === 'MT-ZG-52019');
+      expect(target).toBeDefined();
+      expect(target?.pmsHotelId).toBe('PMS-ZG-008');
+      expect(target?.status).toBe('mapped');
+
+      const nextState = hotelReducer(
+        initialState,
+        upsertDiscoveredHotels([
+          {
+            otaChannelId: 'meituan',
+            otaChannelCode: 'MEITUAN',
+            otaHotelId: 'MT-ZG-52019',
+            otaHotelName: '自贡方特恐龙王国禅驿度假酒店（最新更名）',
+            city: '自贡',
+            starRating: '高档度假型',
+            partnerId: 'PARTNER-ZG-11',
+            source: 'meituan',
+          },
+        ])
+      );
+
+      expect(nextState.hotels.length).toBe(initialState.hotels.length);
+      const updated = nextState.hotels.find((h) => h.otaHotelId === 'MT-ZG-52019');
+      expect(updated).toBeDefined();
+      expect(updated?.otaHotelName).toBe('自贡方特恐龙王国禅驿度假酒店（最新更名）');
+      expect(updated?.pmsHotelId).toBe('PMS-ZG-008');
+      expect(updated?.status).toBe('mapped');
+      expect(updated?.partnerId).toBe('PARTNER-ZG-11');
+    });
+  });
+
+  describe('crawlHotelsByChannel extraReducers', () => {
+    it('sets isScraping to true and crawlStatus to running on pending', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const nextState = hotelReducer(initialState, {
+        type: 'hotel/crawlHotelsByChannel/pending',
+      });
+
+      expect(nextState.isScraping).toBe(true);
+      expect(nextState.crawlStatus).toBe('running');
+      expect(nextState.crawlError).toBeNull();
+    });
+
+    it('sets isScraping to false, crawlStatus to failed, and captures crawlError on rejected', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const runningState = { ...initialState, isScraping: true, crawlStatus: 'running' as const };
+      const nextState = hotelReducer(runningState, {
+        type: 'hotel/crawlHotelsByChannel/rejected',
+        payload: '未检测到美团商家后台登录态 (LOGIN_REQUIRED)',
+      });
+
+      expect(nextState.isScraping).toBe(false);
+      expect(nextState.crawlStatus).toBe('failed');
+      expect(nextState.crawlError).toBe('未检测到美团商家后台登录态 (LOGIN_REQUIRED)');
+    });
+
+    it('sets isScraping to false, updates lastCrawlSummary and merges hotels on fulfilled', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const runningState = { ...initialState, isScraping: true, crawlStatus: 'running' as const };
+      const nextState = hotelReducer(runningState, {
+        type: 'hotel/crawlHotelsByChannel/fulfilled',
+        payload: {
+          channelId: 'meituan',
+          hotels: [
+            {
+              otaChannelId: 'meituan',
+              otaChannelCode: 'MEITUAN',
+              otaHotelId: 'MT-DISCOVER-01',
+              otaHotelName: '千岛湖洲际度假酒店',
+              city: '淳安',
+              starRating: '豪华五星',
+              source: 'meituan',
+            },
+          ],
+          durationMs: 3400,
+        },
+      });
+
+      expect(nextState.isScraping).toBe(false);
+      expect(nextState.crawlStatus).toBe('success');
+      expect(nextState.crawlError).toBeNull();
+      expect(nextState.lastCrawlSummary?.channelId).toBe('meituan');
+      expect(nextState.lastCrawlSummary?.discoveredCount).toBe(1);
+      expect(nextState.lastCrawlSummary?.durationMs).toBe(3400);
+      expect(nextState.hotels[0].otaHotelId).toBe('MT-DISCOVER-01');
     });
   });
 });

@@ -1,11 +1,24 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import { createCrawlerApiMiddleware } from './src/server/crawlerApi';
+
+function crawlerApiPlugin(): Plugin {
+  return {
+    name: 'smartlink-crawler-api',
+    configureServer(server) {
+      server.middlewares.use(createCrawlerApiMiddleware());
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(createCrawlerApiMiddleware());
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), crawlerApiPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

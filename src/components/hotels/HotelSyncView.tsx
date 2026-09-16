@@ -1,12 +1,31 @@
 import React, { useState, useMemo } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { setIsScraping, setFilterChannel, setSearchKeyword, updateHotelMapping, addDiscoveredHotel } from '../../store/slices/hotelSlice';
+import {
+  setFilterChannel,
+  setSearchKeyword,
+  setSelectedCrawlChannel,
+  updateHotelMapping,
+  crawlHotelsByChannel,
+} from '../../store/slices/hotelSlice';
+import { updateChannelStoreCrawlUrl } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { addLog } from '../../store/slices/systemLogSlice';
-import { Search, RefreshCw, ChevronDown, Save, X } from 'lucide-react';
-import { HotelMapping } from '../../types';
+import {
+  Search,
+  RefreshCw,
+  ChevronDown,
+  Save,
+  X,
+  Globe,
+  CheckCircle2,
+} from 'lucide-react';
+import type { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
 import { EmptyState } from '../common/EmptyState';
+import { StatusBadge } from '../common/StatusBadge';
+import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
+import { normalizeAppError } from '../../utils/errorNormalizer';
+import { DEFAULT_MEITUAN_CATALOG_URL } from '../../crawler/collectors/meituan/meituanStoreMapper';
 
 const PMS_HOTEL_OPTIONS = [
   { id: 'PMS-HZ-001', name: '华住全季-杭州湖滨店' },
@@ -17,115 +36,147 @@ const PMS_HOTEL_OPTIONS = [
   { id: 'PMS-HZ-028', name: '桔子水晶-杭州武林总店' },
   { id: 'PMS-SZ-045', name: '洲际酒店-深圳湾店' },
   { id: 'PMS-GZ-066', name: '四季酒店-广州塔店' },
+  { id: 'PMS-ZG-008', name: '自贡禅驿度假酒店-方特店' },
 ];
 
 export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
   const hotels = useAppSelector((state) => state.hotel.hotels);
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
+  const crawlError = useAppSelector((state) => state.hotel.crawlError);
+  const selectedCrawlChannel = useAppSelector((state) => state.hotel.selectedCrawlChannel);
+  const lastCrawlSummary = useAppSelector((state) => state.hotel.lastCrawlSummary);
   const filterChannel = useAppSelector((state) => state.hotel.filterChannel);
   const searchKeyword = useAppSelector((state) => state.hotel.searchKeyword);
   const channels = useAppSelector((state) => state.channel.channels);
 
   const [selectedPmsMap, setSelectedPmsMap] = useState<Record<string, string>>({});
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
+  const [customTargetUrl, setCustomTargetUrl] = useState('');
+  const [isHeadedMode, setIsHeadedMode] = useState(false);
 
+  // 获取当前选中的采集渠道对象
+  const activeChannel = useMemo(() => {
+    return channels.find((c) => c.id === selectedCrawlChannel) || channels[0];
+  }, [channels, selectedCrawlChannel]);
+
+  // 当前渠道对应的采集目标 URL
+  const currentChannelTargetUrl = useMemo(() => {
+    if (activeChannel?.storeCrawlUrl) return activeChannel.storeCrawlUrl;
+    if (activeChannel?.id === 'meituan' || activeChannel?.id === 'meituanbiz') {
+      return DEFAULT_MEITUAN_CATALOG_URL;
+    }
+    return 'https://me.meituan.com/ebooking/merchant/product/batch-price';
+  }, [activeChannel]);
+
+  // 渠道选项列表（用于列表筛选）
   const channelOptions = useMemo(() => [
     { label: '全部渠道', value: 'all' },
     ...channels.map((ch) => ({
       label: ch.name,
       value: ch.id,
-      subtext: ch.code
-    }))
+      subtext: ch.code,
+    })),
   ], [channels]);
 
+  // 支持采集的渠道选项（当前优先美团/美团商旅，可扩展）
+  const crawlChannelOptions = useMemo(() => {
+    return channels.map((ch) => ({
+      label: ch.name,
+      value: ch.id,
+      subtext: ch.code,
+    }));
+  }, [channels]);
+
+  // 过滤后的酒店列表
   const filteredHotels = useMemo(() => {
     return hotels.filter((h) => {
       const matchesChannel = filterChannel === 'all' || h.otaChannelId === filterChannel;
-      const matchesKeyword = !searchKeyword || 
+      const matchesKeyword =
+        !searchKeyword ||
         h.otaHotelName.toLowerCase().includes(searchKeyword.toLowerCase()) ||
         h.pmsHotelName.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+        h.otaHotelId.toLowerCase().includes(searchKeyword.toLowerCase()) ||
         h.city.toLowerCase().includes(searchKeyword.toLowerCase());
       return matchesChannel && matchesKeyword;
     });
   }, [hotels, filterChannel, searchKeyword]);
 
   const getHotelOptions = (currentPmsId: string, currentPmsName: string) => {
-    if (PMS_HOTEL_OPTIONS.some(opt => opt.id === currentPmsId)) {
+    if (PMS_HOTEL_OPTIONS.some((opt) => opt.id === currentPmsId)) {
       return PMS_HOTEL_OPTIONS;
     }
-    return [{ id: currentPmsId, name: currentPmsName }, ...PMS_HOTEL_OPTIONS];
+    if (currentPmsId) {
+      return [{ id: currentPmsId, name: currentPmsName }, ...PMS_HOTEL_OPTIONS];
+    }
+    return PMS_HOTEL_OPTIONS;
   };
 
   const handlePmsChange = (hotelId: string, pmsId: string) => {
-    setSelectedPmsMap(prev => ({ ...prev, [hotelId]: pmsId }));
+    setSelectedPmsMap((prev) => ({ ...prev, [hotelId]: pmsId }));
   };
 
   const handleSaveRow = (hotel: HotelMapping) => {
     const pmsId = selectedPmsMap[hotel.id] ?? hotel.pmsHotelId;
     const options = getHotelOptions(hotel.pmsHotelId, hotel.pmsHotelName);
-    const matched = options.find(o => o.id === pmsId);
+    const matched = options.find((o) => o.id === pmsId);
     const pmsName = matched ? matched.name : hotel.pmsHotelName;
 
-    dispatch(updateHotelMapping({
-      id: hotel.id,
-      pmsHotelId: pmsId,
-      pmsHotelName: pmsName
-    }));
+    dispatch(
+      updateHotelMapping({
+        id: hotel.id,
+        pmsHotelId: pmsId,
+        pmsHotelName: pmsName,
+      })
+    );
 
-    dispatch(showToast({
-      title: `已保存「${hotel.otaHotelName}」映射`,
-      description: `对应中台酒店：${pmsName} (${pmsId})`,
-      type: 'success'
-    }));
+    dispatch(
+      showToast({
+        title: `已保存「${hotel.otaHotelName}」映射`,
+        description: `对应中台酒店：${pmsName} (${pmsId})`,
+        type: 'success',
+      })
+    );
 
-    dispatch(addLog({
-      level: 'INFO',
-      channelId: hotel.otaChannelId,
-      message: `[HotelSync] Saved mapping for ${hotel.otaHotelName} (${hotel.otaHotelId}) -> ${pmsName} (${pmsId})`
-    }));
+    dispatch(
+      addLog({
+        level: 'INFO',
+        channelId: hotel.otaChannelId,
+        message: `[HotelSync] Saved mapping for ${hotel.otaHotelName} (${hotel.otaHotelId}) -> ${pmsName} (${pmsId})`,
+      })
+    );
   };
 
-  const handleStartPlaywrightCrawl = () => {
+  const handleStartCrawl = async () => {
     if (isScraping) return;
-    dispatch(setIsScraping(true));
-    dispatch(showToast({
-      title: 'Playwright 启动 OTA 酒店深度采集',
-      description: '分配 Chromium 独立上下文，并发读取已连接商户后台所有已上线酒店数据...',
-      type: 'info'
-    }));
+    const targetUrl = customTargetUrl.trim() || currentChannelTargetUrl;
 
-    dispatch(addLog({
-      level: 'PLAYWRIGHT',
-      message: '[Playwright:Crawler] Initiated headless Chromium cluster for hotel inventory fetch.'
-    }));
+    dispatch(
+      crawlHotelsByChannel({
+        channelId: selectedCrawlChannel,
+        targetUrl,
+        headless: !isHeadedMode,
+      })
+    );
+  };
 
-    setTimeout(() => {
-      // Simulate discovering a new hotel
-      const newHotel: HotelMapping = {
-        id: `hm-${Date.now()}`,
-        otaChannelId: 'meituan',
-        otaHotelName: '桔子水晶酒店(杭州西湖武林广场店)',
-        otaHotelId: 'MT-HZ-99014',
-        pmsHotelName: '桔子水晶-杭州武林总店',
-        pmsHotelId: 'PMS-HZ-028',
-        city: '杭州',
-        starRating: '四星/中高端',
-        status: 'mapped',
-        lastScraped: '刚刚 (Playwright)',
-        roomCount: 16
-      };
-      dispatch(addDiscoveredHotel(newHotel));
-      dispatch(setIsScraping(false));
-      dispatch(showToast({
-        title: 'OTA 酒店数据自动采集完成',
-        description: '成功拉取最新酒店信息，自动完成 PMS 库字典比对',
-        type: 'success'
-      }));
-      dispatch(addLog({
-        level: 'SUCCESS',
-        message: '[Playwright:Crawler] Extracted 1 new property "桔子水晶酒店(杭州西湖武林广场店)" and verified pricing matrix.'
-      }));
-    }, 2200);
+  const handleSaveCustomUrl = () => {
+    if (customTargetUrl.trim() && activeChannel) {
+      dispatch(
+        updateChannelStoreCrawlUrl({
+          channelId: activeChannel.id,
+          storeCrawlUrl: customTargetUrl.trim(),
+        })
+      );
+      dispatch(
+        showToast({
+          title: '已更新采集目标 URL',
+          description: `渠道 ${activeChannel.name} 采集地址已更新`,
+          type: 'success',
+        })
+      );
+    }
+    setIsEditingUrl(false);
   };
 
   const handleResetFilters = () => {
@@ -143,41 +194,165 @@ export const HotelSyncView: React.FC = () => {
             门店采集
           </h1>
           <span className="text-xs text-[#737686] ml-2 font-mono">
-            共 {hotels.length} 家酒店
+            共 {hotels.length} 家酒店候选
           </span>
-        </div>
-
-        {/* 顶部主操作动作组：统一高度与主要按钮样式 */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleStartPlaywrightCrawl}
-            disabled={isScraping}
-            className={`h-8.5 px-3.5 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5 ${
-              isScraping
-                ? 'bg-[#2170e4] cursor-wait opacity-80'
-                : 'bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80]'
-            }`}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
-            <span>{isScraping ? '采集同步中...' : '同步 OTA 酒店'}</span>
-          </button>
         </div>
       </div>
 
-      {/* 2. 主卡片：内嵌统一搜索与渠道过滤栏 + 酒店映射列表 */}
+      {/* 2. 核心操作面板：渠道选择、目标 URL 配置与启动采集 */}
+      <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] p-4 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[320px]">
+            {/* 采集渠道选择 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-[#434655] whitespace-nowrap">
+                采集渠道:
+              </span>
+              <div className="w-44">
+                <SearchableSelect
+                  value={selectedCrawlChannel}
+                  onChange={(val) => {
+                    dispatch(setSelectedCrawlChannel(val));
+                    setCustomTargetUrl('');
+                    setIsEditingUrl(false);
+                  }}
+                  options={crawlChannelOptions}
+                  placeholder="选择采集渠道"
+                  size="sm"
+                  buttonClassName="font-semibold text-[#004ac6]"
+                />
+              </div>
+            </div>
+
+            {/* 目标 URL 显示与快速编辑 */}
+            <div className="flex items-center gap-2 flex-1 min-w-[280px]">
+              <span className="text-xs font-semibold text-[#434655] whitespace-nowrap flex items-center gap-1">
+                <Globe className="w-3.5 h-3.5 text-[#737686]" />
+                目标 URL:
+              </span>
+              {isEditingUrl ? (
+                <div className="flex items-center gap-1.5 flex-1 max-w-lg">
+                  <input
+                    type="text"
+                    value={customTargetUrl}
+                    onChange={(e) => setCustomTargetUrl(e.target.value)}
+                    placeholder={currentChannelTargetUrl}
+                    className="flex-1 h-8 px-2.5 bg-white border border-[#004ac6] rounded-md text-xs font-mono text-[#0b1c30] outline-hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveCustomUrl}
+                    className="h-8 px-2.5 bg-[#004ac6] text-white rounded-md text-xs font-medium cursor-pointer"
+                  >
+                    确认
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingUrl(false);
+                      setCustomTargetUrl('');
+                    }}
+                    className="h-8 px-2 text-[#737686] hover:text-[#0b1c30] text-xs cursor-pointer"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 flex-1 max-w-lg">
+                  <span
+                    className="text-xs font-mono text-[#434655] bg-[#f8faff] px-2.5 py-1.5 rounded border border-[#e2e8f0] truncate block max-w-md select-text"
+                    title={currentChannelTargetUrl}
+                  >
+                    {currentChannelTargetUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomTargetUrl(currentChannelTargetUrl);
+                      setIsEditingUrl(true);
+                    }}
+                    className="text-xs text-[#004ac6] hover:underline whitespace-nowrap cursor-pointer"
+                  >
+                    修改
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 右侧动作区：有头模式切换与采集主行动按钮 */}
+          <div className="flex items-center gap-3 shrink-0">
+            <label className="inline-flex items-center gap-1.5 text-xs text-[#737686] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={isHeadedMode}
+                onChange={(e) => setIsHeadedMode(e.target.checked)}
+                className="w-3.5 h-3.5 accent-[#004ac6] rounded cursor-pointer"
+              />
+              <span>弹出浏览器窗口 (人工扫码/登录)</span>
+            </label>
+
+            <button
+              type="button"
+              onClick={handleStartCrawl}
+              disabled={isScraping}
+              className={`h-9 px-4 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-2 ${
+                isScraping
+                  ? 'bg-[#2170e4] cursor-wait opacity-85'
+                  : 'bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80]'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
+              <span>
+                {isScraping
+                  ? `正在采集「${activeChannel?.name || 'OTA'}」门店...`
+                  : `启动「${activeChannel?.name || 'OTA'}」门店采集`}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3. 错误状态展示 (FriendlyErrorAlert 智能引导) */}
+        {crawlError && (
+          <div className="pt-2">
+            <FriendlyErrorAlert
+              error={normalizeAppError(crawlError, 'CRAWLER')}
+              onRetry={handleStartCrawl}
+            />
+          </div>
+        )}
+
+        {/* 4. 最近一次采集简报 */}
+        {lastCrawlSummary && !crawlError && !isScraping && (
+          <div className="flex items-center justify-between px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                最近一次采集成功：渠道「<strong>{lastCrawlSummary.channelId}</strong>」共提取到{' '}
+                <strong>{lastCrawlSummary.discoveredCount}</strong> 家门店候选 (耗时{' '}
+                {(lastCrawlSummary.durationMs / 1000).toFixed(1)} 秒)
+              </span>
+            </div>
+            <span className="font-mono text-emerald-700 text-[11px]">
+              完成时间: {lastCrawlSummary.timestamp}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 5. 酒店列表主卡片：搜索过滤 + 表格 */}
       <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] overflow-hidden divide-y divide-[#edf2f9]">
-        {/* 表格内嵌搜索与渠道过滤栏（与产品采集保持完全一致的规格） */}
+        {/* 表格内嵌搜索与渠道过滤栏 */}
         <div className="p-3 bg-[#f8faff] flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-[280px]">
-            {/* 统一规范搜索输入框 */}
+            {/* 搜索输入框 */}
             <div className="relative flex-1 max-w-sm">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#737686] pointer-events-none" />
               <input
                 type="text"
                 value={searchKeyword}
                 onChange={(e) => dispatch(setSearchKeyword(e.target.value))}
-                placeholder="搜索酒店名称、PMS酒店或城市..."
+                placeholder="搜索酒店名称、门店ID、PMS酒店或城市..."
                 className="w-full h-8.5 pl-8.5 pr-8 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] placeholder-[#94a3b8] outline-hidden focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] transition-colors"
               />
               {searchKeyword && (
@@ -192,7 +367,7 @@ export const HotelSyncView: React.FC = () => {
               )}
             </div>
 
-            {/* 统一渠道选择器：使用 SearchableSelect 保持全站下拉交互一致 */}
+            {/* 统一渠道选择器 */}
             <div className="w-48">
               <SearchableSelect
                 value={filterChannel}
@@ -227,19 +402,21 @@ export const HotelSyncView: React.FC = () => {
           <table className="w-full text-left border-separate border-spacing-0">
             <thead className="sticky top-0 z-20 bg-[#f8faff]">
               <tr className="bg-[#f8faff] text-[#434655] text-xs font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-                <th className="py-2.5 px-6 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 渠道与酒店</th>
-                <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA ID</th>
+                <th className="py-2.5 px-6 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 渠道与门店名称</th>
+                <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 门店 ID</th>
+                <th className="py-2.5 px-4 w-28 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">状态</th>
                 <th className="py-2.5 px-4 min-w-[240px] sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">中台对应酒店</th>
-                <th className="py-2.5 px-6 text-right whitespace-nowrap w-28 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
+                <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">采集时间</th>
+                <th className="py-2.5 px-6 text-right whitespace-nowrap w-24 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edf3fc] text-sm text-[#0b1c30]">
               {filteredHotels.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-12 text-center">
+                  <td colSpan={6} className="py-12 text-center">
                     <EmptyState
                       title="暂无匹配的酒店门店数据"
-                      description="可以尝试调整搜索关键字或渠道筛选条件"
+                      description="可以尝试调整搜索关键字，或点击上方「启动采集」按钮拉取最新数据"
                       actionText={searchKeyword || filterChannel !== 'all' ? '清除过滤条件' : undefined}
                       onAction={handleResetFilters}
                     />
@@ -247,26 +424,53 @@ export const HotelSyncView: React.FC = () => {
                 </tr>
               ) : (
                 filteredHotels.map((h) => {
-                  const ch = channels.find(c => c.id === h.otaChannelId);
+                  const ch = channels.find((c) => c.id === h.otaChannelId);
                   const currentPmsId = selectedPmsMap[h.id] ?? h.pmsHotelId;
                   const options = getHotelOptions(h.pmsHotelId, h.pmsHotelName);
+                  const isMapped = !!h.pmsHotelId && h.status === 'mapped';
 
                   return (
                     <tr key={h.id} className="hover:bg-[#f8faff] transition-colors">
+                      {/* 渠道与门店名称 */}
                       <td className="py-3 px-6 border-b border-[#edf2f9]">
                         <div className="flex items-center gap-2.5">
-                          <div className={`w-7 h-7 rounded-md ${ch?.bgColor || 'bg-blue-100'} ${ch?.textColor || 'text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0`}>
+                          <div
+                            className={`w-7 h-7 rounded-md ${ch?.bgColor || 'bg-blue-100'} ${ch?.textColor || 'text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0`}
+                          >
                             {ch?.short || 'OTA'}
                           </div>
                           <div className="flex flex-col">
-                            <span className="font-semibold text-xs text-[#0b1c30]">{h.otaHotelName}</span>
-                            <span className="text-[11px] text-[#737686]">{h.starRating}</span>
+                            <span className="font-semibold text-xs text-[#0b1c30] select-text">
+                              {h.otaHotelName}
+                            </span>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {h.city && (
+                                <span className="text-[11px] text-[#737686]">{h.city}</span>
+                              )}
+                              {h.starRating && (
+                                <span className="text-[11px] text-[#94a3b8]">{h.starRating}</span>
+                              )}
+                              {h.partnerId && (
+                                <span className="text-[10px] bg-slate-100 text-[#737686] px-1 py-0.5 rounded font-mono">
+                                  商户: {h.partnerId}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
 
-                      <td className="py-3 px-4 font-mono text-xs text-[#737686] whitespace-nowrap border-b border-[#edf2f9]">
+                      {/* 门店 ID */}
+                      <td className="py-3 px-4 font-mono text-xs text-[#737686] whitespace-nowrap border-b border-[#edf2f9] select-text">
                         {h.otaHotelId}
+                      </td>
+
+                      {/* 映射状态 */}
+                      <td className="py-3 px-4 whitespace-nowrap border-b border-[#edf2f9]">
+                        <StatusBadge
+                          variant={isMapped ? 'success' : 'pending'}
+                          label={isMapped ? '已关联中台' : '待匹配'}
+                        />
                       </td>
 
                       {/* 中台对应酒店 - 下拉框 */}
@@ -277,6 +481,7 @@ export const HotelSyncView: React.FC = () => {
                             onChange={(e) => handlePmsChange(h.id, e.target.value)}
                             className="w-full h-8.5 pl-3 pr-8 rounded-lg bg-white text-[#0b1c30] text-xs shadow-2xs focus:ring-1 focus:ring-[#004ac6] focus:outline-hidden appearance-none cursor-pointer border border-[#dce9ff] hover:border-[#004ac6]/60 transition-colors font-medium truncate"
                           >
+                            <option value="">-- 选择中台酒店 --</option>
                             {options.map((opt) => (
                               <option key={opt.id} value={opt.id}>
                                 {opt.name} ({opt.id})
@@ -287,6 +492,11 @@ export const HotelSyncView: React.FC = () => {
                             <ChevronDown className="w-3.5 h-3.5" />
                           </div>
                         </div>
+                      </td>
+
+                      {/* 上次采集时间 */}
+                      <td className="py-3 px-4 text-xs text-[#737686] whitespace-nowrap border-b border-[#edf2f9]">
+                        {h.lastScraped}
                       </td>
 
                       {/* 操作列 */}
