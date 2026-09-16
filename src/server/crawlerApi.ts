@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hotelCollectionEngine } from '../crawler/engine';
 import { hotelCollectorRegistry } from '../crawler/registry';
+import { syncChromeProfile } from '../crawler/profileSync';
 import type { HotelCrawlRequest, CollectorLogPayload } from '../crawler/types';
 
 /**
@@ -74,6 +75,21 @@ export function createCrawlerApiMiddleware() {
           ...result,
           logs,
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return sendJsonResponse(res, 500, {
+          success: false,
+          error: message,
+        });
+      }
+    }
+
+    // 3. POST /api/crawler/profile/sync：从日常 Chrome 同步登录态
+    if (req.method === 'POST' && url.startsWith('/api/crawler/profile/sync')) {
+      try {
+        const body = await parseJsonBody<{ channelId?: string }>(req).catch(() => ({ channelId: 'meituan' }));
+        const result = syncChromeProfile({ channelId: body.channelId || 'meituan' });
+        return sendJsonResponse(res, 200, { success: true, data: result });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return sendJsonResponse(res, 500, {

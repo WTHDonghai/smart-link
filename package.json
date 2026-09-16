@@ -10,7 +10,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "lint:lsp": "node .agents/skills/ts-lsp-diagnostics/scripts/lsp_diagnostics.cjs",
-    "crawl:hotels": "tsx src/crawler/cli.ts",
+    "crawl:hotels": "vite-node src/crawler/cli.ts",
+    "profile:sync": "vite-node src/crawler/syncCli.ts",
     "test": "vitest run"
   },
   "dependencies": {

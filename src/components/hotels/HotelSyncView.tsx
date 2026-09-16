@@ -6,6 +6,7 @@ import {
   setSelectedCrawlChannel,
   updateHotelMapping,
   crawlHotelsByChannel,
+  syncChromeProfileThunk,
 } from '../../store/slices/hotelSlice';
 import { updateChannelStoreCrawlUrl } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
@@ -18,6 +19,7 @@ import {
   X,
   Globe,
   CheckCircle2,
+  KeyRound,
 } from 'lucide-react';
 import type { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
@@ -43,6 +45,7 @@ export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
   const hotels = useAppSelector((state) => state.hotel.hotels);
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
+  const isSyncingProfile = useAppSelector((state) => state.hotel.isSyncingProfile);
   const crawlError = useAppSelector((state) => state.hotel.crawlError);
   const selectedCrawlChannel = useAppSelector((state) => state.hotel.selectedCrawlChannel);
   const lastCrawlSummary = useAppSelector((state) => state.hotel.lastCrawlSummary);
@@ -280,8 +283,8 @@ export const HotelSyncView: React.FC = () => {
             </div>
           </div>
 
-          {/* 右侧动作区：有头模式切换与采集主行动按钮 */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* 右侧动作区：有头模式切换、一键同步日常 Chrome 登录态与采集主行动按钮 */}
+          <div className="flex items-center gap-2.5 shrink-0">
             <label className="inline-flex items-center gap-1.5 text-xs text-[#737686] cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -294,8 +297,19 @@ export const HotelSyncView: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => dispatch(syncChromeProfileThunk(selectedCrawlChannel))}
+              disabled={isSyncingProfile || isScraping}
+              className="h-9 px-3 rounded-lg border border-[#dce9ff] bg-white hover:bg-[#eff4ff] active:bg-[#dce9ff] text-[#004ac6] font-medium text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="一键从日常系统 Chrome 同步当前已登录的 Cookies 与授权缓存（免密/免扫码）"
+            >
+              <KeyRound className={`w-3.5 h-3.5 text-[#004ac6] ${isSyncingProfile ? 'animate-spin' : ''}`} />
+              <span>{isSyncingProfile ? '正在同步登录态...' : '同步 Chrome 登录态'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handleStartCrawl}
-              disabled={isScraping}
+              disabled={isScraping || isSyncingProfile}
               className={`h-9 px-4 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-2 ${
                 isScraping
                   ? 'bg-[#2170e4] cursor-wait opacity-85'

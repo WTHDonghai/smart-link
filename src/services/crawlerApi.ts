@@ -49,3 +49,38 @@ export async function fetchCrawlerSupportedChannels(): Promise<CrawlerChannelInf
   const json = (await response.json()) as { success: boolean; data: CrawlerChannelInfo[] };
   return json.data || [];
 }
+
+export interface ProfileSyncResponseData {
+  success: boolean;
+  sourceDir: string;
+  sourceProfile: string;
+  targetDir: string;
+  message: string;
+}
+
+/**
+ * 前端请求从系统 Chrome 自动同步日常登录态到当前渠道的 Profile
+ */
+export async function requestSyncChromeProfile(
+  channelId?: string
+): Promise<ProfileSyncResponseData> {
+  const response = await fetch('/api/crawler/profile/sync', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ channelId: channelId || 'meituan' }),
+  });
+
+  const json = (await response.json()) as {
+    success: boolean;
+    data?: ProfileSyncResponseData;
+    error?: string;
+  };
+
+  if (!response.ok || !json.success || !json.data) {
+    throw new Error(json.error || `同步登录态失败 (${response.status})`);
+  }
+
+  return json.data;
+}

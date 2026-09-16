@@ -1,7 +1,11 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import type { HotelMapping } from '../../types';
 import type { DiscoveredHotelCandidate } from '../../crawler/types';
-import { executeHotelCrawl } from '../../services/crawlerApi';
+import {
+  executeHotelCrawl,
+  requestSyncChromeProfile,
+  type ProfileSyncResponseData,
+} from '../../services/crawlerApi';
 import { addLog } from './systemLogSlice';
 import { showToast } from './appSlice';
 
@@ -15,6 +19,7 @@ export interface HotelState {
   filterChannel: string;
   searchKeyword: string;
   selectedCrawlChannel: string;
+  isSyncingProfile: boolean;
   lastCrawlSummary: {
     channelId: string;
     discoveredCount: number;
@@ -25,6 +30,7 @@ export interface HotelState {
 
 const initialState: HotelState = {
   isScraping: false,
+  isSyncingProfile: false,
   crawlStatus: 'idle',
   crawlError: null,
   filterChannel: 'all',
@@ -201,6 +207,62 @@ export const crawlHotelsByChannel = createAsyncThunk<
   }
 });
 
+/**
+ * 异步 Thunk：从日常系统 Chrome 同步活跃登录态至当前渠道独立 Profile
+ */
+export const syncChromeProfileThunk = createAsyncThunk<
+  ProfileSyncResponseData,
+  string | undefined,
+  { rejectValue: string }
+>('hotel/syncChromeProfile', async (channelId, { dispatch, rejectWithValue }) => {
+  try {
+    const targetChannel = channelId || 'meituan';
+    dispatch(
+      addLog({
+        level: 'PLAYWRIGHT',
+        channelId: targetChannel,
+        message: `[ProfileSync] 正在从系统 Chrome 活跃会话提取登录态至「${targetChannel}」...`,
+      })
+    );
+
+    const result = await requestSyncChromeProfile(targetChannel);
+
+    dispatch(
+      addLog({
+        level: 'SUCCESS',
+        channelId: targetChannel,
+        message: `[ProfileSync] ${result.message}`,
+      })
+    );
+
+    dispatch(
+      showToast({
+        title: '已同步日常 Chrome 登录态',
+        description: `成功从系统 ${result.sourceProfile} 提取授权缓存至「${targetChannel}」`,
+        type: 'success',
+      })
+    );
+
+    return result;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'ERROR',
+        message: `[ProfileSync] 同步登录态失败: ${errorMsg}`,
+      })
+    );
+    dispatch(
+      showToast({
+        title: '同步登录态失败',
+        description: errorMsg,
+        type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
 export const hotelSlice = createSlice({
   name: 'hotel',
   initialState,
@@ -304,6 +366,15 @@ export const hotelSlice = createSlice({
         state.isScraping = false;
         state.crawlStatus = 'failed';
         state.crawlError = action.payload || action.error.message || '门店采集失败';
+      })
+      .addCase(syncChromeProfileThunk.pending, (state) => {
+        state.isSyncingProfile = true;
+      })
+      .addCase(syncChromeProfileThunk.fulfilled, (state) => {
+        state.isSyncingProfile = false;
+      })
+      .addCase(syncChromeProfileThunk.rejected, (state) => {
+        state.isSyncingProfile = false;
       });
   },
 });
