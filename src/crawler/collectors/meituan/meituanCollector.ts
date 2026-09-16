@@ -8,6 +8,7 @@ import {
   normalizeMeituanHotelCandidates,
   RawMeituanStoreItem,
 } from './meituanStoreMapper';
+import { updateVisualTrackerStatus, visualClickLocator } from '../../visualTracker';
 
 export class MeituanHotelCollector implements ChannelHotelCollector {
   public readonly channelId = 'meituan';
@@ -68,26 +69,53 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
         level: 'PLAYWRIGHT',
         message: `[Meituan:Collector] 正在访问页面: ${targetUrl}...`,
       });
+      await updateVisualTrackerStatus(page, '🤖 正在导航至美团商家产品中心...', 'action');
 
       await page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
         timeout: options.timeoutMs,
       });
 
-      // 3. 严格 Fail-Fast 检测登录态重定向
-      const currentUrl = page.url();
+      // 3. 检测登录态与扫码交互
+      let currentUrl = page.url();
       if (
         currentUrl.includes('passport.meituan.com') ||
         currentUrl.includes('/login') ||
         currentUrl.includes('/auth')
       ) {
         log({
-          level: 'ERROR',
-          message: `[Meituan:Collector] 检测到美团商家登录态失效，页面被重定向至登录页: ${currentUrl}`,
+          level: 'WARN',
+          message: `[Meituan:Collector] 当前处于美团商家登录/扫码页，请在已唤起的浏览器窗口中完成扫码登录...`,
         });
-        throw new Error(
-          '美团商家账号登录态已失效或尚未登录。请在弹出的浏览器窗口中扫码或输入账号完成登录后再试。(LOGIN_REQUIRED)'
-        );
+        await updateVisualTrackerStatus(page, '⚠️ 美团账号尚未登录，请在当前窗口扫码登录...', 'warn');
+
+        try {
+          // 在可视化浏览器窗口中等待用户扫码/登录完成，自动跳转回商家后台
+          await page.waitForURL(
+            (url) =>
+              !url.href.includes('passport.meituan.com') &&
+              !url.href.includes('/login') &&
+              !url.href.includes('/auth'),
+            { timeout: 60000 }
+          );
+          currentUrl = page.url();
+          log({
+            level: 'SUCCESS',
+            message: `[Meituan:Collector] 扫码登录成功！已跳转至商家后台: ${currentUrl}，继续执行自动化采集...`,
+          });
+          await updateVisualTrackerStatus(page, '✅ 扫码成功！正在进入美团商家后台...', 'success');
+          // 重新等待目标页面首屏接口响应与渲染
+          await page.waitForTimeout(3000);
+        } catch {
+          log({
+            level: 'ERROR',
+            message: `[Meituan:Collector] 等待扫码登录超时 (60s)，阻断采集流水线。`,
+          });
+          await updateVisualTrackerStatus(page, '❌ 扫码登录超时，采集阻断', 'error');
+          throw new Error(
+            '美团商家账号尚未完成登录（等待扫码登录超时）。请在浏览器中完成扫码后再试。(LOGIN_REQUIRED)'
+          );
+        }
       }
 
       // 4. 等待页面首屏接口渲染与网络静默
@@ -96,6 +124,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
         level: 'PLAYWRIGHT',
         message: `[Meituan:Collector] 页面已加载，等待后台网络接口响应 (${waitTime}ms)...`,
       });
+      await updateVisualTrackerStatus(page, '🔍 正在智能嗅探美团商户门店数据接口...', 'info');
       await page.waitForTimeout(waitTime);
 
       // 5. 尝试从网络捕获中提取门店数据
@@ -111,6 +140,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
           level: 'PLAYWRIGHT',
           message: '[Meituan:Collector] 启动 DOM 下拉列表交互提取策略...',
         });
+        await updateVisualTrackerStatus(page, '🖱️ 正在启动 DOM 交互策略定位门店切换控件...', 'action');
 
         const domStores = await this.scrapeStoresFromDropdown(page, log);
         if (domStores.length > 0) {
@@ -129,6 +159,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
         level: 'SUCCESS',
         message: `[Meituan:Collector] 美团门店采集完成，共清洗出 ${candidates.length} 家有效门店候选。`,
       });
+      await updateVisualTrackerStatus(page, `✅ 美团门店采集完成！共清洗出 ${candidates.length} 家有效门店`, 'success');
 
       return candidates;
     } finally {
@@ -153,11 +184,14 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
           level: 'WARN',
           message: '[Meituan:Collector] 未能定位到顶部门店选择控件，跳过 DOM 模拟点击。',
         });
+        await updateVisualTrackerStatus(page, '⚠️ 未能定位到顶部门店控件，跳过 DOM 交互', 'warn');
         return [];
       }
 
-      await trigger.click();
+      // 执行大模型接管风格的视觉高亮与点击
+      await visualClickLocator(page, trigger, '正在点击展开顶部门店下拉选择抽屉');
       await page.waitForTimeout(1000);
+      await updateVisualTrackerStatus(page, '📋 正在扫描展开的门店列表候选...', 'info');
 
       // 在浏览器上下文中提取展开的门店树
       const stores = await page.evaluate(() => {

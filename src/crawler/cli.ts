@@ -5,7 +5,7 @@ function parseArgs(argv: string[]) {
   const options = {
     channel: 'meituan',
     url: '',
-    headless: true,
+    headless: false,
     waitMs: 3000,
   };
 
@@ -15,8 +15,8 @@ function parseArgs(argv: string[]) {
       options.channel = argv[++i];
     } else if (arg === '--url' && argv[i + 1]) {
       options.url = argv[++i];
-    } else if (arg === '--headed') {
-      options.headless = false;
+    } else if (arg === '--headless') {
+      options.headless = true;
     } else if (arg === '--wait-ms' && argv[i + 1]) {
       options.waitMs = parseInt(argv[++i], 10) || 3000;
     }

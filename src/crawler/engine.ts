@@ -33,9 +33,10 @@ export class HotelCollectionEngine {
 
     let session;
     try {
+      const isHeadless = request.headless ?? (process.env.PLAYWRIGHT_HEADLESS === 'true');
       log({
         level: 'PLAYWRIGHT',
-        message: `[CrawlerEngine] 启动带有反爬规避与本地 Profile 的浏览器引擎 (${request.headless !== false ? 'Headless' : 'Headed'})...`,
+        message: `[CrawlerEngine] 唤起${isHeadless ? '后台无头' : '可视化前台'}浏览器窗口，启动自动化操作流程...`,
       });
 
       session = await createPersistentBrowserSession({
@@ -51,6 +52,15 @@ export class HotelCollectionEngine {
         timeoutMs: request.timeoutMs ?? 30000,
         onLog: log,
       });
+
+      // 在可视化模式下保留短暂展示，让用户亲眼目睹采集完成的最终页面与数据状态
+      if (!isHeadless) {
+        try {
+          await session.page.waitForTimeout(1500);
+        } catch {
+          // 忽略等待异常
+        }
+      }
 
       const durationMs = Date.now() - startedAt;
 
