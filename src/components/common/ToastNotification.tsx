@@ -8,12 +8,11 @@ export const ToastNotification: React.FC = () => {
   const toast = useAppSelector((state) => state.app.toast);
 
   useEffect(() => {
-    if (toast?.visible) {
-      const timer = setTimeout(() => {
-        dispatch(clearToast());
-      }, 3200);
-      return () => clearTimeout(timer);
-    }
+    if (!toast?.visible) return;
+    const timer = setTimeout(() => {
+      dispatch(clearToast());
+    }, 3200);
+    return () => clearTimeout(timer);
   }, [toast, dispatch]);
 
   if (!toast || !toast.visible) return null;

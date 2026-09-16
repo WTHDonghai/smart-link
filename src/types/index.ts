@@ -1,9 +1,39 @@
+import type { ChannelProtocolSchema } from './template';
+
 export type NavTab = 
   | 'channel-mapping' 
   | 'hotel-sync' 
   | 'product-mapping' 
   | 'order-guardian' 
   | 'system-logs';
+
+export interface CulturalTourismChannel {
+  id: string;
+  channelId: string;
+  channelCode: string;
+  channelName: string;
+  status: string;
+  otaChannelCode?: string;
+}
+
+export interface OTAChannelMappingRecord {
+  id: string;
+  mappingId: string;
+  otaChannelCode: string;
+  otaChannelName: string;
+  channelId: string;
+  channelCode: string;
+  channelName: string;
+  status: string;
+}
+
+export interface SaveChannelMappingPayloadItem {
+  otaChannelCode: string;
+  otaChannelName?: string;
+  channelCode: string;
+  channelId: string;
+  status?: string;
+}
 
 export interface OTAChannel {
   id: string;
@@ -13,12 +43,18 @@ export interface OTAChannel {
   bgColor: string;
   textColor: string;
   targetSystem: string;
-  targetSystemOptions: { val: string; label: string }[];
+  targetSystemOptions?: { val: string; label: string }[];
   remarkTemplate: string;
   status: 'active' | 'warning' | 'paused';
   crawlerStatus: 'online' | 'refreshing' | 'offline';
   todayOrders: number;
   lastSyncTime: string;
+  channelId?: string;
+  channelCode?: string;
+  channelName?: string;
+  mappingId?: string;
+  isMapped?: boolean;
+  protocolSchema?: ChannelProtocolSchema;
 }
 
 export interface HotelMapping {
@@ -140,5 +176,20 @@ export type PlatformAuthStatus =
   | 'authorizing'
   | 'authorized';
 
-export * from './error';
+export type {
+  ErrorDomain,
+  AppErrorCode,
+  AppErrorDefinition,
+  AppError,
+} from './error';
+
+export type {
+  ProtocolFieldCategory,
+  ProtocolFieldTransform,
+  ProtocolFieldMapping,
+  ChannelProtocolSchema,
+  CleanOrderContext,
+  ProtocolDriftWarning,
+} from './template';
+
 

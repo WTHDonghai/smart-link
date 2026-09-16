@@ -1,7 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { HotelMapping } from '../../types';
 
-interface HotelState {
+export interface HotelState {
   hotels: HotelMapping[];
   isScraping: boolean;
   filterChannel: string;

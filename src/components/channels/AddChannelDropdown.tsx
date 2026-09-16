@@ -29,7 +29,7 @@ export const AddChannelDropdown: React.FC = () => {
     dispatch(addChannelById(channelId));
     dispatch(showToast({
       title: `成功添加「${channelName}」渠道`,
-      description: '已自动配置默认文旅接收系统映射，可继续自定义备注模板或开启 Playwright 抓取',
+      description: '请为新渠道选择对应的文旅接收系统并保存',
       type: 'success'
     }));
     dispatch(addLog({

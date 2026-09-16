@@ -1,7 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { NavTab } from '../../types';
 
-interface AppState {
+export interface AppState {
   currentTab: NavTab;
   sidebarCollapsed: boolean;
   version: string;

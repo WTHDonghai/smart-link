@@ -1,7 +1,4 @@
-/**
- * Vitest 测试全局初始化
- * 提供 Node 测试环境下的 localStorage 模拟，避免生产代码包含测试桩
- */
+import { afterEach, vi } from 'vitest';
 
 class LocalStorageMock implements Storage {
   private store = new Map<string, string>();
@@ -32,9 +29,34 @@ class LocalStorageMock implements Storage {
   }
 }
 
-if (typeof globalThis.localStorage === 'undefined') {
-  Object.defineProperty(globalThis, 'localStorage', {
-    value: new LocalStorageMock(),
+const mockStorage = new LocalStorageMock();
+
+if (typeof (globalThis as unknown as { Storage?: unknown }).Storage === 'undefined') {
+  Object.defineProperty(globalThis, 'Storage', {
+    value: LocalStorageMock,
     writable: true,
   });
 }
+
+if (typeof globalThis.localStorage === 'undefined') {
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: mockStorage,
+    writable: true,
+  });
+}
+
+if (typeof (globalThis as unknown as { window?: unknown }).window === 'undefined') {
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+  });
+}
+
+afterEach(() => {
+  mockStorage.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+

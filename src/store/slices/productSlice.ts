@@ -1,7 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { ProductMapping } from '../../types';
 
-interface ProductState {
+export interface ProductState {
   products: ProductMapping[];
   filterChannel: string;
   filterHotel: string;

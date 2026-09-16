@@ -224,9 +224,13 @@ describe('platformAuth - PlatformAuthService 核心流程与并发单飞', () =>
 
   beforeEach(() => {
     clearTokensFromStorage();
-    process.env.VITE_PLATFORM_BASE_URL = 'https://test-pms.hotel.com';
+    vi.stubEnv('VITE_PLATFORM_BASE_URL', 'https://test-pms.hotel.com');
     service = new PlatformAuthService();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('requestDeviceCode 正常返回设备码与完整验证链接', async () => {
@@ -297,7 +301,7 @@ describe('platformAuth - PlatformAuthService 核心流程与并发单飞', () =>
     let fetchCallCount = 0;
     globalThis.fetch = vi.fn().mockImplementation(async () => {
       fetchCallCount += 1;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
       return {
         ok: true,
         status: 200,

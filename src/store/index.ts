@@ -7,18 +7,26 @@ import productReducer from './slices/productSlice';
 import orderGuardianReducer from './slices/orderGuardianSlice';
 import systemLogReducer from './slices/systemLogSlice';
 import authReducer from './slices/authSlice';
+import { channelListenerMiddleware } from './channelListener';
 
-export const store = configureStore({
-  reducer: {
-    app: appReducer,
-    channel: channelReducer,
-    hotel: hotelReducer,
-    product: productReducer,
-    orderGuardian: orderGuardianReducer,
-    systemLog: systemLogReducer,
-    auth: authReducer,
-  }
-});
+export const rootReducer = {
+  app: appReducer,
+  channel: channelReducer,
+  hotel: hotelReducer,
+  product: productReducer,
+  orderGuardian: orderGuardianReducer,
+  systemLog: systemLogReducer,
+  auth: authReducer,
+};
+
+export const createAppStore = () =>
+  configureStore({
+    reducer: rootReducer,
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware().prepend(channelListenerMiddleware.middleware),
+  });
+
+export const store = createAppStore();
 
 export type RootState = ReturnType<typeof store.getState>;
 export type AppDispatch = typeof store.dispatch;

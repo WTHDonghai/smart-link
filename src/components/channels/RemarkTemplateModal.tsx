@@ -1,66 +1,216 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { setSelectedChannelForTemplate, updateRemarkTemplate } from '../../store/slices/channelSlice';
+import {
+  setSelectedChannelForTemplate,
+  updateRemarkTemplate,
+} from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { Tag, Check, Eye } from 'lucide-react';
+import { Check, Eye, SlidersHorizontal, TriangleAlert, Lightbulb } from 'lucide-react';
 import { Modal } from '../common/Modal';
+import { TemplateVariablePicker } from './TemplateVariablePicker';
+import { ProtocolFieldManagerModal } from './ProtocolFieldManagerModal';
+import {
+  DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
+  DEFAULT_MEITUAN_REMARK_TEMPLATE,
+  MEITUAN_RAW_SAMPLE_ORDER,
+} from '../../services/protocols/meituanProtocol';
+import {
+  DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
+  DEFAULT_DOUYIN_REMARK_TEMPLATE,
+  DOUYIN_RAW_SAMPLE_ORDER,
+} from '../../services/protocols/douyinProtocol';
+import type { CleanOrderContext } from '../../types/template';
+import {
+  renderTemplate,
+  validateTemplate,
+} from '../../utils/template/templateEngine';
+import {
+  insertAtCursor,
+  detectUnknownVariables,
+} from '../../utils/template/templateEditor';
+import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
 
 export const RemarkTemplateModal: React.FC = () => {
   const dispatch = useAppDispatch();
   const selectedChannelId = useAppSelector((state) => state.channel.selectedChannelForTemplate);
   const channels = useAppSelector((state) => state.channel.channels);
-  
-  const currentChannel = channels.find(c => c.id === selectedChannelId);
+
+  const currentChannel = channels.find((c) => c.id === selectedChannelId);
 
   const [templateText, setTemplateText] = useState('');
+  const [isFieldManagerOpen, setIsFieldManagerOpen] = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isTextareaFocusedRef = useRef(false);
+
+  const isMeituan = currentChannel?.id === 'meituan';
+  const isDouyin = currentChannel?.id === 'douyin';
+
+  const defaultTemplate = useMemo(() => {
+    if (isDouyin) return DEFAULT_DOUYIN_REMARK_TEMPLATE;
+    return DEFAULT_MEITUAN_REMARK_TEMPLATE;
+  }, [isDouyin]);
 
   useEffect(() => {
     if (currentChannel) {
-      setTemplateText(currentChannel.remarkTemplate);
+      setTemplateText(currentChannel.remarkTemplate || defaultTemplate);
+      isTextareaFocusedRef.current = false;
     }
-  }, [currentChannel]);
+  }, [currentChannel, defaultTemplate]);
+
+  // 获取当前渠道的协议 Schema (优先取渠道已保存的，否则按渠道类型匹配默认预设)
+  const schema = useMemo(() => {
+    if (currentChannel?.protocolSchema) {
+      return currentChannel.protocolSchema;
+    }
+    if (isDouyin) {
+      return DEFAULT_DOUYIN_PROTOCOL_SCHEMA;
+    }
+    return DEFAULT_MEITUAN_PROTOCOL_SCHEMA;
+  }, [currentChannel, isDouyin]);
+
+  // 将生产采集的真实报文按当前 Schema 清洗为标准化上下文 (Fail-Fast 保留错误上下文)
+  const { cleanContext, normalizationError } = useMemo<{
+    cleanContext: CleanOrderContext;
+    normalizationError: string | null;
+  }>(() => {
+    if (!currentChannel) {
+      return { cleanContext: {}, normalizationError: null };
+    }
+
+    try {
+      if (isMeituan) {
+        const ctx = normalizeOrderPayload(MEITUAN_RAW_SAMPLE_ORDER, schema);
+        return { cleanContext: ctx, normalizationError: null };
+      }
+      if (isDouyin) {
+        const ctx = normalizeOrderPayload(DOUYIN_RAW_SAMPLE_ORDER, schema);
+        return { cleanContext: ctx, normalizationError: null };
+      }
+
+      // 针对尚未接入专属 Schema 的其他渠道，提供标准通用模拟上下文
+      if (!currentChannel.protocolSchema) {
+        return {
+          cleanContext: {
+            'OTA订单号': `${currentChannel.code}-20260914-8849`,
+            '入住人': '张小泉',
+            '联系电话': '139****5820',
+            '房型名称': '豪华商务海景大床房',
+            '间夜数': '2间夜',
+            '房间数': '1间',
+            '底价': '780.00',
+            '实付金额': '860.00',
+            '入住离店日期': '2026-09-16至2026-09-18',
+            '渠道来源': currentChannel.name,
+          },
+          normalizationError: null,
+        };
+      }
+
+      const ctx = normalizeOrderPayload(MEITUAN_RAW_SAMPLE_ORDER, schema);
+      return { cleanContext: ctx, normalizationError: null };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { cleanContext: {}, normalizationError: msg };
+    }
+  }, [schema, isMeituan, isDouyin, currentChannel]);
+
+  // 实时语法验证
+  const validation = useMemo(() => {
+    return validateTemplate(templateText);
+  }, [templateText]);
+
+  // 检测模板中未在当前 Schema 或上下文中定义的变量 (用于友好防错提示，不阻断保存)
+  const unknownVariables = useMemo(() => {
+    return detectUnknownVariables(templateText, schema.fields, cleanContext);
+  }, [templateText, schema.fields, cleanContext]);
+
+  // 实时高保真渲染预览 (带条件求值与真实数据)
+  const renderedPreview = useMemo(() => {
+    if (normalizationError) {
+      return `⚠️ 协议解析契约报警：${normalizationError}\n请点击上方「管理协议字段」检查并更正字段取值路径。`;
+    }
+    if (!validation.valid) {
+      return '⚠️ 模板语法存在错误，请根据上方提示修正后预览...';
+    }
+    try {
+      return renderTemplate(templateText, cleanContext);
+    } catch (err) {
+      return `渲染失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }, [templateText, cleanContext, validation, normalizationError]);
 
   if (!selectedChannelId || !currentChannel) return null;
 
-  const availableVariables = [
-    { tag: '{OTA订单号}', desc: '例如 MT-20260914-9921' },
-    { tag: '{入住人}', desc: '例如 林浩辰' },
-    { tag: '{联系电话}', desc: '例如 138****9210' },
-    { tag: '{房型名称}', desc: '例如 商务大床房' },
-    { tag: '{间夜数}', desc: '例如 2' },
-    { tag: '{房间数}', desc: '例如 1' },
-    { tag: '{底价}', desc: '例如 ¥760' },
-    { tag: '{实付金额}', desc: '例如 ¥840' },
-    { tag: '{入住离店日期}', desc: '例如 2026-09-15 至 2026-09-17' },
-    { tag: '{渠道来源}', desc: '例如 ' + currentChannel.name },
-  ];
+  const handleInsert = (textToInsert: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      const { newText } = insertAtCursor(templateText, textToInsert);
+      setTemplateText(newText);
+      return;
+    }
 
-  const handleInsertTag = (tag: string) => {
-    setTemplateText(prev => prev + tag);
-  };
+    // 判断文本框是否有焦点或曾获得焦点
+    const hasFocus = isTextareaFocusedRef.current || document.activeElement === textarea;
+    const start = hasFocus ? textarea.selectionStart : undefined;
+    const end = hasFocus ? textarea.selectionEnd : undefined;
 
-  // Generate live preview by replacing tags
-  const renderPreview = () => {
-    return templateText
-      .replace(/\{OTA订单号\}/g, `${currentChannel.code}-20260914-8849`)
-      .replace(/\{入住人\}/g, '张小泉')
-      .replace(/\{联系电话\}/g, '139****5820')
-      .replace(/\{房型名称\}/g, '豪华商务海景大床房')
-      .replace(/\{间夜数\}/g, '2间夜')
-      .replace(/\{房间数\}/g, '1间')
-      .replace(/\{底价\}/g, '780')
-      .replace(/\{实付金额\}/g, '860')
-      .replace(/\{入住离店日期\}/g, '2026-09-16至2026-09-18')
-      .replace(/\{渠道来源\}/g, currentChannel.name);
+    const { newText, nextCursorPos } = insertAtCursor(textarea.value, textToInsert, start, end);
+    setTemplateText(newText);
+    isTextareaFocusedRef.current = true;
+
+    // 恢复文本框焦点并将光标精准移动到插入内容末尾
+    const scheduleFocus = (cb: () => void) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(cb);
+      } else {
+        setTimeout(cb, 0);
+      }
+    };
+    scheduleFocus(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextCursorPos, nextCursorPos);
+      }
+    });
   };
 
   const handleSave = () => {
-    dispatch(updateRemarkTemplate({ channelId: currentChannel.id, template: templateText }));
-    dispatch(showToast({
-      title: `已更新「${currentChannel.name}」备注模板`,
-      description: '后续来自该渠道的订单将自动按此模板注入文旅大中台接收系统',
-      type: 'success'
-    }));
+    if (normalizationError) {
+      dispatch(
+        showToast({
+          title: '协议配置异常，无法保存',
+          description: normalizationError,
+          type: 'error',
+        })
+      );
+      return;
+    }
+
+    if (!validation.valid) {
+      dispatch(
+        showToast({
+          title: '无法保存模板',
+          description: validation.error || '模板语法校验未通过',
+          type: 'error',
+        })
+      );
+      return;
+    }
+
+    dispatch(
+      updateRemarkTemplate({
+        channelId: currentChannel.id,
+        template: templateText,
+      })
+    );
+    dispatch(
+      showToast({
+        title: `已更新「${currentChannel.name}」备注模板`,
+        description: '后续来自该渠道的订单将自动经过条件表达式引擎计算并注入文旅系统',
+        type: 'success',
+      })
+    );
     dispatch(setSelectedChannelForTemplate(null));
   };
 
@@ -68,11 +218,13 @@ export const RemarkTemplateModal: React.FC = () => {
     dispatch(setSelectedChannelForTemplate(null));
   };
 
+  const activeFieldsCount = schema.fields.filter((f) => f.enabled).length;
+
   const footerContent = (
     <div className="w-full flex items-center justify-between">
       <button
         type="button"
-        onClick={() => setTemplateText(`【${currentChannel.name}搬单】OTA单号:{OTA订单号} | 预订人:{入住人} ({联系电话}) | 房型:{房型名称} | 结算价:¥{底价}`)}
+        onClick={() => setTemplateText(defaultTemplate)}
         className="text-xs text-[#737686] hover:text-[#004ac6] underline cursor-pointer"
       >
         恢复默认模板
@@ -88,7 +240,8 @@ export const RemarkTemplateModal: React.FC = () => {
         <button
           type="button"
           onClick={handleSave}
-          className="px-5 py-2 text-xs font-semibold text-white bg-[#004ac6] hover:bg-[#003da6] rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+          disabled={!validation.valid || Boolean(normalizationError)}
+          className="px-5 py-2 text-xs font-semibold text-white bg-[#004ac6] hover:bg-[#003da6] rounded-lg shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Check className="w-3.5 h-3.5" />
           <span>保存模板</span>
@@ -97,70 +250,140 @@ export const RemarkTemplateModal: React.FC = () => {
     </div>
   );
 
-  return (
-    <Modal
-      isOpen={Boolean(selectedChannelId && currentChannel)}
-      onClose={handleClose}
-      title={`配置订单备注模板 - ${currentChannel.name} (${currentChannel.code})`}
-      subtitle="自定义该 OTA 渠道搬单至文旅大中台时的格式化文本与动态参数"
-      icon={
-        <div className={`w-6 h-6 rounded-md ${currentChannel.bgColor} ${currentChannel.textColor} flex items-center justify-center font-bold text-xs`}>
-          {currentChannel.short}
-        </div>
-      }
-      maxWidth="2xl"
-      footer={footerContent}
+  const headerExtraContent = (
+    <button
+      type="button"
+      onClick={() => setIsFieldManagerOpen(true)}
+      className="h-8 px-3 rounded-lg bg-white hover:bg-[#eff4ff] text-[#004ac6] border border-[#dce9ff] text-xs font-medium transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer shrink-0"
+      title="配置字段白名单裁剪与原始路径映射"
     >
-      <div className="space-y-5">
-        {/* Quick Insert Variable Chips */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold text-[#0b1c30] flex items-center gap-1.5">
-              <Tag className="w-3.5 h-3.5 text-[#004ac6]" />
-              <span>点击插入动态参数变量</span>
-            </label>
-            <span className="text-[11px] text-[#737686]">自动识别并注入字段</span>
-          </div>
-          <div className="flex flex-wrap gap-1.5 p-3 rounded-xl bg-[#eff4ff]/60 border border-[#dce9ff]">
-            {availableVariables.map((v) => (
-              <button
-                key={v.tag}
-                type="button"
-                onClick={() => handleInsertTag(v.tag)}
-                className="px-2.5 py-1 text-xs font-mono bg-white hover:bg-[#004ac6] hover:text-white text-[#004ac6] border border-[#dce9ff] rounded-md transition-all shadow-2xs flex items-center gap-1 cursor-pointer"
-                title={v.desc}
-              >
-                <span>{v.tag}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+      <SlidersHorizontal className="w-3.5 h-3.5" />
+      <span>管理协议字段 ({activeFieldsCount}/{schema.fields.length})</span>
+    </button>
+  );
 
-        {/* Template Textarea */}
-        <div>
-          <label className="text-xs font-semibold text-[#0b1c30] block mb-1.5">
-            备注模板文本内容
-          </label>
-          <textarea
-            rows={4}
-            value={templateText}
-            onChange={(e) => setTemplateText(e.target.value)}
-            className="w-full p-3 rounded-xl border border-[#dce9ff] focus:border-[#004ac6] focus:ring-2 focus:ring-[#004ac6]/20 font-mono text-xs text-[#0b1c30] outline-none resize-y transition-all bg-white"
-            placeholder="请输入模板文本，例如：【美团搬单】单号:{OTA订单号}，房型:{房型名称}，入住人:{入住人}..."
+  return (
+    <>
+      <Modal
+        isOpen={Boolean(selectedChannelId && currentChannel)}
+        onClose={handleClose}
+        title={`配置订单备注模板 - ${currentChannel.name} (${currentChannel.code})`}
+        icon={
+          <div
+            className={`w-6 h-6 rounded-md ${currentChannel.bgColor} ${currentChannel.textColor} flex items-center justify-center font-bold text-xs`}
+          >
+            {currentChannel.short}
+          </div>
+        }
+        maxWidth="3xl"
+        headerExtra={headerExtraContent}
+        footer={footerContent}
+      >
+        <div className="space-y-4">
+
+          {/* 协议漂移/契约报警提示 (Fail-Fast，绝不静默吞掉) */}
+          {normalizationError && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+              <TriangleAlert className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+              <div>
+                <span className="font-semibold">协议解析契约报警 (Fail-Fast)：</span>
+                <span>{normalizationError}</span>
+              </div>
+            </div>
+          )}
+
+          {/* 极简模式分类参数变量选择器 */}
+          <TemplateVariablePicker
+            fields={schema.fields}
+            onInsertTag={handleInsert}
           />
-        </div>
 
-        {/* Live Preview Box */}
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5">
-          <div className="flex items-center gap-2 mb-1.5 text-xs font-semibold text-emerald-900">
-            <Eye className="w-3.5 h-3.5 text-emerald-700" />
-            <span>实时效果预览 (到达文旅大中台接收系统的备注展示)</span>
+          {/* 模板文本编辑区 */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-[#0b1c30] block">
+                备注模板文本与条件表达式
+              </label>
+              <span className="text-[11px] text-[#737686]">
+                支持 {'{变量名}'}、{'{{ 变量 | 过滤器 }}'} 及 {'{{#if 条件}}...{{/if}}'}
+              </span>
+            </div>
+            <textarea
+              ref={textareaRef}
+              rows={4}
+              value={templateText}
+              onChange={(e) => setTemplateText(e.target.value)}
+              onFocus={() => {
+                isTextareaFocusedRef.current = true;
+              }}
+              className={`w-full p-3 rounded-xl border font-mono text-xs text-[#0b1c30] outline-none resize-y transition-all bg-white leading-relaxed ${
+                validation.valid
+                  ? 'border-[#dce9ff] focus:border-[#004ac6] focus:ring-2 focus:ring-[#004ac6]/20'
+                  : 'border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+              }`}
+              placeholder="请输入模板文本，例如：【搬单】单号:{主单号} | 房型:{房型名称}..."
+            />
+
+            {/* 语法错误提示 (Fail-Fast) */}
+            {!validation.valid && (
+              <div className="mt-1.5 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                <TriangleAlert className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <div>
+                  <span className="font-semibold">模板语法错误：</span>
+                  <span>{validation.error}</span>
+                </div>
+              </div>
+            )}
+
+            {/* 未定义变量防错提示 (友好辅助，不阻断保存) */}
+            {validation.valid && unknownVariables.length > 0 && (
+              <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-2">
+                <Lightbulb className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <span className="font-semibold">💡 提示：</span>
+                  <span>
+                    模板中包含可能未定义的变量「{unknownVariables.join('」、「')}」，请核对是否拼写有误。
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="p-3 bg-white rounded-lg border border-emerald-100 text-xs text-[#0b1c30] font-mono leading-relaxed break-all shadow-2xs">
-            {renderPreview() || '<空模板>'}
+
+          {/* 实时效果渲染沙箱 (Live Sandbox) */}
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5">
+            <div className="flex items-center justify-between mb-1.5 text-xs font-semibold text-emerald-900">
+              <div className="flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-emerald-700" />
+                <span>
+                    实时效果预览
+                </span>
+              </div>
+              {isMeituan && !normalizationError && (
+                <span className="text-[11px] text-emerald-700 font-normal">
+                  已自动匹配：底价 ¥{String(cleanContext['结算底价'] || cleanContext.floorPrice || '')} | 延迟退房 | 酒店开票
+                </span>
+              )}
+              {isDouyin && !normalizationError && (
+                <span className="text-[11px] text-emerald-700 font-normal">
+                  已自动匹配：实付 ¥{String(cleanContext['实付金额'] || cleanContext.payAmount || '')} | 自助早餐 | 乐园门票
+                </span>
+              )}
+            </div>
+            <div className="p-3 bg-white rounded-lg border border-emerald-100 text-xs text-[#0b1c30] font-mono leading-relaxed whitespace-pre-wrap break-all shadow-2xs">
+              {renderedPreview || '<空模板>'}
+            </div>
           </div>
         </div>
-      </div>
-    </Modal>
+      </Modal>
+
+      {/* 协议字段裁剪与映射管理抽屉/弹窗 */}
+      <ProtocolFieldManagerModal
+        isOpen={isFieldManagerOpen}
+        onClose={() => setIsFieldManagerOpen(false)}
+        channelId={currentChannel.id}
+        channelName={currentChannel.name}
+        schema={schema}
+      />
+    </>
   );
 };

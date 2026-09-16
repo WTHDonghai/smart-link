@@ -48,7 +48,7 @@ export const Pagination: React.FC<PaginationProps> = ({
     return range;
   };
 
-  const handleJumpSubmit = (e: React.FormEvent) => {
+  const handleJumpSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
     const target = parseInt(jumpInput, 10);
     if (!isNaN(target) && target >= 1 && target <= totalPages) {

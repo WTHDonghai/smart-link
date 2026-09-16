@@ -7,6 +7,7 @@ export interface ModalProps {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   icon?: React.ReactNode;
+  headerExtra?: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
   children: React.ReactNode;
   footer?: React.ReactNode;
@@ -29,6 +30,7 @@ export const Modal: React.FC<ModalProps> = ({
   title,
   subtitle,
   icon,
+  headerExtra,
   maxWidth = '2xl',
   children,
   footer,
@@ -78,8 +80,8 @@ export const Modal: React.FC<ModalProps> = ({
         className={`bg-white rounded-2xl shadow-2xl border border-[#dce9ff] w-full ${MAX_WIDTH_MAP[maxWidth]} overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-150`}
       >
         {/* Modal Header */}
-        <div className="px-6 py-4 border-b border-[#eff4ff] bg-[#f8faff] flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="px-6 py-4 border-b border-[#eff4ff] bg-[#f8faff] flex items-center justify-between shrink-0 gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             {icon && (
               <div className="w-8 h-8 rounded-lg bg-[#eff4ff] text-[#004ac6] border border-[#dce9ff] flex items-center justify-center shrink-0">
                 {icon}
@@ -91,15 +93,18 @@ export const Modal: React.FC<ModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg text-[#737686] hover:text-[#0b1c30] hover:bg-[#eff4ff] flex items-center justify-center transition-colors cursor-pointer shrink-0 ml-2"
-            title="关闭窗口 (Esc)"
-            aria-label="关闭"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0 ml-2">
+            {headerExtra}
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg text-[#737686] hover:text-[#0b1c30] hover:bg-[#eff4ff] flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              title="关闭窗口 (Esc)"
+              aria-label="关闭"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Content */}

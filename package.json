@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "lint:lsp": "node .agents/skills/ts-lsp-diagnostics/scripts/lsp_diagnostics.cjs",
     "test": "vitest run"
   },
   "dependencies": {

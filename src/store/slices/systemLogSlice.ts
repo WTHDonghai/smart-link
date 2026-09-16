@@ -1,7 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { SystemLogEntry } from '../../types';
 
-interface SystemLogState {
+export interface SystemLogState {
   logs: SystemLogEntry[];
   filterLevel: 'ALL' | 'PLAYWRIGHT' | 'INFO' | 'WARN' | 'ERROR';
   filterSearch: string;

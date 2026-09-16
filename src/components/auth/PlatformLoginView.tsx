@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   KeyRound,
   ExternalLink,
@@ -22,7 +22,6 @@ export const PlatformLoginView: React.FC = () => {
     deviceCodeInfo,
     isAuthorizing,
     failureReason,
-    failureError,
   } = useAppSelector((state) => state.auth);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -77,9 +76,11 @@ export const PlatformLoginView: React.FC = () => {
     window.open(deviceCodeInfo.verificationUri, '_blank', 'noopener,noreferrer');
   }, [deviceCodeInfo]);
 
-  // 获取生效的标准错误对象 (若 failureError 存在则直取，否则对 failureReason 进行安全归一化解析)
-  const displayError =
-    failureError || (failureReason ? normalizeAppError(failureReason, 'AUTH') : null);
+  // 基于单一可信错误源 failureReason 派生标准错误对象，严格杜绝双重冗余与隐式兜底
+  const displayError = useMemo(
+    () => (failureReason ? normalizeAppError(failureReason, 'AUTH') : null),
+    [failureReason]
+  );
 
   return (
     <div className="min-h-screen w-full bg-[#f8f9ff] flex flex-col justify-between items-center p-4 sm:p-6 antialiased selection:bg-[#004ac6] selection:text-white">
@@ -172,12 +173,6 @@ export const PlatformLoginView: React.FC = () => {
         </div>
       </main>
 
-      {/* 底部信息条 */}
-      <footer className="w-full max-w-md text-center py-4 space-y-1">
-        <p className="text-[11px] text-[#94a3b8]">
-          西软软件 · Smart Link 智能 OTA 搬单系统
-        </p>
-      </footer>
     </div>
   );
 };

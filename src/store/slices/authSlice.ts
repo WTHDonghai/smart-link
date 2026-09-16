@@ -1,5 +1,5 @@
-import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
-import {
+import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import type {
   PlatformAuthTokens,
   PlatformDeviceCodeInfo,
   PlatformTokenState,
