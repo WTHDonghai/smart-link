@@ -6,9 +6,7 @@ import {
   setSelectedCrawlChannel,
   updateHotelMapping,
   crawlHotelsByChannel,
-  syncChromeProfileThunk,
 } from '../../store/slices/hotelSlice';
-import { updateChannelStoreCrawlUrl } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { addLog } from '../../store/slices/systemLogSlice';
 import {
@@ -17,9 +15,7 @@ import {
   ChevronDown,
   Save,
   X,
-  Globe,
   CheckCircle2,
-  KeyRound,
 } from 'lucide-react';
 import type { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
@@ -45,7 +41,6 @@ export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
   const hotels = useAppSelector((state) => state.hotel.hotels);
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
-  const isSyncingProfile = useAppSelector((state) => state.hotel.isSyncingProfile);
   const crawlError = useAppSelector((state) => state.hotel.crawlError);
   const selectedCrawlChannel = useAppSelector((state) => state.hotel.selectedCrawlChannel);
   const lastCrawlSummary = useAppSelector((state) => state.hotel.lastCrawlSummary);
@@ -54,9 +49,6 @@ export const HotelSyncView: React.FC = () => {
   const channels = useAppSelector((state) => state.channel.channels);
 
   const [selectedPmsMap, setSelectedPmsMap] = useState<Record<string, string>>({});
-  const [isEditingUrl, setIsEditingUrl] = useState(false);
-  const [customTargetUrl, setCustomTargetUrl] = useState('');
-  const [isHeadedMode, setIsHeadedMode] = useState(false);
 
   // 获取当前选中的采集渠道对象
   const activeChannel = useMemo(() => {
@@ -152,34 +144,13 @@ export const HotelSyncView: React.FC = () => {
 
   const handleStartCrawl = async () => {
     if (isScraping) return;
-    const targetUrl = customTargetUrl.trim() || currentChannelTargetUrl;
 
     dispatch(
       crawlHotelsByChannel({
         channelId: selectedCrawlChannel,
-        targetUrl,
-        headless: !isHeadedMode,
+        targetUrl: currentChannelTargetUrl,
       })
     );
-  };
-
-  const handleSaveCustomUrl = () => {
-    if (customTargetUrl.trim() && activeChannel) {
-      dispatch(
-        updateChannelStoreCrawlUrl({
-          channelId: activeChannel.id,
-          storeCrawlUrl: customTargetUrl.trim(),
-        })
-      );
-      dispatch(
-        showToast({
-          title: '已更新采集目标 URL',
-          description: `渠道 ${activeChannel.name} 采集地址已更新`,
-          type: 'success',
-        })
-      );
-    }
-    setIsEditingUrl(false);
   };
 
   const handleResetFilters = () => {
@@ -202,114 +173,34 @@ export const HotelSyncView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. 核心操作面板：渠道选择、目标 URL 配置与启动采集 */}
+      {/* 2. 核心操作面板：渠道选择与启动采集 */}
       <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] p-4 flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[320px]">
-            {/* 采集渠道选择 */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-[#434655] whitespace-nowrap">
-                采集渠道:
-              </span>
-              <div className="w-44">
-                <SearchableSelect
-                  value={selectedCrawlChannel}
-                  onChange={(val) => {
-                    dispatch(setSelectedCrawlChannel(val));
-                    setCustomTargetUrl('');
-                    setIsEditingUrl(false);
-                  }}
-                  options={crawlChannelOptions}
-                  placeholder="选择采集渠道"
-                  size="sm"
-                  buttonClassName="font-semibold text-[#004ac6]"
-                />
-              </div>
-            </div>
-
-            {/* 目标 URL 显示与快速编辑 */}
-            <div className="flex items-center gap-2 flex-1 min-w-[280px]">
-              <span className="text-xs font-semibold text-[#434655] whitespace-nowrap flex items-center gap-1">
-                <Globe className="w-3.5 h-3.5 text-[#737686]" />
-                目标 URL:
-              </span>
-              {isEditingUrl ? (
-                <div className="flex items-center gap-1.5 flex-1 max-w-lg">
-                  <input
-                    type="text"
-                    value={customTargetUrl}
-                    onChange={(e) => setCustomTargetUrl(e.target.value)}
-                    placeholder={currentChannelTargetUrl}
-                    className="flex-1 h-8 px-2.5 bg-white border border-[#004ac6] rounded-md text-xs font-mono text-[#0b1c30] outline-hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveCustomUrl}
-                    className="h-8 px-2.5 bg-[#004ac6] text-white rounded-md text-xs font-medium cursor-pointer"
-                  >
-                    确认
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsEditingUrl(false);
-                      setCustomTargetUrl('');
-                    }}
-                    className="h-8 px-2 text-[#737686] hover:text-[#0b1c30] text-xs cursor-pointer"
-                  >
-                    取消
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 flex-1 max-w-lg">
-                  <span
-                    className="text-xs font-mono text-[#434655] bg-[#f8faff] px-2.5 py-1.5 rounded border border-[#e2e8f0] truncate block max-w-md select-text"
-                    title={currentChannelTargetUrl}
-                  >
-                    {currentChannelTargetUrl}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCustomTargetUrl(currentChannelTargetUrl);
-                      setIsEditingUrl(true);
-                    }}
-                    className="text-xs text-[#004ac6] hover:underline whitespace-nowrap cursor-pointer"
-                  >
-                    修改
-                  </button>
-                </div>
-              )}
+          {/* 采集渠道选择 */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[#434655] whitespace-nowrap">
+              采集渠道:
+            </span>
+            <div className="w-48">
+              <SearchableSelect
+                value={selectedCrawlChannel}
+                onChange={(val) => {
+                  dispatch(setSelectedCrawlChannel(val));
+                }}
+                options={crawlChannelOptions}
+                placeholder="选择采集渠道"
+                size="sm"
+                buttonClassName="font-semibold text-[#004ac6]"
+              />
             </div>
           </div>
 
-          {/* 右侧动作区：有头模式切换、一键同步日常 Chrome 登录态与采集主行动按钮 */}
+          {/* 右侧动作区：采集主行动按钮 */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <label className="inline-flex items-center gap-1.5 text-xs text-[#737686] cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={isHeadedMode}
-                onChange={(e) => setIsHeadedMode(e.target.checked)}
-                className="w-3.5 h-3.5 accent-[#004ac6] rounded cursor-pointer"
-              />
-              <span>弹出浏览器窗口 (人工扫码/登录)</span>
-            </label>
-
-            <button
-              type="button"
-              onClick={() => dispatch(syncChromeProfileThunk(selectedCrawlChannel))}
-              disabled={isSyncingProfile || isScraping}
-              className="h-9 px-3 rounded-lg border border-[#dce9ff] bg-white hover:bg-[#eff4ff] active:bg-[#dce9ff] text-[#004ac6] font-medium text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="一键从日常系统 Chrome 同步当前已登录的 Cookies 与授权缓存（免密/免扫码）"
-            >
-              <KeyRound className={`w-3.5 h-3.5 text-[#004ac6] ${isSyncingProfile ? 'animate-spin' : ''}`} />
-              <span>{isSyncingProfile ? '正在同步登录态...' : '同步 Chrome 登录态'}</span>
-            </button>
-
             <button
               type="button"
               onClick={handleStartCrawl}
-              disabled={isScraping || isSyncingProfile}
+              disabled={isScraping}
               className={`h-9 px-4 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-2 ${
                 isScraping
                   ? 'bg-[#2170e4] cursor-wait opacity-85'
