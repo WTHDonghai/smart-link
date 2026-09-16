@@ -4,6 +4,7 @@ import type {
   HotelMapping,
   SaveHotelMappingPayloadItem,
   RemoteHotelMappingRecord,
+  PlatformProperty,
 } from '../types';
 
 export const HOTEL_ENDPOINTS = {
@@ -184,3 +185,59 @@ export async function deleteRemoteHotelMappings(
     deletedCount: ids.length,
   };
 }
+
+export const STRUCTURE_ENDPOINTS = {
+  PROPERTIES: '/configuration/structure-management/properties',
+  UNITS_ME: '/configuration/unit-structure/units/me/list',
+} as const;
+
+/**
+ * 查询文旅中台组织单位/酒店列表 (GET /configuration/structure-management/properties)
+ * 供用户在门店映射下拉框中关联真实中台酒店
+ */
+export async function fetchPlatformProperties(): Promise<PlatformProperty[]> {
+  try {
+    const responseBody = await requestPlatformApi<unknown>(
+      `${STRUCTURE_ENDPOINTS.PROPERTIES}?showAll=true`,
+      { method: 'GET' }
+    );
+    const rawItems = extractDataItems(responseBody);
+    return rawItems
+      .map((item) => {
+        const id = String(item.id || item.unitId || item.propertyId || '').trim();
+        const name = String(item.name || item.unitName || item.propertyName || item.code || id).trim();
+        const code = String(item.code || item.unitCode || '').trim();
+        return {
+          id,
+          name,
+          code: code || undefined,
+          type: String(item.type || item.unitType || 'Property'),
+        };
+      })
+      .filter((p) => p.id && p.name);
+  } catch (error) {
+    try {
+      const fallbackBody = await requestPlatformApi<unknown>(
+        `${STRUCTURE_ENDPOINTS.UNITS_ME}?showAll=true`,
+        { method: 'GET' }
+      );
+      const rawItems = extractDataItems(fallbackBody);
+      return rawItems
+        .map((item) => {
+          const id = String(item.id || item.unitId || item.propertyId || '').trim();
+          const name = String(item.name || item.unitName || item.propertyName || item.code || id).trim();
+          const code = String(item.code || item.unitCode || '').trim();
+          return {
+            id,
+            name,
+            code: code || undefined,
+            type: String(item.type || item.unitType || 'Property'),
+          };
+        })
+        .filter((p) => p.id && p.name);
+    } catch {
+      throw error;
+    }
+  }
+}
+

@@ -22,6 +22,7 @@ describe('hotelSlice - 门店管理状态切片', () => {
     expect(state.searchKeyword).toBe('');
     expect(state.selectedCrawlChannel).toBe('meituan');
     expect(state.hotels.length).toBe(0);
+    expect(state.pmsProperties.length).toBe(0);
     expect(state.lastCrawlSummary).toBeNull();
   });
 
@@ -381,6 +382,23 @@ describe('hotelSlice - 门店管理状态切片', () => {
       expect(nextState.lastCrawlSummary?.durationMs).toBe(3400);
       expect(nextState.hotels[0].otaHotelId).toBe('MT-DISCOVER-01');
       expect(nextState.hotels[0].status).toBe('pending');
+    });
+  });
+
+  describe('fetchPlatformPropertiesThunk extraReducers', () => {
+    it('fulfilled 时写入中台酒店/单位属性列表', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      expect(initialState.pmsProperties).toEqual([]);
+
+      const nextState = hotelReducer(initialState, {
+        type: 'hotel/fetchPlatformProperties/fulfilled',
+        payload: [
+          { id: 'PMS-001', name: '全季酒店杭州西湖店', code: 'QJ-HZ' },
+        ],
+      });
+
+      expect(nextState.pmsProperties.length).toBe(1);
+      expect(nextState.pmsProperties[0].name).toBe('全季酒店杭州西湖店');
     });
   });
 });

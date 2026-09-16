@@ -106,6 +106,13 @@ export interface RemoteHotelMappingRecord {
   starRating?: string;
 }
 
+export interface PlatformProperty {
+  id: string;
+  name: string;
+  code?: string;
+  type?: string;
+}
+
 export interface ProductMapping {
   id: string;
   hotelId: string;

@@ -8,6 +8,7 @@ import {
   fetchHotelMappingsThunk,
   saveHotelMappingThunk,
   deleteHotelMappingThunk,
+  fetchPlatformPropertiesThunk,
 } from '../../store/slices/hotelSlice';
 import {
   Search,
@@ -26,21 +27,10 @@ import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
 import { normalizeAppError } from '../../utils/errorNormalizer';
 import { DEFAULT_MEITUAN_CATALOG_URL } from '../../crawler/collectors/meituan/meituanStoreMapper';
 
-const PMS_HOTEL_OPTIONS = [
-  { id: 'PMS-HZ-001', name: '华住全季-杭州湖滨店' },
-  { id: 'PMS-SY-099', name: '复星旅文-亚特兰蒂斯(海棠湾)' },
-  { id: 'PMS-BJ-012', name: '国贸商务酒店-北京总店' },
-  { id: 'PMS-CD-034', name: '花间堂-成都宽窄店' },
-  { id: 'PMS-SH-102', name: '万豪瑞吉-上海静安' },
-  { id: 'PMS-HZ-028', name: '桔子水晶-杭州武林总店' },
-  { id: 'PMS-SZ-045', name: '洲际酒店-深圳湾店' },
-  { id: 'PMS-GZ-066', name: '四季酒店-广州塔店' },
-  { id: 'PMS-ZG-008', name: '自贡禅驿度假酒店-方特店' },
-];
-
 export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
   const hotels = useAppSelector((state) => state.hotel.hotels);
+  const pmsProperties = useAppSelector((state) => state.hotel.pmsProperties);
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
   const isFetching = useAppSelector((state) => state.hotel.isFetching);
   const isSaving = useAppSelector((state) => state.hotel.isSaving);
@@ -54,10 +44,11 @@ export const HotelSyncView: React.FC = () => {
 
   const [selectedPmsMap, setSelectedPmsMap] = useState<Record<string, string>>({});
 
-  // 页面挂载与筛选渠道切换时，自动从文旅中台拉取真实门店映射
+  // 页面挂载与筛选渠道切换时，自动从文旅中台拉取真实门店映射与中台酒店列表
   useEffect(() => {
     const channelParam = filterChannel === 'all' ? undefined : filterChannel;
     dispatch(fetchHotelMappingsThunk(channelParam));
+    dispatch(fetchPlatformPropertiesThunk());
   }, [dispatch, filterChannel]);
 
   // 获取当前选中的采集渠道对象
@@ -108,13 +99,14 @@ export const HotelSyncView: React.FC = () => {
   }, [hotels, filterChannel, searchKeyword]);
 
   const getHotelOptions = (currentPmsId: string, currentPmsName: string) => {
-    if (PMS_HOTEL_OPTIONS.some((opt) => opt.id === currentPmsId)) {
-      return PMS_HOTEL_OPTIONS;
+    const options = [...pmsProperties];
+    if (currentPmsId && !options.some((opt) => opt.id === currentPmsId)) {
+      options.unshift({
+        id: currentPmsId,
+        name: currentPmsName || currentPmsId,
+      });
     }
-    if (currentPmsId) {
-      return [{ id: currentPmsId, name: currentPmsName }, ...PMS_HOTEL_OPTIONS];
-    }
-    return PMS_HOTEL_OPTIONS;
+    return options;
   };
 
   const handlePmsChange = (hotelId: string, pmsId: string) => {
@@ -174,6 +166,7 @@ export const HotelSyncView: React.FC = () => {
   const handleRefreshMappings = () => {
     const channelParam = filterChannel === 'all' ? undefined : filterChannel;
     dispatch(fetchHotelMappingsThunk(channelParam));
+    dispatch(fetchPlatformPropertiesThunk());
   };
 
   return (

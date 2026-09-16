@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   HOTEL_ENDPOINTS,
+  STRUCTURE_ENDPOINTS,
   normalizeRemoteHotelMapping,
   fetchRemoteHotelMappings,
   saveHotelMappingsBatch,
   deleteRemoteHotelMappings,
+  fetchPlatformProperties,
 } from '../../src/services/hotelApi';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
 import type { PlatformAuthTokens } from '../../src/types';
@@ -309,6 +311,89 @@ describe('hotelApi - 门店/酒店映射平台接入服务', () => {
       expect(requestedMethod).toBe('DELETE');
       expect(result).toEqual({ success: true, deletedCount: 2 });
       expect(JSON.parse(requestedBody)).toEqual(['map-101', 'map-102']);
+    });
+  });
+
+  describe('STRUCTURE_ENDPOINTS & fetchPlatformProperties', () => {
+    it('定义了规范的组织单位与酒店微服务路由', () => {
+      expect(STRUCTURE_ENDPOINTS.PROPERTIES).toBe('/configuration/structure-management/properties');
+      expect(STRUCTURE_ENDPOINTS.UNITS_ME).toBe('/configuration/unit-structure/units/me/list');
+    });
+
+    it('成功从主路由拉取并规范化组织单位/酒店列表', async () => {
+      let requestedUrl = '';
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        requestedUrl = url;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            data: {
+              records: [
+                { id: 'PMS-001', name: '全季酒店杭州西湖店', code: 'QJ-HZ' },
+                { unitId: 'PMS-002', unitName: '三亚亚特兰蒂斯度假酒店', unitCode: 'ATL-SY' },
+              ],
+            },
+          }),
+        };
+      });
+
+      const result = await fetchPlatformProperties();
+
+      expect(requestedUrl).toBe(
+        'https://pms.example.com/configuration/structure-management/properties?showAll=true'
+      );
+      expect(result.length).toBe(2);
+      expect(result[0]).toEqual({
+        id: 'PMS-001',
+        name: '全季酒店杭州西湖店',
+        code: 'QJ-HZ',
+        type: 'Property',
+      });
+      expect(result[1]).toEqual({
+        id: 'PMS-002',
+        name: '三亚亚特兰蒂斯度假酒店',
+        code: 'ATL-SY',
+        type: 'Property',
+      });
+    });
+
+    it('主路由不可用时自动尝试备用路由 /configuration/unit-structure/units/me/list', async () => {
+      let requestedUrls: string[] = [];
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        requestedUrls.push(url);
+        if (url.includes('/structure-management/properties')) {
+          return {
+            ok: false,
+            status: 404,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ code: 404, msg: 'Not Found' }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            data: [
+              { id: 'UNIT-99', name: '自贡禅驿度假酒店', code: 'CY-ZG' },
+            ],
+          }),
+        };
+      });
+
+      const result = await fetchPlatformProperties();
+
+      expect(requestedUrls.length).toBe(2);
+      expect(requestedUrls[0]).toContain('/structure-management/properties');
+      expect(requestedUrls[1]).toContain('/unit-structure/units/me/list');
+      expect(result.length).toBe(1);
+      expect(result[0].name).toBe('自贡禅驿度假酒店');
     });
   });
 });

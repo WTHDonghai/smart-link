@@ -1,11 +1,12 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
-import type { HotelMapping } from '../../types';
+import type { HotelMapping, PlatformProperty } from '../../types';
 import type { DiscoveredHotelCandidate } from '../../crawler/types';
 import { executeHotelCrawl } from '../../services/crawlerApi';
 import {
   fetchRemoteHotelMappings,
   saveHotelMappingsBatch,
   deleteRemoteHotelMappings,
+  fetchPlatformProperties,
 } from '../../services/hotelApi';
 import { addLog } from './systemLogSlice';
 import { showToast } from './appSlice';
@@ -14,6 +15,7 @@ export type CrawlStatus = 'idle' | 'running' | 'success' | 'failed';
 
 export interface HotelState {
   hotels: HotelMapping[];
+  pmsProperties: PlatformProperty[];
   isScraping: boolean;
   isFetching: boolean;
   isSaving: boolean;
@@ -43,6 +45,7 @@ const initialState: HotelState = {
   selectedCrawlChannel: 'meituan',
   lastCrawlSummary: null,
   hotels: [],
+  pmsProperties: [],
 };
 
 export interface SaveHotelMappingParams {
@@ -246,6 +249,29 @@ export const deleteHotelMappingThunk = createAsyncThunk<
         title: '删除门店映射失败',
         description: errorMsg,
         type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
+/**
+ * 异步 Thunk：从文旅中台拉取真实组织单位/酒店列表 (GET /configuration/structure-management/properties)
+ */
+export const fetchPlatformPropertiesThunk = createAsyncThunk<
+  PlatformProperty[],
+  void,
+  { rejectValue: string }
+>('hotel/fetchPlatformProperties', async (_, { dispatch, rejectWithValue }) => {
+  try {
+    const properties = await fetchPlatformProperties();
+    return properties;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'WARN',
+        message: `[HotelMapping] 获取中台酒店列表失败: ${errorMsg}`,
       })
     );
     return rejectWithValue(errorMsg);
@@ -489,6 +515,10 @@ export const hotelSlice = createSlice({
             h.id !== action.payload.localId &&
             (!h.mappingId || String(h.mappingId) !== String(action.payload.mappingId))
         );
+      })
+      // 获取中台酒店列表 Thunk
+      .addCase(fetchPlatformPropertiesThunk.fulfilled, (state, action) => {
+        state.pmsProperties = action.payload;
       });
   },
 });
