@@ -231,4 +231,34 @@ describe('toolkitOrderApi', () => {
       await expect(fetchPropertyProductOptions('')).rejects.toThrow('酒店单位 unitId 不能为空');
     });
   });
+
+  describe('unwrapPlatformEnvelope and real payload handling', () => {
+    it('correctly unwraps nested { code: 200, data: ... } structure', async () => {
+      mockRequest.mockResolvedValueOnce({
+        code: 200,
+        data: {
+          records: [{ id: '99', otaOrderId: 'OT-99', status: 'FAILED' }],
+          total: 1,
+          current: 1,
+          size: 20,
+        },
+      });
+
+      const res = await fetchToolkitOrders({ page: 1 });
+      expect(res.total).toBe(1);
+      expect(res.records).toHaveLength(1);
+      expect(res.records[0].otaOrderId).toBe('OT-99');
+    });
+
+    it('throws when platform returns business error envelope (code !== 200 and code !== 0)', async () => {
+      mockRequest.mockResolvedValueOnce({
+        code: 500,
+        msg: '文旅中台服务处理超时',
+      });
+
+      await expect(fetchToolkitOrders({ page: 1 })).rejects.toThrow(
+        '平台接口返回业务错误: 文旅中台服务处理超时'
+      );
+    });
+  });
 });

@@ -16,6 +16,38 @@ export const ORDER_ENDPOINTS = {
 } as const;
 
 /**
+ * 安全解包平台返回的数据信封（支持 { code: 200, data: ... } 或直接响应实体）
+ * 严格遵循 Fail-Fast 原则：遇到后端业务 code 异常立即抛错阻断
+ */
+export function unwrapPlatformEnvelope<T = Record<string, unknown>>(body: unknown): T {
+  if (!body || typeof body !== 'object') {
+    return (body as T) || ({} as T);
+  }
+
+  const envelope = body as Record<string, unknown>;
+  if (
+    envelope.success === false ||
+    (envelope.code !== undefined &&
+      envelope.code !== null &&
+      String(envelope.code) !== '0' &&
+      String(envelope.code) !== '200')
+  ) {
+    const errorMsg =
+      (typeof envelope.msg === 'string' && envelope.msg) ||
+      (typeof envelope.message === 'string' && envelope.message) ||
+      (typeof envelope.error === 'string' && envelope.error) ||
+      `业务状态异常 (code: ${envelope.code})`;
+    throw new Error(`平台接口返回业务错误: ${errorMsg}`);
+  }
+
+  if ('data' in envelope && envelope.data !== undefined && envelope.data !== null) {
+    return envelope.data as T;
+  }
+
+  return envelope as T;
+}
+
+/**
  * 纯函数：将远程中台订单对象归一化为标准的 ToolkitOrder 实体
  */
 export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrder {
@@ -53,7 +85,7 @@ export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrde
       departure,
       roomType: String(booking.roomType || raw.roomType || '').trim(),
       roomTypeId: booking.roomTypeId ? String(booking.roomTypeId).trim() : undefined,
-      rateCode: String(booking.rateCode || raw.rateCode || '').trim(),
+      rateCode: String(booking.rateCode || booking.ratePlanCode || raw.rateCode || '').trim(),
       paytype: String(booking.paytype || raw.paytype || '').trim(),
       nights,
       quantity,
@@ -61,16 +93,16 @@ export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrde
       pricing,
     },
     status: rawStatus,
-    errorMessage: raw.errorMessage ? String(raw.errorMessage) : undefined,
-    pmsOrderId: raw.pmsOrderId ? String(raw.pmsOrderId) : undefined,
-    remark: raw.remark ? String(raw.remark) : undefined,
-    updatedAt: raw.updatedAt ? String(raw.updatedAt) : undefined,
+    errorMessage: raw.errorMessage || raw.error ? String(raw.errorMessage || raw.error).trim() : undefined,
+    pmsOrderId: raw.pmsOrderId || raw.confirmationNo ? String(raw.pmsOrderId || raw.confirmationNo).trim() : undefined,
+    remark: raw.remark || raw.remarks ? String(raw.remark || raw.remarks).trim() : undefined,
+    updatedAt: raw.updatedAt ? String(raw.updatedAt).trim() : undefined,
     allowedActions: getAllowedOrderActions(rawStatus),
   };
 }
 
 /**
- * 分页查询文旅中台订单列表
+ * 分页查询文旅中台订单列表 (GET /toolkit/orders)
  */
 export async function fetchToolkitOrders(
   filters: Partial<ToolkitOrderFilters> = {}
@@ -89,21 +121,23 @@ export async function fetchToolkitOrders(
   const queryString = queryParams.toString();
   const url = `${ORDER_ENDPOINTS.ORDERS}${queryString ? `?${queryString}` : ''}`;
 
-  const response = await requestPlatformApi<{
-    records?: Record<string, unknown>[];
-    list?: Record<string, unknown>[];
-    items?: Record<string, unknown>[];
-    total?: number;
-    current?: number;
-    page?: number;
-    size?: number;
-  }>(url);
+  const response = await requestPlatformApi<unknown>(url);
+  const envelope = unwrapPlatformEnvelope<Record<string, unknown>>(response);
 
-  const rawList = response.records || response.list || response.items || (Array.isArray(response) ? response : []);
+  const rawList = Array.isArray(envelope)
+    ? envelope
+    : Array.isArray(envelope.records)
+    ? envelope.records
+    : Array.isArray(envelope.list)
+    ? envelope.list
+    : Array.isArray(envelope.items)
+    ? envelope.items
+    : [];
+
   const records = rawList.map((item) => normalizeToolkitOrder(item as Record<string, unknown>));
-  const total = Number(response.total) || records.length;
-  const page = Number(response.current || response.page) || filters.page || 1;
-  const pageSize = Number(response.size) || filters.pageSize || 20;
+  const total = Number(envelope.total) || records.length;
+  const page = Number(envelope.current || envelope.page) || filters.page || 1;
+  const pageSize = Number(envelope.size || envelope.pageSize) || filters.pageSize || 20;
 
   return {
     records,
@@ -114,31 +148,27 @@ export async function fetchToolkitOrders(
 }
 
 /**
- * 获取文旅订单 4 项核心统计指标
+ * 获取文旅订单 4 项核心统计指标 (GET /toolkit/orders/statistics)
  */
 export async function fetchToolkitStatistics(): Promise<ToolkitOrderStatistics> {
-  const data = await requestPlatformApi<{
-    todayTotal?: number;
-    todayCount?: number;
-    pendingCount?: number;
-    successCount?: number;
-    failedCount?: number;
-  }>(ORDER_ENDPOINTS.STATISTICS);
+  const response = await requestPlatformApi<unknown>(ORDER_ENDPOINTS.STATISTICS);
+  const data = unwrapPlatformEnvelope<Record<string, unknown>>(response);
 
   return {
-    today: Number(data.todayTotal ?? data.todayCount ?? 0),
-    pending: Number(data.pendingCount ?? 0),
-    success: Number(data.successCount ?? 0),
-    failed: Number(data.failedCount ?? 0),
+    today: Number(data.todayTotal ?? data.todayCount ?? data.today ?? 0),
+    pending: Number(data.pendingCount ?? data.pending ?? 0),
+    success: Number(data.successCount ?? data.success ?? 0),
+    failed: Number(data.failedCount ?? data.failed ?? 0),
   };
 }
 
 /**
- * 获取单笔订单详情
+ * 获取单笔订单详情 (GET /toolkit/orders/:id)
  */
 export async function fetchToolkitOrderDetails(id: string): Promise<ToolkitOrder> {
   if (!id?.trim()) throw new Error('订单 ID 不能为空');
-  const raw = await requestPlatformApi<Record<string, unknown>>(`${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(id.trim())}`);
+  const response = await requestPlatformApi<unknown>(`${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(id.trim())}`);
+  const raw = unwrapPlatformEnvelope<Record<string, unknown>>(response);
   return normalizeToolkitOrder(raw);
 }
 
@@ -196,15 +226,12 @@ export async function fetchPropertyProductOptions(
   const query = new URLSearchParams({ unitId: unitId.trim() });
   if (unitType) query.set('unitType', unitType.trim());
 
-  const data = await requestPlatformApi<{
-    roomTypes?: Array<{ code: string; name: string }>;
-    rateCodes?: Array<{ rateCode: string; name: string }>;
-    reservationTypes?: Array<{ code: string; name: string }>;
-  }>(`${ORDER_ENDPOINTS.OPTIONS}?${query.toString()}`);
+  const response = await requestPlatformApi<unknown>(`${ORDER_ENDPOINTS.OPTIONS}?${query.toString()}`);
+  const data = unwrapPlatformEnvelope<Record<string, unknown>>(response);
 
   return {
-    roomTypes: Array.isArray(data.roomTypes) ? data.roomTypes : [],
-    rateCodes: Array.isArray(data.rateCodes) ? data.rateCodes : [],
-    reservationTypes: Array.isArray(data.reservationTypes) ? data.reservationTypes : [],
+    roomTypes: Array.isArray(data.roomTypes) ? (data.roomTypes as Array<{ code: string; name: string }>) : [],
+    rateCodes: Array.isArray(data.rateCodes) ? (data.rateCodes as Array<{ rateCode: string; name: string }>) : [],
+    reservationTypes: Array.isArray(data.reservationTypes) ? (data.reservationTypes as Array<{ code: string; name: string }>) : [],
   };
 }
