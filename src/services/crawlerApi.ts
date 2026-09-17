@@ -2,7 +2,6 @@ import type {
   HotelCrawlRequest,
   HotelCrawlResult,
   CollectorLogPayload,
-  ProfileSyncResult,
 } from '../crawler/types';
 
 export interface CrawlerApiResponse extends HotelCrawlResult {

@@ -147,7 +147,7 @@ export const EditOrderDrawer: React.FC<EditOrderDrawerProps> = ({
     return pricing.reduce((sum, item) => sum + (Number(item.price) || 0), 0) * (quantity || 1);
   }, [pricing, quantity]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
     if (!order) return;
 

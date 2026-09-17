@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { LoggerService } from '../../src/services/logger';
 import { SystemLogEntry } from '../../src/types';
 
