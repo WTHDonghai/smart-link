@@ -1,5 +1,6 @@
 import { PlatformAuthTokens, PlatformDeviceCodeInfo, PlatformTokenState } from '../types';
 import { formatBaseUrl, joinApiUrl } from '../utils/url';
+import { logger } from './logger';
 
 export const PLATFORM_OAUTH_CLIENT_ID = 'TOOLS';
 export const PLATFORM_OAUTH_SCOPE = 'all';
@@ -68,9 +69,15 @@ export function getPlatformBaseUrl(): string {
     if (url) return url;
   }
 
+  const electronUrl =
+    typeof window !== 'undefined'
+      ? (window as unknown as { electron?: { env?: { platformBaseUrl?: string } } }).electron?.env?.platformBaseUrl
+      : undefined;
+
   const envUrl =
     (typeof process !== 'undefined' && process.env?.VITE_PLATFORM_BASE_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL);
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL) ||
+    electronUrl;
 
   if (!envUrl || !envUrl.trim()) {
     throw new Error('未配置平台接口基础地址，请在环境变量中配置 VITE_PLATFORM_BASE_URL');
@@ -384,6 +391,13 @@ export class PlatformAuthService {
       if (classified.terminal) {
         clearTokensFromStorage();
       }
+      logger.track('AUTH_TOKEN_REFRESH', {
+        module: 'AUTH',
+        level: 'ERROR',
+        message: `[Auth] 平台访问凭证 (AccessToken) 自动续期失败: ${errMsg}`,
+        details: `终端错误: ${classified.terminal} | 状态码: ${response.status}`,
+        meta: { terminal: classified.terminal, statusCode: response.status }
+      });
       throw classified;
     }
 
@@ -401,6 +415,13 @@ export class PlatformAuthService {
     };
 
     saveTokensToStorage(newTokens);
+    logger.track('AUTH_TOKEN_REFRESH', {
+      module: 'AUTH',
+      level: 'INFO',
+      message: `[Auth] 平台访问凭证 (AccessToken) 自动续期成功`,
+      details: `有效租户: ${newTokens.tenantId} | 有效期: ${expiresIn}s`,
+      meta: { tenantId: newTokens.tenantId, expiresIn }
+    });
     return newTokens;
   }
 

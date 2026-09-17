@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
+import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../src/crawler/types';
 
 /**
  * 桌面端预加载 API 契约
@@ -7,7 +7,7 @@ import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
  */
 export interface ElectronCrawlerApi {
   collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
-  syncProfile?(channelCode?: string): Promise<{ success: boolean; message?: string }>;
+  syncProfile?(channelCode?: string): Promise<ProfileSyncResult>;
 }
 
 export interface ElectronDutyApi {
@@ -44,4 +44,7 @@ const dutyApi: ElectronDutyApi = {
 contextBridge.exposeInMainWorld('electron', {
   crawler: crawlerApi,
   duty: dutyApi,
+  env: {
+    platformBaseUrl: process.env.VITE_PLATFORM_BASE_URL || '',
+  },
 });

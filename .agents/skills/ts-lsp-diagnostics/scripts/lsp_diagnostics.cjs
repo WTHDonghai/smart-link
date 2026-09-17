@@ -166,6 +166,10 @@ TypeScript Language Service (LSP) 深度诊断探针
     projectDir
   );
   parsedCommandLine.options.declaration = true;
+  parsedCommandLine.options.emitDeclarationOnly = true;
+  parsedCommandLine.options.noEmit = false;
+  parsedCommandLine.options.noUnusedLocals = true;
+  parsedCommandLine.options.noUnusedParameters = true;
 
   // 确定待诊断的目标文件
   let targetFiles = [];
@@ -219,6 +223,7 @@ TypeScript Language Service (LSP) 深度诊断探针
     readDirectory: ts.sys.readDirectory,
     directoryExists: ts.sys.directoryExists,
     getDirectories: ts.sys.getDirectories,
+    writeFile: () => {},
   };
 
   const documentRegistry = ts.createDocumentRegistry();
@@ -234,6 +239,20 @@ TypeScript Language Service (LSP) 深度诊断探针
   if (!isJson) {
     console.log(`\n${colors.bold}${colors.cyan}🔍 正在执行 TypeScript Language Service (LSP) 深度诊断...${colors.reset}`);
     console.log(`${colors.gray}配置: ${path.relative(cwd, tsConfigPath)} | 模式: ${mode} | 待检文件数: ${targetFiles.length}${colors.reset}\n`);
+  }
+
+  // 检查全局与编译配置级诊断
+  const compilerOptionsDiags = service.getCompilerOptionsDiagnostics();
+  const globalDiags = service.getProgram()?.getGlobalDiagnostics() || [];
+  const systemDiags = [...compilerOptionsDiags, ...globalDiags];
+  if (systemDiags.length > 0) {
+    report.errorCount += systemDiags.length;
+    for (const diag of systemDiags) {
+      const msg = flattenDiagnosticMessage(diag.messageText);
+      if (!isJson) {
+        console.log(`${colors.red}✗ ${colors.bold}[Compiler Configuration Error] TS${diag.code}: ${msg}${colors.reset}\n`);
+      }
+    }
   }
 
   for (const filePath of targetFiles) {

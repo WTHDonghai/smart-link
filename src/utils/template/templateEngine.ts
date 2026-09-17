@@ -11,26 +11,26 @@ import {
   tokenizeExpr,
 } from './evaluator';
 
-interface ASTTextNode {
+export interface ASTTextNode {
   type: 'TEXT';
   content: string;
 }
 
-interface ASTVariableNode {
+export interface ASTVariableNode {
   type: 'VARIABLE';
-  raw: string;
+  raw?: string;
   variableKey: string;
   filters: { name: string; arg?: string }[];
 }
 
-interface ASTIfBlockNode {
+export interface ASTIfBlockNode {
   type: 'IF_BLOCK';
   condition: string;
   consequent: ASTNode[];
-  alternate?: ASTNode[];
+  alternate?: ASTNode[] | undefined;
 }
 
-type ASTNode = ASTTextNode | ASTVariableNode | ASTIfBlockNode;
+export type ASTNode = ASTTextNode | ASTVariableNode | ASTIfBlockNode;
 
 /**
  * 将模板分词并构建为抽象语法树 (AST)
@@ -49,43 +49,54 @@ export function parseTemplate(template: string): ASTNode[] {
       }
 
       // 1. 条件分支起始: {{#if ...}}
-      if (template.startsWith('{{#if ', index) || template.startsWith('{{#if}}', index)) {
-        const closeIdx = template.indexOf('}}', index);
-        if (closeIdx === -1) {
-          throw new Error(`[Template Compile Error] 未闭合的 {{#if 标签 (位置 ${index})`);
-        }
-        const condition = template.slice(index + 5, closeIdx).trim();
-        if (!condition) {
-          throw new Error(`[Template Compile Error] {{#if}} 条件表达式不能为空 (位置 ${index})`);
-        }
-        try {
-          validateExpression(condition);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new Error(`[Template Compile Error] 条件表达式语法错误: ${message}`);
-        }
-        index = closeIdx + 2;
+      if (template.startsWith('{{#if', index)) {
+        const afterIfIdx = index + 5;
+        const afterChar = template[afterIfIdx];
+        if (
+          afterChar === ' ' ||
+          afterChar === '\t' ||
+          afterChar === '\n' ||
+          afterChar === '(' ||
+          afterChar === '}' ||
+          afterChar === undefined
+        ) {
+          const closeIdx = template.indexOf('}}', index);
+          if (closeIdx === -1) {
+            throw new Error(`[Template Compile Error] 未闭合的 {{#if 标签 (位置 ${index})`);
+          }
+          const condition = template.slice(afterIfIdx, closeIdx).trim();
+          if (!condition) {
+            throw new Error(`[Template Compile Error] {{#if}} 条件表达式不能为空 (位置 ${index})`);
+          }
+          try {
+            validateExpression(condition);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(`[Template Compile Error] 条件表达式语法错误: ${message}`);
+          }
+          index = closeIdx + 2;
 
-        const consequent = parseBlock();
+          const consequent = parseBlock();
 
-        let alternate: ASTNode[] | undefined = undefined;
-        if (template.startsWith('{{#else}}', index)) {
-          index += 9; // 跳过 {{#else}}
-          alternate = parseBlock();
+          let alternate: ASTNode[] | undefined = undefined;
+          if (template.startsWith('{{#else}}', index)) {
+            index += 9; // 跳过 {{#else}}
+            alternate = parseBlock();
+          }
+
+          if (!template.startsWith('{{/if}}', index)) {
+            throw new Error(`[Template Compile Error] {{#if ${condition}}} 缺少匹配的闭合标签 {{/if}}`);
+          }
+          index += 7; // 跳过 {{/if}}
+
+          nodes.push({
+            type: 'IF_BLOCK',
+            condition,
+            consequent,
+            alternate,
+          });
+          continue;
         }
-
-        if (!template.startsWith('{{/if}}', index)) {
-          throw new Error(`[Template Compile Error] {{#if ${condition}}} 缺少匹配的闭合标签 {{/if}}`);
-        }
-        index += 7; // 跳过 {{/if}}
-
-        nodes.push({
-          type: 'IF_BLOCK',
-          condition,
-          consequent,
-          alternate,
-        });
-        continue;
       }
 
       // 2. 双大括号变量与过滤器: {{ variable | filter }}
@@ -98,7 +109,7 @@ export function parseTemplate(template: string): ASTNode[] {
         index = closeIdx + 2;
 
         const parts = inner.split('|').map((s) => s.trim());
-        const variableKey = parts[0];
+        const variableKey = parts[0] ?? '';
         const filters = parts.slice(1).map((f) => {
           const colonIdx = f.indexOf(':');
           if (colonIdx !== -1) {
@@ -126,7 +137,7 @@ export function parseTemplate(template: string): ASTNode[] {
         if (closeIdx !== -1 && !template.slice(index, closeIdx).includes('\n')) {
           const variableKey = template.slice(index + 1, closeIdx).trim();
           // 如果里面不含操作符且是常规标识符/中文
-          if (variableKey && !/[#/>=<!|]/.test(variableKey)) {
+          if (variableKey && !/[#\/>=<!|]/.test(variableKey)) {
             nodes.push({
               type: 'VARIABLE',
               raw: `{${variableKey}}`,
@@ -149,7 +160,7 @@ export function parseTemplate(template: string): ASTNode[] {
 
       if (nextSpecial === index) {
         // 单个非变量的 '{'
-        nodes.push({ type: 'TEXT', content: template[index] });
+        nodes.push({ type: 'TEXT', content: template[index] ?? '' });
         index++;
       } else {
         const textChunk = template.slice(index, nextSpecial);
@@ -186,7 +197,7 @@ function renderNodes(nodes: ASTNode[], context: Record<string, unknown>): string
 
       // 1. 尝试直接从 context 取值 (支持中文键或英文标识符)
       let val: unknown = undefined;
-      if (Object.prototype.hasOwnProperty.call(context, node.variableKey)) {
+      if (Object.hasOwn(context, node.variableKey)) {
         val = context[node.variableKey];
       } else {
         // 2. 尝试深层安全点路径 (如 data.orderId)
@@ -200,10 +211,15 @@ function renderNodes(nodes: ASTNode[], context: Record<string, unknown>): string
         }
       }
 
-      const formattedVal = Array.isArray(val)
-        ? val.filter((v) => v !== null && v !== undefined && v !== '').join('、')
-        : String(val);
-      result += val !== null && val !== undefined ? formattedVal : '';
+      if (val !== null && val !== undefined) {
+        if (Array.isArray(val)) {
+          result += val.filter((v) => v !== null && v !== undefined && v !== '').join('、');
+        } else if (typeof val === 'object') {
+          result += JSON.stringify(val);
+        } else {
+          result += String(val);
+        }
+      }
     } else if (node.type === 'IF_BLOCK') {
       const conditionPassed = evaluateCondition(node.condition, context);
       if (conditionPassed) {
@@ -270,7 +286,7 @@ export function extractTemplateVariables(
     const ast = parseTemplate(template);
     const vars = new Set<string>();
 
-    function walk(nodes: ASTNode[]) {
+    const walk = (nodes: ASTNode[]): void => {
       for (const node of nodes) {
         if (node.type === 'VARIABLE') {
           if (node.variableKey) {
@@ -295,7 +311,7 @@ export function extractTemplateVariables(
           if (node.alternate) walk(node.alternate);
         }
       }
-    }
+    };
 
     walk(ast);
     return Array.from(vars);

@@ -6,6 +6,7 @@ import {
   resolveMeituanTargetUrl,
   extractMeituanStoresFromResponses,
   normalizeMeituanHotelCandidates,
+  parseMeituanDropdownItem,
   RawMeituanStoreItem,
 } from './meituanStoreMapper';
 import { updateVisualTrackerStatus, visualClickLocator } from '../../visualTracker';
@@ -192,33 +193,37 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
       await page.waitForTimeout(1000);
       await updateVisualTrackerStatus(page, '📋 正在扫描展开的门店列表候选...', 'info');
 
-      // 在浏览器上下文中提取展开的门店树
-      const stores = await page.evaluate(() => {
-        const results: Array<{ poiId: string; partnerId: string; name: string }> = [];
-        const rows = Array.from(document.querySelectorAll('.poi-select-item, [class*="poi-drop"] li, [class*="poi-select-item"]'));
+      // 在浏览器上下文中提取展开的门店树原始元数据
+      const rawDomItems = await page.evaluate(() => {
+        const rows = Array.from<Element>(
+          document.querySelectorAll('.poi-select-item, [class*="poi-drop"] li, [class*="poi-select-item"]')
+        );
 
-        for (const row of rows) {
-          const text = (row.textContent || '').trim();
-          const idMatch = text.match(/\b\d{5,}\b/);
-          if (idMatch) {
-            const poiId = idMatch[0];
-            const nameEl = row.querySelector('.ellipsis__real-box, [class*="left"], [class*="name"]') || row;
-            let name = (nameEl.textContent || '')
-              .replace(/\b\d{5,}\b/g, '')
-              .replace(/授权|已经到底了/g, '')
-              .trim();
-
-            if (poiId && name) {
-              results.push({
-                poiId,
-                partnerId: '',
-                name,
-              });
-            }
-          }
-        }
-        return results;
+        return rows.map((row) => {
+          const nameEl = row.querySelector('.ellipsis__real-box, [class*="left"], [class*="name"]');
+          return {
+            fullText: (row.textContent || '').trim(),
+            nameText: (nameEl?.textContent || '').trim(),
+            poiId:
+              row.getAttribute('data-poi-id') ||
+              row.getAttribute('data-id') ||
+              row.getAttribute('data-poiid') ||
+              undefined,
+            partnerId:
+              row.getAttribute('data-partner-id') ||
+              row.getAttribute('data-partnerid') ||
+              undefined,
+          };
+        });
       });
+
+      const stores: RawMeituanStoreItem[] = [];
+      for (const item of rawDomItems) {
+        const parsed = parseMeituanDropdownItem(item);
+        if (parsed) {
+          stores.push(parsed);
+        }
+      }
 
       return stores.map((s) => ({
         poiId: s.poiId,

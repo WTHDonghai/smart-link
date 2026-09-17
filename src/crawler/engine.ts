@@ -1,6 +1,6 @@
 import type { HotelCrawlRequest, HotelCrawlResult, CollectorLogPayload } from './types';
 import { hotelCollectorRegistry } from './registry';
-import { createPersistentBrowserSession } from './browserManager';
+import { createPersistentBrowserSession, type BrowserSession } from './browserManager';
 
 export class HotelCollectionEngine {
   private activeChannelJobs = new Set<string>();
@@ -55,7 +55,7 @@ export class HotelCollectionEngine {
       message: `[CrawlerEngine] 采集目标地址: ${targetUrl}`,
     });
 
-    let session;
+    let session: BrowserSession | undefined;
     try {
       const isHeadless = request.headless ?? (process.env.PLAYWRIGHT_HEADLESS === 'true');
       log({

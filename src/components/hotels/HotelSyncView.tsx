@@ -18,6 +18,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import type { HotelMapping } from '../../types';
+import { logger } from '../../services/logger';
 import { SearchableSelect } from '../common/SearchableSelect';
 import { EmptyState } from '../common/EmptyState';
 import { StatusBadge } from '../common/StatusBadge';
@@ -157,6 +158,15 @@ export const HotelSyncView: React.FC = () => {
       });
       const channelParam = filterChannel === 'all' ? undefined : filterChannel;
       dispatch(fetchHotelMappingsThunk(channelParam));
+
+      logger.track('HOTEL_SYNC_SUCCESS', {
+        module: 'HOTEL',
+        level: 'INFO',
+        channelId: hotel.otaChannelId,
+        message: `[HotelSync] 已保存酒店映射「${hotel.otaHotelName}」-> ${pmsName} (${pmsId})`,
+        details: `OTA酒店ID: ${hotel.otaHotelId} | PMS酒店ID: ${pmsId}`,
+        meta: { otaHotelId: hotel.otaHotelId, pmsHotelId: pmsId }
+      });
     }
   };
 
@@ -174,6 +184,13 @@ export const HotelSyncView: React.FC = () => {
   const handleStartCrawl = async () => {
     if (isScraping || !selectedCrawlChannel || !activeChannel) return;
     const channelCode = (activeChannel.code || activeChannel.id).trim().toUpperCase();
+
+    logger.track('PLAYWRIGHT_WORKER_START', {
+      module: 'PLAYWRIGHT',
+      level: 'PLAYWRIGHT',
+      message: `[Playwright:Crawler] 启动渠道 ${channelCode} 自动化采集任务`,
+      details: `渠道: ${activeChannel.name} (${channelCode})`,
+    });
 
     dispatch(
       crawlHotelsByChannel({

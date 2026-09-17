@@ -1,8 +1,18 @@
-import type { HotelCrawlRequest, HotelCrawlResult } from '../crawler/types';
-import { executeHotelCrawl, type CrawlerApiResponse } from './crawlerApi';
+import type {
+  HotelCrawlRequest,
+  HotelCrawlResult,
+  ProfileSyncResult,
+} from '../crawler/types';
+import {
+  executeHotelCrawl,
+  requestSyncChromeProfile,
+  type CrawlerApiResponse,
+  type ProfileSyncResponseData,
+} from './crawlerApi';
 
 export interface ElectronCrawlerApi {
   collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
+  syncProfile?(channelCode?: string): Promise<ProfileSyncResult>;
 }
 
 interface WindowWithElectron {
@@ -47,3 +57,29 @@ export async function collectHotelsByChannel(
   // 2. 默认走本地 Vite HTTP 采集服务
   return executeHotelCrawl(request);
 }
+
+/**
+ * 统一 Chrome 登录态同步网关 (Unified Profile Sync Bridge)
+ * 优先调用 Electron IPC，回退至本地 HTTP 网关
+ */
+export async function syncChromeProfileByChannel(
+  channelCode = 'MEITUAN'
+): Promise<ProfileSyncResponseData> {
+  const code = (channelCode || 'MEITUAN').trim().toUpperCase();
+
+  // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as WindowWithElectron;
+    if (win.electron?.crawler?.syncProfile) {
+      const result = await win.electron.crawler.syncProfile(code);
+      if (!result.success) {
+        throw new Error(result.message || `同步「${code}」Chrome 登录态失败`);
+      }
+      return result;
+    }
+  }
+
+  // 2. 默认走本地 Vite HTTP 采集服务
+  return requestSyncChromeProfile(code);
+}
+

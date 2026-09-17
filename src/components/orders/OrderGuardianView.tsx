@@ -16,6 +16,7 @@ import {
 } from '../../store/slices/orderGuardianSlice';
 import type { ToolkitOrder, ToolkitOrderDraft } from '../../types';
 import { ChannelDutyPanel } from './ChannelDutyPanel';
+import { logger } from '../../services/logger';
 import { OrderStatsCards } from './OrderStatsCards';
 import { OrderFilterBar } from './OrderFilterBar';
 import { OrderTable } from './OrderTable';
@@ -126,6 +127,15 @@ export const OrderGuardianView: React.FC = () => {
   };
 
   const handleImport = (order: ToolkitOrder) => {
+    logger.track('ORDER_TRANSFER_PMS_SUCCESS', {
+      module: 'ORDER',
+      level: 'INFO',
+      channelId: order.otaChannel,
+      orderNo: order.otaOrderId,
+      message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderId}`,
+      details: `酒店: ${order.unitName} | 房型: ${order.booking.roomType} | 客人: ${order.contact.name}`,
+      meta: { otaOrderId: order.otaOrderId, pmsOrderId: order.pmsOrderId, price: order.booking.totalPrice },
+    });
     void dispatch(executeOrderActionThunk({ id: order.id, action: 'IMPORT' }));
   };
 
@@ -136,6 +146,13 @@ export const OrderGuardianView: React.FC = () => {
       message: `确定要删除 OTA 订单「${order.otaOrderId}」吗？此操作不可逆。`,
       isDanger: true,
       onConfirm: () => {
+        logger.track('ORDER_DELETE_CONFIRM', {
+          module: 'ORDER',
+          level: 'WARN',
+          channelId: order.otaChannel,
+          orderNo: order.otaOrderId,
+          message: `[OrderGuardian] 用户确认删除失败订单 ${order.otaOrderId}`,
+        });
         void dispatch(executeOrderActionThunk({ id: order.id, action: 'DELETE' }));
       },
     });
@@ -148,12 +165,26 @@ export const OrderGuardianView: React.FC = () => {
       message: `确定要在中台发起取消订单「${order.otaOrderId}」吗？`,
       isDanger: false,
       onConfirm: () => {
+        logger.track('ORDER_CANCEL_CONFIRM', {
+          module: 'ORDER',
+          level: 'INFO',
+          channelId: order.otaChannel,
+          orderNo: order.otaOrderId,
+          message: `[OrderGuardian] 用户发起取消中台订单 ${order.otaOrderId}`,
+        });
         void dispatch(executeOrderActionThunk({ id: order.id, action: 'CANCEL' }));
       },
     });
   };
 
   const handleSaveDraft = (id: string, draft: ToolkitOrderDraft) => {
+    logger.track('ORDER_DRAFT_SAVE', {
+      module: 'ORDER',
+      level: 'INFO',
+      orderNo: draft.otaOrderId,
+      message: `[OrderGuardian] 用户保存订单草稿 ${draft.otaOrderId}`,
+      details: `房型: ${draft.booking.roomType} | 房价码: ${draft.booking.rateCode} | 入住人: ${draft.contact.name}`,
+    });
     void dispatch(saveOrderDraftThunk({ id, draft }));
   };
 

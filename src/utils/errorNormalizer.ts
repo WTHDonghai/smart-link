@@ -216,6 +216,20 @@ export function normalizeAppError(
     };
   }
 
+  // 3.3 自动化环境依赖：未找到系统安装的 Chrome 可执行文件
+  if (
+    lowerMsg.includes("executable doesn't exist") ||
+    lowerMsg.includes('cannot find chrome') ||
+    (lowerMsg.includes('failed to launch') && lowerMsg.includes('chrome'))
+  ) {
+    return {
+      ...ERROR_DICTIONARY.CRAWLER_CHROME_NOT_FOUND,
+      rawMessage,
+      statusCode,
+      timestamp,
+    };
+  }
+
   // 4. 系统与网络域特征匹配
   // 4.1 HTTP 404 资源或服务接口未找到
   if (

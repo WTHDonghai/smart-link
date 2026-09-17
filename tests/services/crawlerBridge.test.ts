@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { collectHotelsByChannel } from '../../src/services/crawlerBridge';
+import {
+  collectHotelsByChannel,
+  syncChromeProfileByChannel,
+} from '../../src/services/crawlerBridge';
 import type { HotelCrawlResult, HotelCrawlDiagnostics } from '../../src/crawler/types';
 
 describe('crawlerBridge (collectHotelsByChannel)', () => {
@@ -165,6 +168,82 @@ describe('crawlerBridge (collectHotelsByChannel)', () => {
       await expect(collectHotelsByChannel('MEITUAN')).rejects.toThrow(
         '网关内部错误：浏览器进程崩溃'
       );
+    });
+  });
+
+  describe('syncChromeProfileByChannel', () => {
+    it('在 Electron 原生环境下应优先通过 IPC 执行并返回同步数据', async () => {
+      const mockSyncResult = {
+        success: true,
+        sourceDir: '/Users/test/Chrome/Default',
+        sourceProfile: 'Default',
+        targetDir: '/Users/test/.chrome-profile/meituan',
+        message: '同步成功',
+      };
+
+      const syncProfileMock = vi.fn().mockResolvedValue(mockSyncResult);
+
+      (window as unknown as { electron: { crawler: { syncProfile: typeof syncProfileMock } } }).electron = {
+        crawler: {
+          syncProfile: syncProfileMock,
+        },
+      };
+
+      const result = await syncChromeProfileByChannel('meituan');
+
+      expect(syncProfileMock).toHaveBeenCalledTimes(1);
+      expect(syncProfileMock).toHaveBeenCalledWith('MEITUAN');
+      expect(result.success).toBe(true);
+      expect(result.sourceProfile).toBe('Default');
+    });
+
+    it('在 Electron 原生环境下若同步失败，必须 Fail-Fast 抛出错误', async () => {
+      const mockFailedResult = {
+        success: false,
+        message: '未在系统 Chrome 中找到配置文件 Local State',
+      };
+
+      const syncProfileMock = vi.fn().mockResolvedValue(mockFailedResult);
+
+      (window as unknown as { electron: { crawler: { syncProfile: typeof syncProfileMock } } }).electron = {
+        crawler: {
+          syncProfile: syncProfileMock,
+        },
+      };
+
+      await expect(syncChromeProfileByChannel('MEITUAN')).rejects.toThrow(
+        '未在系统 Chrome 中找到配置文件 Local State'
+      );
+    });
+
+    it('在 Web 纯浏览器环境下应平滑回退走 HTTP POST /api/crawler/profile/sync', async () => {
+      const mockApiResponse = {
+        success: true,
+        data: {
+          success: true,
+          sourceDir: '/Users/test/Chrome/Default',
+          sourceProfile: 'Default',
+          targetDir: '/Users/test/.chrome-profile/meituan',
+          message: 'HTTP 同步成功',
+        },
+      };
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockApiResponse,
+      });
+      global.fetch = fetchMock;
+
+      const result = await syncChromeProfileByChannel(' meituan ');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, requestOptions] = fetchMock.mock.calls[0];
+      expect(url).toBe('/api/crawler/profile/sync');
+      expect(requestOptions.method).toBe('POST');
+
+      const parsedBody = JSON.parse(requestOptions.body as string);
+      expect(parsedBody.channelCode).toBe('MEITUAN');
+      expect(result.message).toBe('HTTP 同步成功');
     });
   });
 });

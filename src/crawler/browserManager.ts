@@ -21,8 +21,9 @@ export interface BrowserSession {
 export async function createPersistentBrowserSession(
   options: LaunchBrowserOptions
 ): Promise<BrowserSession> {
+  const baseDir = process.env.SMARTLINK_USER_DATA_DIR || process.cwd();
   const profileDir = path.resolve(
-    process.cwd(),
+    baseDir,
     '.chrome-profile',
     options.channelCode.trim().toLowerCase()
   );

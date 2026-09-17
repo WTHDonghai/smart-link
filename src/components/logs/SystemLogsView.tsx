@@ -4,8 +4,7 @@ import {
   setFilterLevel, 
   setFilterSearch, 
   toggleAutoScroll, 
-  clearLogs, 
-  addLog 
+  clearLogs 
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { 
@@ -15,7 +14,6 @@ import {
   Download, 
   Play, 
   Pause, 
-  RefreshCw,
   X
 } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
@@ -58,18 +56,6 @@ export const SystemLogsView: React.FC = () => {
       title: '系统日志导出完成',
       description: '已保存至本地文件',
       type: 'success'
-    }));
-  };
-
-  const handleTriggerCrawlerPing = () => {
-    dispatch(addLog({
-      level: 'PLAYWRIGHT',
-      channelId: 'meituan',
-      message: '[Playwright:ManualPing] Injected polling script to active Chromium worker. Session verified (200 OK).'
-    }));
-    dispatch(showToast({
-      title: '已发送 Playwright 探活探针',
-      type: 'info'
     }));
   };
 
@@ -126,15 +112,6 @@ export const SystemLogsView: React.FC = () => {
                 <span>自动滚动: 关</span>
               </>
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTriggerCrawlerPing}
-            className="h-8.5 px-3 bg-white border border-[#dce9ff] text-[#004ac6] hover:bg-[#eff4ff] rounded-lg text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>心跳探针</span>
           </button>
 
           <button

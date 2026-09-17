@@ -150,5 +150,35 @@ describe('profileSync', () => {
       expect(targetLocalState.profile.last_used).toBe('Default');
       expect(targetLocalState.profile.info_cache.Default.name).toBe('SmartLink Test User');
     });
+
+    it('should respect SMARTLINK_USER_DATA_DIR env variable for target directory', () => {
+      const customUserData = createTempDir('electron-user-data-');
+      process.env.SMARTLINK_USER_DATA_DIR = customUserData;
+
+      const sourceRoot = createTempDir('chrome-source-env-');
+      const activeProfileName = 'Profile 1';
+      const localStateContent = {
+        profile: {
+          last_used: activeProfileName,
+          info_cache: {},
+        },
+      };
+      fs.writeFileSync(path.join(sourceRoot, 'Local State'), JSON.stringify(localStateContent), 'utf8');
+      const profileDir = path.join(sourceRoot, activeProfileName);
+      fs.mkdirSync(profileDir, { recursive: true });
+
+      try {
+        const result = syncChromeProfile({
+          customSourceDir: sourceRoot,
+          channelCode: 'MEITUAN',
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.targetDir).toBe(path.resolve(customUserData, '.chrome-profile', 'meituan'));
+        expect(fs.existsSync(result.targetDir)).toBe(true);
+      } finally {
+        delete process.env.SMARTLINK_USER_DATA_DIR;
+      }
+    });
   });
 });
