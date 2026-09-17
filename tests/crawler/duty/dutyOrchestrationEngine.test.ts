@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DutyOrchestrationEngine } from '../../../src/crawler/duty/dutyOrchestrationEngine';
-import type { ChannelDutyRunner, DutyTaskExecutionResult } from '../../../src/crawler/duty/dutyContracts';
+import type {
+  ChannelDutyRunner,
+  DutyTaskExecutionResult,
+  DutyUnhandledOrderSummary,
+  ExtractedOrderDetail,
+} from '../../../src/crawler/duty/dutyContracts';
 import type { DutyClaimedTask } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
@@ -29,6 +34,24 @@ class MockChannelRunner implements ChannelDutyRunner {
   public async stop(): Promise<void> {
     this.running = false;
     this.stopCalls++;
+  }
+
+  public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
+    return [];
+  }
+
+  public async inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail> {
+    return {
+      otaOrderId,
+      otaChannel: this.channelCode,
+      guestName: '测试客人',
+      roomTypeName: '标准间',
+      arrival: '2026-09-20',
+      departure: '2026-09-21',
+      nights: 1,
+      quantity: 1,
+      totalPrice: 200,
+    };
   }
 
   public async executeTask(task: DutyClaimedTask): Promise<DutyTaskExecutionResult> {
@@ -199,9 +222,18 @@ describe('dutyOrchestrationEngine', () => {
       expect(submitSpy).toHaveBeenCalledWith(
         'task-test-claim-1',
         expect.objectContaining({
-          taskId: 'task-test-claim-1',
-          status: 'SUCCEEDED',
-          result: { imported: true },
+          station: 'st-unit-test-1',
+          leaseToken: 'lease-tok-1',
+          businessType: 'OTA_MIGRATION',
+          businessId: 'MT-CLAIM-1',
+          scope: 'INTERFACE',
+          status: 'SUCCESS',
+          details: [
+            expect.objectContaining({
+              businessId: 'MT-CLAIM-1',
+              status: 'SUCCESS',
+            }),
+          ],
         })
       );
     });
@@ -252,7 +284,6 @@ describe('dutyOrchestrationEngine', () => {
             expect.objectContaining({
               msgType: 'OTA_CANCEL_ORDER',
               businessId: 'ORD-102',
-              unitId: 'H-1',
             }),
           ],
         })
@@ -297,7 +328,7 @@ describe('dutyOrchestrationEngine', () => {
       expect(claimLog?.apiParams).toEqual({
         stationId: 'st-unit-test-1',
         appId: 'smart-link',
-        direction: 'FORWARD',
+        direction: 'INBOUND',
       });
       expect(claimLog?.apiResponse).toEqual(task);
 
@@ -315,11 +346,26 @@ describe('dutyOrchestrationEngine', () => {
       expect(resultLog?.apiUrl).toBe('/toolkit/toolbox/tasks/task-log-test-1/result');
       expect(resultLog?.apiMethod).toBe('PUT');
       expect(resultLog?.apiParams).toEqual({
-        taskId: 'task-log-test-1',
-        status: 'SUCCEEDED',
-        result: { pmsOrderId: 'PMS-9988' },
-        errorCode: undefined,
-        errorMessage: undefined,
+        station: 'st-unit-test-1',
+        leaseToken: 'lease-tok-log-1',
+        businessType: 'OTA_MIGRATION',
+        businessId: 'MT-BIZ-101',
+        scope: 'INTERFACE',
+        status: 'SUCCESS',
+        msgType: 'OTA_IMPORT_ORDER',
+        unitId: undefined,
+        unitType: undefined,
+        direction: undefined,
+        createdTime: undefined,
+        delaySendTime: undefined,
+        details: [
+          {
+            confirmNo: '',
+            businessId: 'MT-BIZ-101',
+            status: 'SUCCESS',
+            ackData: Buffer.from(JSON.stringify({ pmsOrderId: 'PMS-9988' }), 'utf-8').toString('base64'),
+          },
+        ],
       });
       expect(resultLog?.apiResponse).toEqual({ pmsOrderId: 'PMS-9988' });
     });

@@ -501,7 +501,7 @@ export type DutyTaskMessageType =
 export interface DutyTaskClaimRequest {
   stationId: string;
   appId: string;
-  direction?: 'FORWARD' | 'BACKWARD' | 'INBOUND';
+  direction?: 'INBOUND' | 'FORWARD' | 'BACKWARD';
 }
 
 /**
@@ -515,18 +515,48 @@ export interface DutyClaimedTask {
   stationId: string;
   leaseToken: string;
   data: string; // Base64 encoded JSON
+  unitId?: string;
+  unitType?: string;
+  direction?: string;
   createdTime?: string;
+  delaySendTime?: number;
+}
+
+/**
+ * 任务执行状态枚举 (符合文旅中台线缆标准)
+ */
+export type DutyTaskWireStatus = 'SUCCESS' | 'FAIL';
+
+/**
+ * 任务执行结果明细
+ */
+export interface DutyTaskResultDetail {
+  confirmNo?: string;
+  businessId: string;
+  status: DutyTaskWireStatus;
+  ackData?: string; // Base64 encoded JSON
 }
 
 /**
  * 任务执行结果提交载荷 (PUT /toolkit/toolbox/tasks/:id/result)
  */
 export interface DutyTaskResultPayload {
-  taskId: string;
-  status: 'SUCCEEDED' | 'FAILED';
-  result?: Record<string, unknown>;
-  errorCode?: string;
+  station: string;
+  leaseToken: string;
+  businessType: string; // 固定 'OTA_MIGRATION'
+  businessId: string;
+  scope: 'INTERFACE';
+  status: DutyTaskWireStatus;
+  msgType?: string;
+  unitId?: string;
+  unitType?: string;
+  direction?: string;
+  createdTime?: string;
+  delaySendTime?: number;
+  details: DutyTaskResultDetail[];
   errorMessage?: string;
+  retryable?: boolean;
+  retryDelayMillis?: number;
 }
 
 /**
@@ -537,10 +567,63 @@ export interface DutyTaskCreationBatch {
   appId: string;
   items: Array<{
     msgType: 'OTA_IMPORT_ORDER' | 'OTA_CANCEL_ORDER';
+    businessType?: string; // 固定 'OTA_MIGRATION'
     businessId: string;
     unitId?: string;
-    data: unknown;
+    data: string | unknown; // Base64 编码字符串或原始业务对象 (在 API 层转为 Base64)
   }>;
+}
+
+/**
+ * 文旅中台订单导入联系人结构
+ */
+export interface ImportOrderContact {
+  name: string;
+  mobile: string;
+}
+
+/**
+ * 文旅中台订单导入按日价格明细
+ */
+export interface ImportOrderPricing {
+  date: string; // YYYY-MM-DD
+  price: number; // 元
+}
+
+/**
+ * 文旅中台订单导入预订结构
+ */
+export interface ImportOrderBooking {
+  roomType: string;
+  originRoomType?: string;
+  rateCode: string;
+  arrival: string; // YYYY-MM-DD
+  departure: string; // YYYY-MM-DD
+  roomTypeId: string;
+  nights: number;
+  quantity: number;
+  totalPrice: number;
+  paytype: string;
+  pricing: ImportOrderPricing[];
+}
+
+/**
+ * 文旅中台订单导入订单项
+ */
+export interface ImportOrder {
+  otaOrderId: string;
+  otaChannel: string;
+  contact: ImportOrderContact;
+  booking: ImportOrderBooking;
+  remark: string;
+}
+
+/**
+ * 提交订单导入文旅中台载荷 (POST /toolkit/orders/import)
+ */
+export interface ImportPayload {
+  extUnitCode: string | null;
+  orders: ImportOrder[];
 }
 
 export interface PlatformAuthTokens {

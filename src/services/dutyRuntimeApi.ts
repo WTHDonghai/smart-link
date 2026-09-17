@@ -11,6 +11,7 @@ import type {
   DutyTaskCreationBatch,
   SystemLogEntry,
   PlatformAuthTokens,
+  ImportPayload,
 } from '../types';
 
 export const DUTY_ENDPOINTS = {
@@ -103,6 +104,7 @@ export async function reportDutyActualState(payload: ActualStateReportPayload): 
 
 /**
  * 全局 Long Polling 认领一条中台任务 (POST /toolkit/toolbox/task-claims)
+ * 线缆约束：direction 固定为 'INBOUND'
  */
 export async function claimDutyTask(
   payload: DutyTaskClaimRequest,
@@ -114,7 +116,7 @@ export async function claimDutyTask(
     body: JSON.stringify({
       stationId: payload.stationId,
       appId: payload.appId,
-      direction: payload.direction || 'FORWARD',
+      direction: 'INBOUND',
     }),
   });
   const unwrapped = unwrapDutyEnvelope<Record<string, unknown>>(res);
@@ -126,17 +128,40 @@ export async function claimDutyTask(
 
 /**
  * 批量提交下游订单任务 (POST /toolkit/toolbox/tasks)
+ * 线缆约束：
+ * - items[].businessType 固定为 'OTA_MIGRATION'
+ * - items[].data 必须为 Base64 编码的 UTF-8 JSON 字符串
+ * - OTA_CANCEL_ORDER 不发送 unitId
  */
 export async function createDutyTasks(payload: DutyTaskCreationBatch): Promise<void> {
+  const wirePayload = {
+    stationId: payload.stationId,
+    appId: payload.appId,
+    items: payload.items.map((item) => {
+      const dataStr =
+        typeof item.data === 'string'
+          ? item.data
+          : Buffer.from(JSON.stringify(item.data ?? {}), 'utf-8').toString('base64');
+      return {
+        ...(item.msgType === 'OTA_IMPORT_ORDER' && item.unitId ? { unitId: item.unitId } : {}),
+        msgType: item.msgType,
+        businessType: item.businessType || 'OTA_MIGRATION',
+        businessId: item.businessId,
+        data: dataStr,
+      };
+    }),
+  };
+
   const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASKS, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(wirePayload),
   });
   unwrapDutyEnvelope(res);
 }
 
 /**
  * 提交任务最终执行结果 (PUT /toolkit/toolbox/tasks/:id/result)
+ * 线缆约束：由中台后端 DTO 规定，包含 scope: 'INTERFACE'、station、leaseToken、status ('SUCCESS' | 'FAIL') 及 details[]
  */
 export async function submitDutyTaskResult(
   taskId: string,
@@ -151,16 +176,42 @@ export async function submitDutyTaskResult(
 
 /**
  * 直接提交订单导入文旅中台 (POST /toolkit/orders/import)
+ * 线缆约束：入参遵循标准 ImportPayload 契约 (含 extUnitCode 与 orders[{ contact, booking, remark }])
  */
-export async function importToolkitOrder(payload: unknown): Promise<{ success: boolean; pmsOrderId?: string }> {
+export async function importToolkitOrder(
+  payload: ImportPayload
+): Promise<{ success: boolean; pmsOrderId?: string; confirmationNo?: string; batchId?: string }> {
   const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.ORDER_IMPORT, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   const data = unwrapDutyEnvelope<Record<string, unknown>>(res);
+  const orders = Array.isArray(data?.orders)
+    ? (data.orders as Array<Record<string, unknown>>)
+    : Array.isArray(data?.items)
+      ? (data.items as Array<Record<string, unknown>>)
+      : [];
+  const firstOrder = orders[0] || {};
   return {
     success: true,
-    pmsOrderId: typeof data?.pmsOrderId === 'string' ? data.pmsOrderId : undefined,
+    pmsOrderId:
+      typeof firstOrder.pmsOrderId === 'string'
+        ? firstOrder.pmsOrderId
+        : typeof data?.pmsOrderId === 'string'
+          ? data.pmsOrderId
+          : undefined,
+    confirmationNo:
+      typeof firstOrder.confirmationNo === 'string'
+        ? firstOrder.confirmationNo
+        : typeof data?.confirmationNo === 'string'
+          ? data.confirmationNo
+          : undefined,
+    batchId:
+      typeof data?.importBatchId === 'string'
+        ? data.importBatchId
+        : typeof data?.batchId === 'string'
+          ? data.batchId
+          : undefined,
   };
 }
 

@@ -139,7 +139,7 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
         });
       });
 
-      const closeSessionsSpy = vi.spyOn(browserManager, 'closeAllBrowserSessions').mockResolvedValue();
+      vi.spyOn(browserManager, 'closeAllBrowserSessions').mockResolvedValue();
 
       const startTime = Date.now();
       // 传入 50ms 超时阈值

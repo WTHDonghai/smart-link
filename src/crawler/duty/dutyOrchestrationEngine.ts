@@ -5,6 +5,9 @@ import type {
   StationIdentity,
   ActualStateReportPayload,
   SystemLogEntry,
+  DutyTaskResultPayload,
+  DutyTaskWireStatus,
+  DutyTaskCreationBatch,
 } from '../../types';
 import type { ChannelDutyRunner } from './dutyContracts';
 import { MeituanDutyRunner } from './meituanDutyRunner';
@@ -18,6 +21,9 @@ import {
 } from '../../services/dutyRuntimeApi';
 import { registerApiLogListener } from '../../services/platformApi';
 import { logger } from '../../services/logger';
+import { dispatchDutyTask } from './dutyTaskDispatcher';
+
+export { dispatchDutyTask };
 
 export class DutyOrchestrationEngine {
   private runners = new Map<string, ChannelDutyRunner>();
@@ -426,6 +432,13 @@ export class DutyOrchestrationEngine {
             targetChannel = String(parsed.otaChannelCode).trim().toUpperCase();
           } else if (parsed.channel) {
             targetChannel = String(parsed.channel).trim().toUpperCase();
+          } else if (
+            Array.isArray(parsed.orders) &&
+            parsed.orders[0] &&
+            typeof parsed.orders[0] === 'object' &&
+            'otaChannel' in (parsed.orders[0] as Record<string, unknown>)
+          ) {
+            targetChannel = String((parsed.orders[0] as Record<string, unknown>).otaChannel).trim().toUpperCase();
           }
         } catch {
           // 容错默认当前首选渠道
@@ -446,7 +459,7 @@ export class DutyOrchestrationEngine {
           apiParams: {
             stationId: identity.stationId,
             appId: identity.appId,
-            direction: 'FORWARD',
+            direction: 'INBOUND',
           },
           apiResponse: task,
           httpStatus: 200,
@@ -457,6 +470,38 @@ export class DutyOrchestrationEngine {
         const runner = this.runners.get(targetChannel);
         if (!runner || !runner.isRunning()) {
           const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
+          const ackDataFail = Buffer.from(
+            JSON.stringify({
+              errorCode: 'CHANNEL_RUNNER_UNAVAILABLE',
+              errorMessage: failureMsg,
+            }),
+            'utf-8'
+          ).toString('base64');
+
+          const unavailResultPayload: DutyTaskResultPayload = {
+            station: identity.stationId,
+            leaseToken: task.leaseToken,
+            businessType: 'OTA_MIGRATION',
+            businessId: task.businessId,
+            scope: 'INTERFACE',
+            status: 'FAIL',
+            msgType: task.msgType,
+            unitId: task.unitId,
+            unitType: task.unitType,
+            direction: task.direction,
+            createdTime: task.createdTime,
+            delaySendTime: task.delaySendTime,
+            errorMessage: failureMsg,
+            details: [
+              {
+                confirmNo: '',
+                businessId: task.businessId,
+                status: 'FAIL',
+                ackData: ackDataFail,
+              },
+            ],
+          };
+
           this.appendDutyLog({
             level: 'ERROR',
             module: 'DUTY_TASK',
@@ -468,23 +513,13 @@ export class DutyOrchestrationEngine {
             channelId: targetChannel,
             apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
             apiMethod: 'PUT',
-            apiParams: {
-              taskId: task.id,
-              status: 'FAILED',
-              errorCode: 'CHANNEL_RUNNER_UNAVAILABLE',
-              errorMessage: failureMsg,
-            },
+            apiParams: unavailResultPayload,
             apiResponse: { success: false, error: failureMsg },
             message: `[任务结果 RESULT] 任务 ${task.msgType} 执行失败: ${failureMsg} (ID: ${task.id})`,
             details: failureMsg,
           });
 
-          await submitDutyTaskResult(task.id, {
-            taskId: task.id,
-            status: 'FAILED',
-            errorCode: 'CHANNEL_RUNNER_UNAVAILABLE',
-            errorMessage: failureMsg,
-          });
+          await submitDutyTaskResult(task.id, unavailResultPayload);
           continue;
         }
 
@@ -505,11 +540,59 @@ export class DutyOrchestrationEngine {
         });
 
         const startTime = Date.now();
-        const execRes = await runner.executeTask(task);
+        const execRes =
+          typeof runner.executeTask === 'function'
+            ? await runner.executeTask(task)
+            : await dispatchDutyTask(task, runner);
         const durationMs = Date.now() - startTime;
 
         // 3. 任务执行完成与结果日志 (RESULT)
         const isSuccess = execRes.status === 'SUCCEEDED';
+        const wireStatus: DutyTaskWireStatus = isSuccess ? 'SUCCESS' : 'FAIL';
+        const confirmationNo =
+          isSuccess && execRes.result
+            ? String(
+                execRes.result.confirmationNo ||
+                  execRes.result.confirmNo ||
+                  execRes.result.confirmationNumber ||
+                  ''
+              )
+            : '';
+
+        const ackData = isSuccess
+          ? Buffer.from(JSON.stringify(execRes.result ?? {}), 'utf-8').toString('base64')
+          : Buffer.from(
+              JSON.stringify({
+                errorCode: execRes.errorCode || 'TASK_EXECUTION_FAILED',
+                errorMessage: execRes.errorMessage || '执行失败',
+              }),
+              'utf-8'
+            ).toString('base64');
+
+        const resultPayload: DutyTaskResultPayload = {
+          station: identity.stationId,
+          leaseToken: task.leaseToken,
+          businessType: 'OTA_MIGRATION',
+          businessId: task.businessId,
+          scope: 'INTERFACE',
+          status: wireStatus,
+          msgType: task.msgType,
+          unitId: task.unitId,
+          unitType: task.unitType,
+          direction: task.direction,
+          createdTime: task.createdTime,
+          delaySendTime: task.delaySendTime,
+          ...(isSuccess ? {} : { errorMessage: execRes.errorMessage || '执行失败' }),
+          details: [
+            {
+              confirmNo: confirmationNo,
+              businessId: task.businessId,
+              status: wireStatus,
+              ackData,
+            },
+          ],
+        };
+
         this.appendDutyLog({
           level: isSuccess ? 'SUCCESS' : 'ERROR',
           module: 'DUTY_TASK',
@@ -523,18 +606,12 @@ export class DutyOrchestrationEngine {
           durationMs,
           apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
           apiMethod: 'PUT',
-          apiParams: {
-            taskId: task.id,
-            status: execRes.status,
-            result: execRes.result,
-            errorCode: execRes.errorCode,
-            errorMessage: execRes.errorMessage,
-          },
+          apiParams: resultPayload,
           apiResponse: execRes.result,
           message: `[任务结果 RESULT] 任务 ${task.msgType} 执行${isSuccess ? '成功' : '失败'} (ID: ${task.id})`,
           details: isSuccess
-            ? `耗时: ${durationMs}ms | 状态: SUCCEEDED${execRes.result ? ` | 结果: ${JSON.stringify(execRes.result)}` : ''}`
-            : `状态: FAILED | 错误代码: ${execRes.errorCode || '-'} | 错误信息: ${execRes.errorMessage || '未知异常'}`,
+            ? `耗时: ${durationMs}ms | 状态: SUCCESS${execRes.result ? ` | 结果: ${JSON.stringify(execRes.result)}` : ''}`
+            : `状态: FAIL | 错误代码: ${execRes.errorCode || '-'} | 错误信息: ${execRes.errorMessage || '未知异常'}`,
         });
 
         // 如果是采集任务且有发现订单，批量创建下游任务
@@ -542,19 +619,42 @@ export class DutyOrchestrationEngine {
           const orders = execRes.result.orders as Array<{ orderId: string; hotelId?: string; cancelOrder?: boolean }>;
           if (orders.length > 0) {
             try {
+              const channelCode = targetChannel.toLowerCase();
+              const creationItems: DutyTaskCreationBatch['items'] = orders.map((o) => {
+                if (o.cancelOrder) {
+                  return {
+                    msgType: 'OTA_CANCEL_ORDER',
+                    businessType: 'OTA_MIGRATION',
+                    businessId: o.orderId,
+                    data: {
+                      channel: channelCode,
+                      reason: '待处理取消订单',
+                    },
+                  };
+                } else {
+                  return {
+                    msgType: 'OTA_IMPORT_ORDER',
+                    businessType: 'OTA_MIGRATION',
+                    businessId: o.orderId,
+                    unitId: o.hotelId || undefined,
+                    data: {
+                      channel: channelCode,
+                      extUnitCode: o.hotelId || '',
+                      orders: [
+                        {
+                          otaOrderId: o.orderId,
+                          otaChannel: targetChannel.toUpperCase(),
+                        },
+                      ],
+                    },
+                  };
+                }
+              });
+
               await createDutyTasks({
                 stationId: identity.stationId,
                 appId: identity.appId,
-                items: orders.map((o) => ({
-                  msgType: o.cancelOrder ? 'OTA_CANCEL_ORDER' : 'OTA_IMPORT_ORDER',
-                  businessId: o.orderId,
-                  unitId: o.hotelId,
-                  data: {
-                    channel: targetChannel,
-                    otaOrderId: o.orderId,
-                    extUnitCode: o.hotelId,
-                  },
-                })),
+                items: creationItems,
               });
 
               this.appendDutyLog({
@@ -570,12 +670,7 @@ export class DutyOrchestrationEngine {
                 apiParams: {
                   stationId: identity.stationId,
                   appId: identity.appId,
-                  items: orders.map((o) => ({
-                    msgType: o.cancelOrder ? 'OTA_CANCEL_ORDER' : 'OTA_IMPORT_ORDER',
-                    businessId: o.orderId,
-                    unitId: o.hotelId,
-                    channel: targetChannel,
-                  })),
+                  items: creationItems,
                 },
                 apiResponse: { success: true, count: orders.length },
                 message: `[下游派发] 发现 ${orders.length} 个订单，已批量创建下游中台处理任务`,
@@ -608,13 +703,7 @@ export class DutyOrchestrationEngine {
         }
 
         this.coordinatorStatus = 'REPORTING';
-        await submitDutyTaskResult(task.id, {
-          taskId: task.id,
-          status: execRes.status,
-          result: execRes.result,
-          errorCode: execRes.errorCode,
-          errorMessage: execRes.errorMessage,
-        });
+        await submitDutyTaskResult(task.id, resultPayload);
 
         this.appendDutyLog({
           level: 'INFO',
@@ -623,21 +712,15 @@ export class DutyOrchestrationEngine {
           taskActionStage: 'RESULT',
           msgType: task.msgType,
           taskId: task.id,
-          taskStatus: execRes.status,
+          taskStatus: isSuccess ? 'SUCCEEDED' : 'FAILED',
           channelId: targetChannel,
           apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
           apiMethod: 'PUT',
-          apiParams: {
-            taskId: task.id,
-            status: execRes.status,
-            result: execRes.result,
-            errorCode: execRes.errorCode,
-            errorMessage: execRes.errorMessage,
-          },
+          apiParams: resultPayload,
           apiResponse: { success: true },
           httpStatus: 200,
           message: `[回执提交] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
-          details: `回执状态: ${execRes.status}`,
+          details: `回执状态: ${wireStatus}`,
         });
 
         this.coordinatorStatus = 'IDLE';
