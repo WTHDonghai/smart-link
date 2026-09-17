@@ -24,9 +24,44 @@ export function normalizeRemoteHotelMapping(
   rawItem: Record<string, unknown>,
   defaultChannelCode?: string
 ): HotelMapping {
-  const otaChannelCode = String(
-    rawItem.otaChannelCode || defaultChannelCode || ''
+  const rawChannelCode = String(
+    rawItem.otaChannelCode ||
+      rawItem.channelCode ||
+      rawItem.otaChannel ||
+      rawItem.channel ||
+      rawItem.platformCode ||
+      rawItem.otaCode ||
+      defaultChannelCode ||
+      ''
   ).trim().toUpperCase();
+
+  // 规范化渠道代码与统一渠道 ID（支持 MEITUAN、MEITUAN_BIZ、DOUYIN 等主流渠道识别）
+  let otaChannelCode = rawChannelCode;
+  let otaChannelId = rawChannelCode.toLowerCase();
+
+  const stripped = rawChannelCode.replace(/[-_]/g, '');
+  if (stripped === 'MEITUANBIZ' || stripped === 'MEITUANBUSINESS' || stripped === 'MTBIZ') {
+    otaChannelCode = 'MEITUAN_BIZ';
+    otaChannelId = 'meituanbiz';
+  } else if (stripped === 'MEITUAN' || stripped === 'MEITUANHOTEL' || stripped === 'MT') {
+    otaChannelCode = 'MEITUAN';
+    otaChannelId = 'meituan';
+  } else if (stripped === 'DOUYIN' || stripped === 'DOUYINLIFE' || stripped === 'DY') {
+    otaChannelCode = 'DOUYIN';
+    otaChannelId = 'douyin';
+  } else if (stripped === 'CTRIP' || stripped === 'XIECHENG') {
+    otaChannelCode = 'CTRIP';
+    otaChannelId = 'ctrip';
+  } else if (stripped === 'FLIGGY' || stripped === 'FEIZHU') {
+    otaChannelCode = 'FLIGGY';
+    otaChannelId = 'fliggy';
+  } else if (stripped === 'TONGCHENG') {
+    otaChannelCode = 'TONGCHENG';
+    otaChannelId = 'tongcheng';
+  } else if (stripped === 'QUNAR') {
+    otaChannelCode = 'QUNAR';
+    otaChannelId = 'qunar';
+  }
 
   const otaHotelId = String(
     rawItem.extUnitCode ||
@@ -65,7 +100,7 @@ export function normalizeRemoteHotelMapping(
   return {
     id: mappingId ? String(mappingId) : `hm-remote-${otaChannelCode}-${otaHotelId}`,
     mappingId: mappingId ? String(mappingId) : undefined,
-    otaChannelId: otaChannelCode.toLowerCase(),
+    otaChannelId,
     otaChannelCode,
     otaHotelId,
     extUnitCode: otaHotelId,

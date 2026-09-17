@@ -58,6 +58,13 @@ export interface OTAChannel {
   storeCrawlUrl?: string;
 }
 
+export interface ChannelMeta {
+  name: string;
+  short: string;
+  bgColor: string;
+  textColor: string;
+}
+
 export interface HotelMapping {
   id: string;
   mappingId?: string;

@@ -151,13 +151,13 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
   {
     id: 'meituanbiz',
     name: '美团商旅',
-    code: 'MEITUANBIZ',
+    code: 'MEITUAN_BIZ',
     short: '商',
     bgColor: 'bg-[#eef2ff]',
     textColor: 'text-[#004ac6]',
     targetSystem: 'meituanbiz',
     targetSystemOptions: [
-      { val: 'meituanbiz', label: '美团商旅 (MEITUANBIZ)' },
+      { val: 'meituanbiz', label: '美团商旅 (MEITUAN_BIZ)' },
       { val: 'meituanbiz_vip', label: '美团企业采购 VIP (MEITUAN_CORP)' }
     ],
     remarkTemplate: '【企业商旅协议】OTA单号:{OTA订单号} | 企业统一结算 | {入住人} | 请提供增值税专用发票',
@@ -663,12 +663,15 @@ export const channelSlice = createSlice({
 
         // 1. 若远程已配置某些渠道映射（如携程、同程等）且未在当前列表中，自动补齐展示
         for (const mapping of action.payload.mappings) {
+          const mCode = mapping.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
           const exists = state.channels.some(
-            c => c.code.toUpperCase() === mapping.otaChannelCode.toUpperCase()
+            c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
+                 c.id.toUpperCase().replace(/[-_]/g, '') === mCode
           );
           if (!exists) {
             const catalogItem = ALL_CHANNELS_CATALOG.find(
-              c => c.code.toUpperCase() === mapping.otaChannelCode.toUpperCase()
+              c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
+                   c.id.toUpperCase().replace(/[-_]/g, '') === mCode
             );
             if (catalogItem) {
               const savedSchema = getSavedProtocolSchema(catalogItem.id);
@@ -712,8 +715,13 @@ export const channelSlice = createSlice({
 
         // 2. 将远程真实映射数据匹配更新到 channels 中
         for (const ch of state.channels) {
+          const chCode = ch.code.toUpperCase().replace(/[-_]/g, '');
+          const chId = ch.id.toUpperCase().replace(/[-_]/g, '');
           const mapping = action.payload.mappings.find(
-            m => m.otaChannelCode.toUpperCase() === ch.code.toUpperCase()
+            m => {
+              const mCode = m.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
+              return mCode === chCode || mCode === chId;
+            }
           );
           if (mapping) {
             ch.channelId = mapping.channelId;

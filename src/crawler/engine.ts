@@ -25,10 +25,10 @@ export class HotelCollectionEngine {
       throw new Error(errorMsg);
     }
 
-    const targetUrl = collector.resolveTargetUrl(request.targetUrl);
+    const targetUrl = collector.defaultTargetUrl;
     log({
       level: 'INFO',
-      message: `[CrawlerEngine] 采集目标地址解析完成: ${targetUrl}`,
+      message: `[CrawlerEngine] 采集目标地址: ${targetUrl}`,
     });
 
     let session;

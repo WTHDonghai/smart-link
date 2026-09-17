@@ -1,7 +1,6 @@
 export interface HotelCrawlRequest {
   channelId: string;
   channelCode?: string;
-  targetUrl: string;
   headless?: boolean;
   timeoutMs?: number;
   waitMs?: number;

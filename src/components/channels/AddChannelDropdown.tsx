@@ -4,6 +4,7 @@ import { ALL_CHANNELS_CATALOG, addChannelById } from '../../store/slices/channel
 import { showToast } from '../../store/slices/appSlice';
 import { addLog } from '../../store/slices/systemLogSlice';
 import { Plus, ChevronDown, Check, PlusCircle } from 'lucide-react';
+import { ChannelBadge } from '../common/ChannelBadge';
 
 export const AddChannelDropdown: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -76,9 +77,7 @@ export const AddChannelDropdown: React.FC = () => {
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg ${ch.bgColor} ${ch.textColor} flex items-center justify-center font-bold text-sm shadow-2xs shrink-0`}>
-                      {ch.short}
-                    </div>
+                    <ChannelBadge channel={ch} size="md" className="shadow-2xs" showTooltip={false} />
                     <div className="flex flex-col leading-tight">
                       <span className={`text-sm font-medium text-[#0b1c30] ${!isAdded ? 'group-hover:text-[#004ac6]' : ''}`}>
                         {ch.name}

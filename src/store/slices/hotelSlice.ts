@@ -19,6 +19,8 @@ export interface HotelState {
   isScraping: boolean;
   isFetching: boolean;
   isSaving: boolean;
+  savingHotelId: string | null;
+  deletingHotelId: string | null;
   crawlStatus: CrawlStatus;
   crawlError: string | null;
   fetchError: string | null;
@@ -37,12 +39,14 @@ const initialState: HotelState = {
   isScraping: false,
   isFetching: false,
   isSaving: false,
+  savingHotelId: null,
+  deletingHotelId: null,
   crawlStatus: 'idle',
   crawlError: null,
   fetchError: null,
   filterChannel: 'all',
   searchKeyword: '',
-  selectedCrawlChannel: 'meituan',
+  selectedCrawlChannel: '',
   lastCrawlSummary: null,
   hotels: [],
   pmsProperties: [],
@@ -289,7 +293,6 @@ export const crawlHotelsByChannel = createAsyncThunk<
   },
   {
     channelId: string;
-    targetUrl: string;
     headless?: boolean;
     timeoutMs?: number;
     waitMs?: number;
@@ -301,13 +304,12 @@ export const crawlHotelsByChannel = createAsyncThunk<
       addLog({
         level: 'PLAYWRIGHT',
         channelId: param.channelId,
-        message: `[Crawler] 发起渠道「${param.channelId}」门店自动化采集: ${param.targetUrl}`,
+        message: `[Crawler] 发起渠道「${param.channelId}」门店自动化采集`,
       })
     );
 
     const result = await executeHotelCrawl({
       channelId: param.channelId,
-      targetUrl: param.targetUrl,
       headless: param.headless,
       timeoutMs: param.timeoutMs,
       waitMs: param.waitMs,
@@ -477,11 +479,13 @@ export const hotelSlice = createSlice({
         state.fetchError = action.payload || '获取门店映射列表失败';
       })
       // 保存门店映射 Thunk
-      .addCase(saveHotelMappingThunk.pending, (state) => {
+      .addCase(saveHotelMappingThunk.pending, (state, action) => {
         state.isSaving = true;
+        state.savingHotelId = action.meta.arg.id;
       })
       .addCase(saveHotelMappingThunk.fulfilled, (state, action) => {
         state.isSaving = false;
+        state.savingHotelId = null;
         const target = state.hotels.find(
           (h) =>
             h.id === action.payload.id ||
@@ -507,14 +511,22 @@ export const hotelSlice = createSlice({
       })
       .addCase(saveHotelMappingThunk.rejected, (state) => {
         state.isSaving = false;
+        state.savingHotelId = null;
       })
       // 删除门店映射 Thunk
+      .addCase(deleteHotelMappingThunk.pending, (state, action) => {
+        state.deletingHotelId = action.meta.arg.localId;
+      })
       .addCase(deleteHotelMappingThunk.fulfilled, (state, action) => {
+        state.deletingHotelId = null;
         state.hotels = state.hotels.filter(
           (h) =>
             h.id !== action.payload.localId &&
             (!h.mappingId || String(h.mappingId) !== String(action.payload.mappingId))
         );
+      })
+      .addCase(deleteHotelMappingThunk.rejected, (state) => {
+        state.deletingHotelId = null;
       })
       // 获取中台酒店列表 Thunk
       .addCase(fetchPlatformPropertiesThunk.fulfilled, (state, action) => {

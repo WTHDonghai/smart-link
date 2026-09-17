@@ -14,18 +14,24 @@ import {
   Search,
   RefreshCw,
   ChevronDown,
-  Save,
   X,
   CheckCircle2,
-  Trash2,
 } from 'lucide-react';
 import type { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
 import { EmptyState } from '../common/EmptyState';
 import { StatusBadge } from '../common/StatusBadge';
 import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
+import { TableRowActions } from '../common/TableRowActions';
+import { ChannelBadge } from '../common/ChannelBadge';
 import { normalizeAppError } from '../../utils/errorNormalizer';
-import { DEFAULT_MEITUAN_CATALOG_URL } from '../../crawler/collectors/meituan/meituanStoreMapper';
+import {
+  resolveChannelMeta,
+  KNOWN_CHANNEL_METAS,
+  type ChannelMeta,
+} from '../../utils/channelMeta';
+
+export { resolveChannelMeta, KNOWN_CHANNEL_METAS, type ChannelMeta };
 
 export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -34,6 +40,8 @@ export const HotelSyncView: React.FC = () => {
   const isScraping = useAppSelector((state) => state.hotel.isScraping);
   const isFetching = useAppSelector((state) => state.hotel.isFetching);
   const isSaving = useAppSelector((state) => state.hotel.isSaving);
+  const savingHotelId = useAppSelector((state) => state.hotel.savingHotelId);
+  const deletingHotelId = useAppSelector((state) => state.hotel.deletingHotelId);
   const crawlError = useAppSelector((state) => state.hotel.crawlError);
   const fetchError = useAppSelector((state) => state.hotel.fetchError);
   const selectedCrawlChannel = useAppSelector((state) => state.hotel.selectedCrawlChannel);
@@ -51,19 +59,22 @@ export const HotelSyncView: React.FC = () => {
     dispatch(fetchPlatformPropertiesThunk());
   }, [dispatch, filterChannel]);
 
-  // 获取当前选中的采集渠道对象
+  // 获取当前选中的采集渠道对象（无默认预选，未选中时返回 null）
   const activeChannel = useMemo(() => {
-    return channels.find((c) => c.id === selectedCrawlChannel) || channels[0];
+    if (!selectedCrawlChannel) return null;
+    return (
+      channels.find(
+        (c) =>
+          c.id.toLowerCase() === selectedCrawlChannel.toLowerCase() ||
+          (c.code && c.code.toUpperCase() === selectedCrawlChannel.toUpperCase()) ||
+          c.id.replace(/[-_]/g, '').toLowerCase() === selectedCrawlChannel.replace(/[-_]/g, '').toLowerCase()
+      ) || null
+    );
   }, [channels, selectedCrawlChannel]);
 
-  // 当前渠道对应的采集目标 URL
-  const currentChannelTargetUrl = useMemo(() => {
-    if (activeChannel?.storeCrawlUrl) return activeChannel.storeCrawlUrl;
-    if (activeChannel?.id === 'meituan' || activeChannel?.id === 'meituanbiz') {
-      return DEFAULT_MEITUAN_CATALOG_URL;
-    }
-    return 'https://me.meituan.com/ebooking/merchant/product/batch-price';
-  }, [activeChannel]);
+  // 是否禁用采集按钮：未明确选择渠道、找不到渠道或当前正在采集中
+  const isStartDisabled = !selectedCrawlChannel || !activeChannel || isScraping;
+
 
   // 渠道选项列表（用于列表筛选）
   const channelOptions = useMemo(() => [
@@ -84,10 +95,16 @@ export const HotelSyncView: React.FC = () => {
     }));
   }, [channels]);
 
-  // 过滤后的酒店/门店列表
+  // 过滤后的酒店/门店列表（智能兼容渠道 ID 与 CODE 规范化匹配）
   const filteredHotels = useMemo(() => {
     return hotels.filter((h) => {
-      const matchesChannel = filterChannel === 'all' || h.otaChannelId === filterChannel;
+      const matchesChannel =
+        filterChannel === 'all' ||
+        h.otaChannelId?.toLowerCase() === filterChannel.toLowerCase() ||
+        h.otaChannelCode?.toUpperCase() === filterChannel.toUpperCase() ||
+        h.otaChannelId?.replace(/[-_]/g, '').toLowerCase() === filterChannel.replace(/[-_]/g, '').toLowerCase() ||
+        h.otaChannelCode?.replace(/[-_]/g, '').toLowerCase() === filterChannel.replace(/[-_]/g, '').toLowerCase();
+
       const matchesKeyword =
         !searchKeyword ||
         h.otaHotelName.toLowerCase().includes(searchKeyword.toLowerCase()) ||
@@ -148,12 +165,11 @@ export const HotelSyncView: React.FC = () => {
   };
 
   const handleStartCrawl = async () => {
-    if (isScraping) return;
+    if (isScraping || !selectedCrawlChannel || !activeChannel) return;
 
     dispatch(
       crawlHotelsByChannel({
-        channelId: selectedCrawlChannel,
-        targetUrl: currentChannelTargetUrl,
+        channelId: activeChannel.id,
       })
     );
   };
@@ -184,48 +200,57 @@ export const HotelSyncView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. 核心操作面板：渠道选择与启动采集 */}
+      {/* 2. 核心操作面板：渠道选择与启动采集紧密联动 */}
       <div className="bg-white rounded-xl shadow-xs border border-[#dce9ff] p-4 flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* 采集渠道选择 */}
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-[#434655] whitespace-nowrap">
               采集渠道:
             </span>
-            <div className="w-48">
+            <div className="w-52">
               <SearchableSelect
                 value={selectedCrawlChannel}
                 onChange={(val) => {
                   dispatch(setSelectedCrawlChannel(val));
                 }}
                 options={crawlChannelOptions}
-                placeholder="选择采集渠道"
+                placeholder="请选择采集渠道..."
                 size="sm"
+                disabled={isScraping}
                 buttonClassName="font-semibold text-[#004ac6]"
               />
             </div>
           </div>
 
-          {/* 右侧动作区：采集主行动按钮 */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={handleStartCrawl}
-              disabled={isScraping}
-              className={`h-9 px-4 rounded-lg text-white font-semibold text-xs shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-2 ${
-                isScraping
-                  ? 'bg-[#2170e4] cursor-wait opacity-85'
-                  : 'bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80]'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
-              <span>
-                {isScraping
-                  ? `正在采集「${activeChannel?.name || 'OTA'}」门店...`
-                  : `启动「${activeChannel?.name || 'OTA'}」门店采集`}
-              </span>
-            </button>
-          </div>
+          {/* 紧邻的动态关联主行动按钮 */}
+          <button
+            type="button"
+            onClick={handleStartCrawl}
+            disabled={isStartDisabled}
+            title={
+              !selectedCrawlChannel
+                ? '请先在左侧选择要采集的渠道'
+                : isScraping
+                ? '采集任务正在运行中...'
+                : `点击立即启动「${activeChannel?.name}」门店采集`
+            }
+            className={`h-9 px-4 rounded-lg font-semibold text-xs shadow-2xs transition-all select-none inline-flex items-center gap-2 ${
+              isStartDisabled && !isScraping
+                ? 'bg-[#f1f5f9] text-[#94a3b8] border border-[#e2e8f0] cursor-not-allowed opacity-85'
+                : isScraping
+                ? 'bg-[#2170e4] text-white cursor-wait opacity-85'
+                : 'bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80] text-white cursor-pointer hover:shadow-xs'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isScraping ? 'animate-spin' : ''}`} />
+            <span>
+              {isScraping
+                ? `正在采集「${activeChannel?.name || ''}」门店...`
+                : activeChannel
+                ? `启动「${activeChannel.name}」门店采集`
+                : '请先选择采集渠道'}
+            </span>
+          </button>
         </div>
 
         {/* 3. 错误状态展示 (FriendlyErrorAlert 智能引导) */}
@@ -344,7 +369,7 @@ export const HotelSyncView: React.FC = () => {
                 <th className="py-2.5 px-4 w-36 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">OTA 门店 ID</th>
                 <th className="py-2.5 px-4 w-28 whitespace-nowrap sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">状态</th>
                 <th className="py-2.5 px-4 min-w-[240px] sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">中台对应酒店</th>
-                <th className="py-2.5 px-6 text-right whitespace-nowrap w-28 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
+                <th className="py-2.5 px-6 text-right whitespace-nowrap w-36 sticky top-0 z-20 bg-[#f8faff] border-b border-[#e5edfa]">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edf3fc] text-sm text-[#0b1c30]">
@@ -361,21 +386,21 @@ export const HotelSyncView: React.FC = () => {
                 </tr>
               ) : (
                 filteredHotels.map((h) => {
-                  const ch = channels.find((c) => c.id === h.otaChannelId);
                   const currentPmsId = selectedPmsMap[h.id] ?? h.pmsHotelId;
                   const options = getHotelOptions(h.pmsHotelId, h.pmsHotelName);
                   const isMapped = !!h.pmsHotelId && h.status === 'mapped';
+                  const isUnsaved = Boolean(
+                    selectedPmsMap[h.id] !== undefined && selectedPmsMap[h.id] !== h.pmsHotelId
+                  );
+                  const isRowSaving = isSaving && savingHotelId === h.id;
+                  const isRowDeleting = deletingHotelId === h.id;
 
                   return (
                     <tr key={h.id} className="hover:bg-[#f8faff] transition-colors">
                       {/* 渠道与门店名称 */}
                       <td className="py-3 px-6 border-b border-[#edf2f9]">
                         <div className="flex items-center gap-2.5">
-                          <div
-                            className={`w-7 h-7 rounded-md ${ch?.bgColor || 'bg-blue-100'} ${ch?.textColor || 'text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0`}
-                          >
-                            {ch?.short || 'OTA'}
-                          </div>
+                          <ChannelBadge channel={h} channels={channels} size="sm" />
                           <div className="flex flex-col">
                             <span className="font-semibold text-xs text-[#0b1c30] select-text">
                               {h.otaHotelName}
@@ -404,10 +429,21 @@ export const HotelSyncView: React.FC = () => {
 
                       {/* 映射状态 */}
                       <td className="py-3 px-4 whitespace-nowrap border-b border-[#edf2f9]">
-                        <StatusBadge
-                          variant={isMapped ? 'success' : 'pending'}
-                          label={isMapped ? '已关联中台' : '待匹配'}
-                        />
+                        {isUnsaved ? (
+                          <StatusBadge
+                            variant="pending"
+                            label="待保存"
+                            icon={true}
+                            size="xs"
+                          />
+                        ) : (
+                          <StatusBadge
+                            variant={isMapped ? 'success' : 'pending'}
+                            label={isMapped ? '已关联中台' : '待匹配'}
+                            icon={isMapped}
+                            size="xs"
+                          />
+                        )}
                       </td>
 
                       {/* 中台对应酒店 - 下拉框 */}
@@ -433,28 +469,17 @@ export const HotelSyncView: React.FC = () => {
 
                       {/* 操作列 */}
                       <td className="py-3 px-6 text-right whitespace-nowrap border-b border-[#edf2f9]">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleSaveRow(h)}
-                            disabled={isSaving}
-                            className="inline-flex items-center justify-center gap-1.5 h-7.5 px-3 text-xs font-medium text-white bg-[#004ac6] hover:bg-[#003da6] rounded-md shadow-2xs transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none disabled:opacity-50"
-                            title="保存门店映射至文旅平台"
-                          >
-                            <Save className="w-3.5 h-3.5 shrink-0" />
-                            <span>保存</span>
-                          </button>
-                          {h.mappingId && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteRow(h)}
-                              className="inline-flex items-center justify-center h-7.5 w-7.5 text-xs font-medium text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md shadow-2xs transition-colors shrink-0 cursor-pointer select-none"
-                              title="删除此门店映射记录"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
+                        <TableRowActions
+                          onSave={() => handleSaveRow(h)}
+                          isSaving={isRowSaving}
+                          isUnsaved={isUnsaved}
+                          saveAriaLabel={`保存 ${h.otaHotelName} 门店映射`}
+                          onDelete={h.mappingId ? () => handleDeleteRow(h) : undefined}
+                          canDelete={Boolean(h.mappingId)}
+                          isDeleting={isRowDeleting}
+                          deleteTitle="删除门店映射"
+                          deleteAriaLabel={`删除 ${h.otaHotelName} 门店映射`}
+                        />
                       </td>
                     </tr>
                   );

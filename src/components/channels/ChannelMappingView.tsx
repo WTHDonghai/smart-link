@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useEffect, useMemo, useCallback } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   fetchChannelMappingData,
@@ -15,8 +15,10 @@ import { AddChannelDropdown } from './AddChannelDropdown';
 import { EmptyState } from '../common/EmptyState';
 import { StatusBadge } from '../common/StatusBadge';
 import { SearchableSelect, type SelectOption } from '../common/SearchableSelect';
+import { TableRowActions } from '../common/TableRowActions';
+import { ChannelBadge } from '../common/ChannelBadge';
 import { normalizeAppError } from '../../utils/errorNormalizer';
-import { Settings, Save, Trash2, RefreshCw, Loader2, CircleAlert } from 'lucide-react';
+import { Settings, RefreshCw, CircleAlert } from 'lucide-react';
 
 export const ChannelMappingView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -28,7 +30,6 @@ export const ChannelMappingView: React.FC = () => {
     savingChannelId,
     error,
   } = useAppSelector((state) => state.channel);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const normalizedError = error ? normalizeAppError(error, 'NET') : null;
 
@@ -171,7 +172,6 @@ export const ChannelMappingView: React.FC = () => {
   const handleDelete = useCallback(
     (channel: OTAChannel) => {
       dispatch(removeChannel(channel.id));
-      setConfirmDeleteId(null);
       dispatch(
         showToast({
           title: `已删除「${channel.name}」渠道`,
@@ -288,11 +288,7 @@ export const ChannelMappingView: React.FC = () => {
                       {/* OTA 渠道 */}
                       <td className="py-3.5 px-6">
                         <div className="flex items-center gap-3">
-                          <div
-                            className={`w-9 h-9 rounded-lg ${ch.bgColor} ${ch.textColor} flex items-center justify-center font-bold text-sm shrink-0`}
-                          >
-                            {ch.short}
-                          </div>
+                          <ChannelBadge channel={ch} size="lg" />
                           <div className="flex flex-col">
                             <div className="flex items-center gap-1.5">
                               <span className="font-semibold text-sm text-[#0b1c30]">
@@ -367,59 +363,17 @@ export const ChannelMappingView: React.FC = () => {
 
                       {/* 操作 */}
                       <td className="py-3.5 px-6 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center justify-end gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleSave(ch)}
-                            disabled={isRowSaving || !ch.channelId}
-                            className={`inline-flex items-center justify-center gap-1.5 h-8 px-3 text-xs font-medium text-white rounded-md shadow-2xs transition-all shrink-0 whitespace-nowrap cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
-                              isUnsaved
-                                ? 'bg-[#004ac6] hover:bg-[#003da6] ring-2 ring-[#004ac6]/40 shadow-sm font-semibold'
-                                : 'bg-[#004ac6] hover:bg-[#003da6]'
-                            }`}
-                            title={isUnsaved ? '存在未保存的映射配置，点击保存' : '保存配置'}
-                            aria-label={`保存 ${ch.name} 渠道映射`}
-                          >
-                            {isRowSaving ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
-                            ) : (
-                              <Save className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                            )}
-                            <span>{isRowSaving ? '保存中' : isUnsaved ? '待保存' : '保存'}</span>
-                          </button>
-
-                          {confirmDeleteId === ch.id ? (
-                            <div className="inline-flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(ch)}
-                                className="inline-flex items-center justify-center h-8 px-2.5 text-xs font-medium text-white bg-[#ba1a1a] hover:bg-[#93000a] rounded-md transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
-                                aria-label="确认删除"
-                              >
-                                确认
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(null)}
-                                className="inline-flex items-center justify-center h-8 px-2.5 text-xs font-medium text-[#434655] hover:bg-[#eff4ff] border border-[#dce9ff] rounded-md transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
-                                aria-label="取消删除"
-                              >
-                                取消
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteId(ch.id)}
-                              className="inline-flex items-center justify-center gap-1.5 h-8 px-3 text-xs font-medium text-[#ba1a1a] hover:bg-rose-50 border border-[#ffdad6] hover:border-[#ba1a1a]/40 rounded-md transition-colors shrink-0 whitespace-nowrap cursor-pointer select-none"
-                              title="删除渠道"
-                              aria-label={`删除 ${ch.name} 渠道`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                              <span>删除</span>
-                            </button>
-                          )}
-                        </div>
+                        <TableRowActions
+                          size="md"
+                          onSave={() => handleSave(ch)}
+                          isSaving={isRowSaving}
+                          isUnsaved={isUnsaved}
+                          saveDisabled={!ch.channelId}
+                          saveAriaLabel={`保存 ${ch.name} 渠道映射`}
+                          onDelete={() => handleDelete(ch)}
+                          deleteTitle="删除渠道"
+                          deleteAriaLabel={`删除 ${ch.name} 渠道`}
+                        />
                       </td>
                     </tr>
                   );

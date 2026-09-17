@@ -98,8 +98,35 @@ describe('hotelApi - 门店/酒店映射平台接入服务', () => {
 
       const normalized = normalizeRemoteHotelMapping(raw, 'meituan');
       expect(normalized.otaChannelCode).toBe('MEITUAN');
+      expect(normalized.otaChannelId).toBe('meituan');
       expect(normalized.otaHotelId).toBe('SHOP-999');
       expect(normalized.otaHotelName).toBe('自贡恐龙方特客栈');
+    });
+
+    it('正确规范化 MEITUAN_BIZ 渠道代码并映射 otaChannelId 为 meituanbiz', () => {
+      const raw = {
+        otaChannelCode: 'MEITUAN_BIZ',
+        extUnitCode: 'MT-BIZ-001',
+        otaHotelName: '美团商旅企业自营酒店',
+      };
+
+      const normalized = normalizeRemoteHotelMapping(raw);
+      expect(normalized.otaChannelCode).toBe('MEITUAN_BIZ');
+      expect(normalized.otaChannelId).toBe('meituanbiz');
+    });
+
+    it('当服务端字段为 channelCode 时亦能正确识别渠道与门店', () => {
+      const raw = {
+        channelCode: 'MEITUAN',
+        hotelId: 'MT-RAW-88',
+        hotelName: '西软美团测试酒店',
+      };
+
+      const normalized = normalizeRemoteHotelMapping(raw);
+      expect(normalized.otaChannelCode).toBe('MEITUAN');
+      expect(normalized.otaChannelId).toBe('meituan');
+      expect(normalized.otaHotelId).toBe('MT-RAW-88');
+      expect(normalized.otaHotelName).toBe('西软美团测试酒店');
     });
   });
 

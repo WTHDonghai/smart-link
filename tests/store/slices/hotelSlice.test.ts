@@ -20,7 +20,7 @@ describe('hotelSlice - 门店管理状态切片', () => {
     expect(state.isSaving).toBe(false);
     expect(state.filterChannel).toBe('all');
     expect(state.searchKeyword).toBe('');
-    expect(state.selectedCrawlChannel).toBe('meituan');
+    expect(state.selectedCrawlChannel).toBe('');
     expect(state.hotels.length).toBe(0);
     expect(state.pmsProperties.length).toBe(0);
     expect(state.lastCrawlSummary).toBeNull();
@@ -271,14 +271,46 @@ describe('hotelSlice - 门店管理状态切片', () => {
       });
 
       expect(nextState.isSaving).toBe(false);
+      expect(nextState.savingHotelId).toBeNull();
       const saved = nextState.hotels[0];
       expect(saved.pmsHotelId).toBe('PMS-BJ-012');
       expect(saved.pmsHotelName).toBe('国贸商务酒店-北京总店');
       expect(saved.status).toBe('mapped');
     });
+
+    it('pending 时设置 isSaving=true 且记录 savingHotelId', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const pendingState = hotelReducer(initialState, {
+        type: 'hotel/saveHotelMapping/pending',
+        meta: { arg: { id: 'hm-pending-01' } },
+      });
+
+      expect(pendingState.isSaving).toBe(true);
+      expect(pendingState.savingHotelId).toBe('hm-pending-01');
+
+      const rejectedState = hotelReducer(pendingState, {
+        type: 'hotel/saveHotelMapping/rejected',
+      });
+      expect(rejectedState.isSaving).toBe(false);
+      expect(rejectedState.savingHotelId).toBeNull();
+    });
   });
 
   describe('deleteHotelMappingThunk extraReducers', () => {
+    it('pending 时记录 deletingHotelId，rejected 时清空', () => {
+      const initialState = hotelReducer(undefined, { type: '@@INIT' });
+      const pendingState = hotelReducer(initialState, {
+        type: 'hotel/deleteHotelMapping/pending',
+        meta: { arg: { localId: 'hm-del-pending-01' } },
+      });
+
+      expect(pendingState.deletingHotelId).toBe('hm-del-pending-01');
+
+      const rejectedState = hotelReducer(pendingState, {
+        type: 'hotel/deleteHotelMapping/rejected',
+      });
+      expect(rejectedState.deletingHotelId).toBeNull();
+    });
     it('fulfilled 时从列表中剔除被删除的映射记录', () => {
       const initialHotels: HotelMapping[] = [
         {

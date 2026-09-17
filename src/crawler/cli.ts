@@ -4,7 +4,6 @@ import { hotelCollectionEngine } from './engine';
 function parseArgs(argv: string[]) {
   const options = {
     channel: 'meituan',
-    url: '',
     headless: false,
     waitMs: 3000,
   };
@@ -13,8 +12,6 @@ function parseArgs(argv: string[]) {
     const arg = argv[i];
     if (arg === '--channel' && argv[i + 1]) {
       options.channel = argv[++i];
-    } else if (arg === '--url' && argv[i + 1]) {
-      options.url = argv[++i];
     } else if (arg === '--headless') {
       options.headless = true;
     } else if (arg === '--wait-ms' && argv[i + 1]) {
@@ -31,7 +28,6 @@ async function main() {
   const result = await hotelCollectionEngine.collectHotels(
     {
       channelId: args.channel,
-      targetUrl: args.url,
       headless: args.headless,
       waitMs: args.waitMs,
     },
