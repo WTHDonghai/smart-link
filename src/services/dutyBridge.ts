@@ -40,13 +40,8 @@ export async function startDutyByChannel(
     }
   }
 
-  // 2. 默认走本地 HTTP 服务 / 模拟调度
-  try {
-    return await startChannelDutyHttp(code);
-  } catch {
-    // 本地开发环境在无后台中间件服务时返回自洽成功，保证 UI 微动效与状态机正常演进
-    return { success: true, message: `「${code}」渠道值守已在本地就绪` };
-  }
+  // 2. 默认走本地 HTTP 服务 / 中间件调度 (严格 Fail-Fast，绝不伪造成功)
+  return await startChannelDutyHttp(code);
 }
 
 /**
@@ -68,12 +63,8 @@ export async function stopDutyByChannel(
     }
   }
 
-  // 2. 默认走本地 HTTP 服务 / 模拟调度
-  try {
-    return await stopChannelDutyHttp(code);
-  } catch {
-    return { success: true, message: `「${code}」渠道值守已停止` };
-  }
+  // 2. 默认走本地 HTTP 服务 / 中间件调度 (严格 Fail-Fast，绝不伪造成功)
+  return await stopChannelDutyHttp(code);
 }
 
 /**
@@ -92,12 +83,5 @@ export async function queryDutyStatus(): Promise<{
   }
 
   // 2. 默认走本地 HTTP 服务
-  try {
-    return await fetchDutyStatusHttp();
-  } catch {
-    return {
-      channels: {},
-      coordinatorStatus: 'STOPPED',
-    };
-  }
+  return await fetchDutyStatusHttp();
 }

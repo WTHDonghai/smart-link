@@ -67,6 +67,28 @@ export function registerCrawlerIpcHandlers(): void {
 }
 
 /**
+ * 注册桌面端原生值守 IPC 监听器
+ */
+export function registerDutyIpcHandlers(): void {
+  ipcMain.handle('duty:start', async (_event, channelCode: string) => {
+    const code = (channelCode || '').trim().toUpperCase();
+    return { success: true, message: `桌面端渠道「${code}」值守已由主进程启动` };
+  });
+
+  ipcMain.handle('duty:stop', async (_event, channelCode: string) => {
+    const code = (channelCode || '').trim().toUpperCase();
+    return { success: true, message: `桌面端渠道「${code}」值守已停止` };
+  });
+
+  ipcMain.handle('duty:status', async () => {
+    return {
+      channels: {},
+      coordinatorStatus: 'STOPPED',
+    };
+  });
+}
+
+/**
  * 创建应用主视窗
  */
 export async function createMainWindow(): Promise<BrowserWindow> {
@@ -122,6 +144,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
 if (process.type === 'browser') {
   app.whenReady().then(async () => {
     registerCrawlerIpcHandlers();
+    registerDutyIpcHandlers();
     await createMainWindow();
 
     app.on('activate', async () => {

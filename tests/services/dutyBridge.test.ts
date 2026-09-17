@@ -98,5 +98,31 @@ describe('dutyBridge', () => {
       const res = await queryDutyStatus();
       expect(res.coordinatorStatus).toBe('STOPPED');
     });
+
+    it('fails fast and throws when HTTP query fails', async () => {
+      vi.mocked(dutyRuntimeApi.fetchDutyStatusHttp).mockRejectedValueOnce(
+        new Error('Network offline')
+      );
+
+      await expect(queryDutyStatus()).rejects.toThrow('Network offline');
+    });
+  });
+
+  describe('fail-fast error handling', () => {
+    it('throws error when startChannelDutyHttp fails', async () => {
+      vi.mocked(dutyRuntimeApi.startChannelDutyHttp).mockRejectedValueOnce(
+        new Error('Port busy')
+      );
+
+      await expect(startDutyByChannel('MEITUAN')).rejects.toThrow('Port busy');
+    });
+
+    it('throws error when stopChannelDutyHttp fails', async () => {
+      vi.mocked(dutyRuntimeApi.stopChannelDutyHttp).mockRejectedValueOnce(
+        new Error('Process terminated')
+      );
+
+      await expect(stopDutyByChannel('MEITUAN')).rejects.toThrow('Process terminated');
+    });
   });
 });

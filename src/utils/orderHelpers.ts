@@ -1,4 +1,4 @@
-import type { OrderStatus, ToolkitOrderStatus, ToolkitOrderAction, NightlyPricing } from '../types';
+import type { OrderStatus, ToolkitOrderAction, NightlyPricing } from '../types';
 
 export const isOrderSuccess = (status: OrderStatus): boolean => {
   return status === 'success' || status === 'confirmed' || status === 'transferred';

@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import type { ToolkitOrder, ToolkitOrderAction } from '../../types';
+import type { ToolkitOrder } from '../../types';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { StatusBadge } from '../common/StatusBadge';
 import { EmptyState } from '../common/EmptyState';
 import {
   formatCurrency,
-  formatSyncTime,
   getAllowedOrderActions,
   getOrderActionDisabledReason,
   getOrderStatusMeta,
