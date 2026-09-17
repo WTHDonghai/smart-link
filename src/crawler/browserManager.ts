@@ -1,8 +1,8 @@
-import path from 'node:path';
 import fs from 'node:fs';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { injectStealthScripts, getStealthLaunchArgs } from './stealth';
 import { installVisualTracker } from './visualTracker';
+import { resolveChromeProfileDir } from './paths';
 
 export interface LaunchBrowserOptions {
   channelCode: string;
@@ -21,12 +21,7 @@ export interface BrowserSession {
 export async function createPersistentBrowserSession(
   options: LaunchBrowserOptions
 ): Promise<BrowserSession> {
-  const baseDir = process.env.SMARTLINK_USER_DATA_DIR || process.cwd();
-  const profileDir = path.resolve(
-    baseDir,
-    '.chrome-profile',
-    options.channelCode.trim().toLowerCase()
-  );
+  const profileDir = resolveChromeProfileDir(options.channelCode);
 
   // 确保 profile 目录存在
   if (!fs.existsSync(profileDir)) {

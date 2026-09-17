@@ -51,11 +51,19 @@ const dutyApi: ElectronDutyApi = {
   },
 };
 
+const exposedEnv: Record<string, string> = {
+  platformBaseUrl: process.env.VITE_PLATFORM_BASE_URL || '',
+};
+
+for (const [key, value] of Object.entries(process.env)) {
+  if (key.startsWith('VITE_') && typeof value === 'string') {
+    exposedEnv[key] = value;
+  }
+}
+
 // 安全隔离注入至渲染进程主世界
 contextBridge.exposeInMainWorld('electron', {
   crawler: crawlerApi,
   duty: dutyApi,
-  env: {
-    platformBaseUrl: process.env.VITE_PLATFORM_BASE_URL || '',
-  },
+  env: exposedEnv,
 });

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { createPersistentBrowserSession } from '../../src/crawler/browserManager';
+import { resolveChromeProfileDir } from '../../src/crawler/paths';
 import { chromium } from 'playwright';
 
 vi.mock('playwright', () => {
@@ -39,7 +40,7 @@ describe('browserManager', () => {
     expect(chromium.launchPersistentContext).toHaveBeenCalledTimes(1);
 
     const [calledProfileDir, calledOptions] = vi.mocked(chromium.launchPersistentContext).mock.calls[0];
-    expect(calledProfileDir).toBe(path.resolve(process.cwd(), '.chrome-profile', 'meituan'));
+    expect(calledProfileDir).toBe(resolveChromeProfileDir('MEITUAN'));
     expect(calledOptions?.channel).toBe('chrome');
     expect(calledOptions?.headless).toBe(true);
 

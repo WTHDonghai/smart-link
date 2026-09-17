@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 
 function checkHttpReady(urlStr = 'http://localhost:3000', timeoutMs = 400) {
   return new Promise((resolve) => {
@@ -28,16 +30,59 @@ function checkHttpReady(urlStr = 'http://localhost:3000', timeoutMs = 400) {
   });
 }
 
+function loadEnvFileIntoProcess(envPath) {
+  if (!fs.existsSync(envPath)) return;
+  if (typeof process.loadEnvFile === 'function') {
+    try {
+      process.loadEnvFile(envPath);
+      return;
+    } catch {}
+  }
+  try {
+    const raw = fs.readFileSync(envPath, 'utf-8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (key && process.env[key] === undefined) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch {}
+}
+
 async function main() {
   const isWindows = process.platform === 'win32';
   const npmCmd = isWindows ? 'npm.cmd' : 'npm';
   const npxCmd = isWindows ? 'npx.cmd' : 'npx';
 
+  // 解析 --mode 启动参数 (默认为 development)
+  const args = process.argv.slice(2);
+  let mode = process.env.MODE || 'development';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--mode' && args[i + 1]) {
+      mode = args[i + 1].trim();
+      break;
+    }
+  }
+
+  // 加载主环境与目标 mode 环境配置 (如 .env 与 .env.mock)
+  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env'));
+  if (mode && mode !== 'development') {
+    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}`));
+  }
+  process.env.MODE = mode;
+
   // 1. 编译 Electron 主进程与预加载脚本
-  console.log('[Smart-Link] 正在编译 Electron 主进程与预加载脚本...');
+  console.log(`[Smart-Link] 正在编译 Electron 主进程与预加载脚本 (模式: ${mode})...`);
   const buildProc = spawn(npmCmd, ['run', 'build:electron'], {
     stdio: 'inherit',
     shell: isWindows,
+    env: process.env,
   });
 
   await new Promise((resolve, reject) => {
@@ -53,10 +98,15 @@ async function main() {
   let viteProcess = null;
 
   if (!isAlreadyRunning) {
-    console.log(`[Smart-Link] 正在启动 Vite 前端开发服务器 (${devServerUrl})...`);
-    viteProcess = spawn(npmCmd, ['run', 'dev'], {
+    console.log(`[Smart-Link] 正在启动 Vite 前端开发服务器 (${devServerUrl}, mode: ${mode})...`);
+    const viteArgs = ['run', 'dev'];
+    if (mode && mode !== 'development') {
+      viteArgs.push('--', '--mode', mode);
+    }
+    viteProcess = spawn(npmCmd, viteArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: isWindows,
+      env: process.env,
     });
 
     viteProcess.stdout?.on('data', (data) => {
@@ -94,6 +144,7 @@ async function main() {
   const electronProcess = spawn(npxCmd, ['electron', '.'], {
     stdio: 'inherit',
     shell: isWindows,
+    env: process.env,
   });
 
   const cleanup = () => {

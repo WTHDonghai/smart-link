@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,6 +6,7 @@ import { detectDefaultChromeSourceDir, syncChromeProfile } from '../../src/crawl
 
 describe('profileSync', () => {
   const tempDirsToClean: string[] = [];
+  let testUserDataDir: string;
 
   const createTempDir = (prefix: string) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -13,19 +14,19 @@ describe('profileSync', () => {
     return dir;
   };
 
+  beforeEach(() => {
+    testUserDataDir = createTempDir('test-profile-sync-user-data-');
+    process.env.SMARTLINK_USER_DATA_DIR = testUserDataDir;
+  });
+
   afterEach(() => {
+    delete process.env.SMARTLINK_USER_DATA_DIR;
     for (const dir of tempDirsToClean) {
       if (fs.existsSync(dir)) {
         fs.rmSync(dir, { recursive: true, force: true });
       }
     }
     tempDirsToClean.length = 0;
-
-    // 清理可能在当前工作区生成的测试 channel profile
-    const testProfilePath = path.resolve(process.cwd(), '.chrome-profile', 'test-unit-channel');
-    if (fs.existsSync(testProfilePath)) {
-      fs.rmSync(testProfilePath, { recursive: true, force: true });
-    }
   });
 
   describe('detectDefaultChromeSourceDir', () => {
@@ -122,7 +123,7 @@ describe('profileSync', () => {
 
       expect(result.success).toBe(true);
       expect(result.sourceProfile).toBe(activeProfileName);
-      expect(result.targetDir).toBe(path.resolve(process.cwd(), '.chrome-profile', 'test-unit-channel'));
+      expect(result.targetDir).toBe(path.resolve(testUserDataDir, '.chrome-profile', 'test-unit-channel'));
 
       const targetDefaultDir = path.join(result.targetDir, 'Default');
       expect(fs.existsSync(targetDefaultDir)).toBe(true);

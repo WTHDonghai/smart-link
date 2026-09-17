@@ -1,6 +1,11 @@
 import type { DiscoveredHotelCandidate } from '../../types';
+import { getMeituanCatalogUrl } from '../../../config/otaUrls';
 
-export const DEFAULT_MEITUAN_CATALOG_URL = 'https://me.meituan.com/ebooking/merchant/product/batch-price';
+export function getDefaultMeituanCatalogUrl(): string {
+  return getMeituanCatalogUrl();
+}
+
+export const DEFAULT_MEITUAN_CATALOG_URL = getMeituanCatalogUrl();
 export const MEITUAN_CATALOG_PATH = '/ebooking/merchant/product/batch-price';
 
 export interface RawMeituanStoreItem {
@@ -228,17 +233,15 @@ export function parseMeituanDropdownItem(input: MeituanDropdownItemInput): RawMe
  * 遵循 Fail-Fast 原则：当传入非空但非法的 URL 时，必须显式抛出 Error
  */
 export function resolveMeituanTargetUrl(channelUrl?: string): string {
-  if (!channelUrl || !channelUrl.trim()) {
-    return DEFAULT_MEITUAN_CATALOG_URL;
-  }
+  const target = (channelUrl || '').trim() || getDefaultMeituanCatalogUrl();
   try {
-    const url = new URL(channelUrl.trim());
+    const url = new URL(target);
     url.pathname = MEITUAN_CATALOG_PATH;
     url.hash = '';
     url.searchParams.delete('iUrl');
     return url.toString();
   } catch (err) {
-    throw new Error(`非法的美团目标渠道 URL: ${channelUrl} (${err instanceof Error ? err.message : String(err)})`);
+    throw new Error(`非法的美团目标渠道 URL: ${channelUrl || target} (${err instanceof Error ? err.message : String(err)})`);
   }
 }
 

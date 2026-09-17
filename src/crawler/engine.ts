@@ -49,7 +49,7 @@ export class HotelCollectionEngine {
 
     this.activeChannelJobs.add(code);
 
-    const targetUrl = collector.defaultTargetUrl;
+    const targetUrl = request.targetUrl?.trim() || collector.resolveTargetUrl();
     log({
       level: 'INFO',
       message: `[CrawlerEngine] 采集目标地址: ${targetUrl}`,
