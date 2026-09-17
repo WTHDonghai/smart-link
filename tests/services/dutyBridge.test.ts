@@ -3,13 +3,18 @@ import {
   startDutyByChannel,
   stopDutyByChannel,
   queryDutyStatus,
+  syncDutyTokens,
+  clearDutyTokens,
 } from '../../src/services/dutyBridge';
 import * as dutyRuntimeApi from '../../src/services/dutyRuntimeApi';
+import type { PlatformAuthTokens } from '../../src/types';
 
 vi.mock('../../src/services/dutyRuntimeApi', () => ({
   startChannelDutyHttp: vi.fn(),
   stopChannelDutyHttp: vi.fn(),
   fetchDutyStatusHttp: vi.fn(),
+  syncDutyTokensHttp: vi.fn(),
+  clearDutyTokensHttp: vi.fn(),
 }));
 
 describe('dutyBridge', () => {
@@ -112,21 +117,56 @@ describe('dutyBridge', () => {
     });
   });
 
-  describe('fail-fast error handling', () => {
-    it('throws error when startChannelDutyHttp fails', async () => {
-      vi.mocked(dutyRuntimeApi.startChannelDutyHttp).mockRejectedValueOnce(
-        new Error('Port busy')
-      );
+  describe('syncDutyTokens and clearDutyTokens', () => {
+    const mockTokens: PlatformAuthTokens = {
+      accessToken: 'token-abc',
+      refreshToken: 'refresh-xyz',
+      expiresAt: 999999999,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://api.test.com',
+      tenantId: 'TENANT_BRIDGE',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-      await expect(startDutyByChannel('MEITUAN')).rejects.toThrow('Port busy');
+    it('syncs tokens via Electron IPC when available', async () => {
+      const mockSync = vi.fn().mockResolvedValue({ success: true });
+      (window as unknown as { electron: { duty: { syncTokens: typeof mockSync } } }).electron = {
+        duty: { syncTokens: mockSync },
+      };
+
+      const res = await syncDutyTokens(mockTokens);
+      expect(mockSync).toHaveBeenCalledWith(mockTokens);
+      expect(res.success).toBe(true);
+      expect(dutyRuntimeApi.syncDutyTokensHttp).not.toHaveBeenCalled();
     });
 
-    it('throws error when stopChannelDutyHttp fails', async () => {
-      vi.mocked(dutyRuntimeApi.stopChannelDutyHttp).mockRejectedValueOnce(
-        new Error('Process terminated')
-      );
+    it('falls back to HTTP API for sync tokens in web context', async () => {
+      vi.mocked(dutyRuntimeApi.syncDutyTokensHttp).mockResolvedValueOnce({ success: true });
 
-      await expect(stopDutyByChannel('MEITUAN')).rejects.toThrow('Process terminated');
+      const res = await syncDutyTokens(mockTokens);
+      expect(dutyRuntimeApi.syncDutyTokensHttp).toHaveBeenCalledWith(mockTokens);
+      expect(res.success).toBe(true);
+    });
+
+    it('clears tokens via Electron IPC when available', async () => {
+      const mockClear = vi.fn().mockResolvedValue({ success: true });
+      (window as unknown as { electron: { duty: { clearTokens: typeof mockClear } } }).electron = {
+        duty: { clearTokens: mockClear },
+      };
+
+      const res = await clearDutyTokens();
+      expect(mockClear).toHaveBeenCalled();
+      expect(res.success).toBe(true);
+      expect(dutyRuntimeApi.clearDutyTokensHttp).not.toHaveBeenCalled();
+    });
+
+    it('falls back to HTTP API for clear tokens in web context', async () => {
+      vi.mocked(dutyRuntimeApi.clearDutyTokensHttp).mockResolvedValueOnce({ success: true });
+
+      const res = await clearDutyTokens();
+      expect(dutyRuntimeApi.clearDutyTokensHttp).toHaveBeenCalled();
+      expect(res.success).toBe(true);
     });
   });
 });

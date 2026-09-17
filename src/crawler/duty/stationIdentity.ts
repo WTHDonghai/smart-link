@@ -10,6 +10,7 @@ import type {
 import { registerStation } from '../../services/dutyRuntimeApi';
 import { getPlatformBaseUrl } from '../../services/platformAuth';
 import { logger } from '../../services/logger';
+import { resolveUserDataDir } from '../paths';
 
 type NetworkEntry = {
   address: string;
@@ -48,13 +49,12 @@ export function normalizeBaseUrl(url?: string): string {
 }
 
 /**
- * 获取 Electron 标准持久化配置目录
+ * 获取 Electron 标准用户数据目录
  * 优先遵循 process.env.SMARTLINK_USER_DATA_DIR (Electron app.getPath('userData'))
- * 在非 Electron 开发调试环境下安全回退至 process.cwd()
+ * 在非 Electron 开发调试环境下自动对齐操作系统原生 Electron 标准路径
  */
 export function getDefaultStationConfigDir(): string {
-  const baseDir = process.env.SMARTLINK_USER_DATA_DIR || process.cwd();
-  return path.join(baseDir, '.config');
+  return resolveUserDataDir();
 }
 
 export function getDefaultStationCacheFile(): string {

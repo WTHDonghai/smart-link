@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   unwrapDutyEnvelope,
   registerStation,
@@ -7,9 +7,12 @@ import {
   createDutyTasks,
   submitDutyTaskResult,
   importToolkitOrder,
+  syncDutyTokensHttp,
+  clearDutyTokensHttp,
   DUTY_ENDPOINTS,
 } from '../../src/services/dutyRuntimeApi';
 import * as platformApi from '../../src/services/platformApi';
+import type { PlatformAuthTokens } from '../../src/types';
 
 vi.mock('../../src/services/platformApi', () => ({
   requestPlatformApi: vi.fn(),
@@ -228,6 +231,83 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
         DUTY_ENDPOINTS.ORDER_IMPORT,
         expect.objectContaining({ method: 'POST' })
       );
+    });
+  });
+
+  describe('syncDutyTokensHttp & clearDutyTokensHttp', () => {
+    const originalFetch = globalThis.fetch;
+
+    beforeEach(() => {
+      globalThis.fetch = vi.fn();
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('POST /api/duty/tokens 同步平台 Token', async () => {
+      const mockFetch = vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true }),
+      } as Response);
+
+      const tokens: PlatformAuthTokens = {
+        accessToken: 'token-1',
+        refreshToken: 'ref-1',
+        expiresAt: 12345,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://api.test.com',
+        tenantId: 'TENANT_HTTP',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const res = await syncDutyTokensHttp(tokens);
+
+      expect(res.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(tokens),
+        })
+      );
+    });
+
+    it('DELETE /api/duty/tokens 清除平台 Token', async () => {
+      const mockFetch = vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true }),
+      } as Response);
+
+      const res = await clearDutyTokensHttp();
+
+      expect(res.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS,
+        expect.objectContaining({
+          method: 'DELETE',
+        })
+      );
+    });
+
+    it('同步失败时抛出明确异常', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      } as Response);
+
+      await expect(
+        syncDutyTokensHttp({
+          accessToken: 'a',
+          refreshToken: 'b',
+          expiresAt: 1,
+          tokenType: 'bearer',
+          platformBaseUrl: 'https://api.test.com',
+          tenantId: 'TENANT_HTTP',
+          authenticatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      ).rejects.toThrow('同步 Token 失败 (500)');
     });
   });
 });

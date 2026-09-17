@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dutyOrchestrationEngine } from '../crawler/duty/dutyOrchestrationEngine';
+import {
+  initNodePlatformTokens,
+  savePlatformTokenFile,
+  clearPlatformTokenFile,
+} from '../crawler/duty/platformTokenStore';
+import { saveTokensToStorage, clearTokensFromStorage } from '../services/platformAuth';
+import type { PlatformAuthTokens } from '../types';
 
 async function parseJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -29,6 +36,7 @@ function sendJsonResponse(res: ServerResponse, status: number, data: unknown): v
  * Vite 中间件分发器：处理 /api/duty/* 路由
  */
 export function createDutyApiMiddleware() {
+  initNodePlatformTokens();
   return async (req: IncomingMessage, res: ServerResponse, next: () => void): Promise<void> => {
     const url = req.url || '';
 
@@ -80,6 +88,38 @@ export function createDutyApiMiddleware() {
         station: dutyOrchestrationEngine.getStationIdentity(),
         logs: dutyOrchestrationEngine.getRecentDutyLogs(since),
       });
+    }
+
+    // 4. POST /api/duty/tokens：同步平台授权 Token 至 Node 宿主
+    if (req.method === 'POST' && url.startsWith('/api/duty/tokens')) {
+      try {
+        const tokens = await parseJsonBody<PlatformAuthTokens>(req);
+        if (!tokens || !tokens.accessToken) {
+          return sendJsonResponse(res, 400, { success: false, error: '无效的 Token 载荷' });
+        }
+        saveTokensToStorage(tokens);
+        savePlatformTokenFile(tokens);
+        return sendJsonResponse(res, 200, { success: true });
+      } catch (error) {
+        return sendJsonResponse(res, 500, {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // 5. DELETE /api/duty/tokens：清除 Node 宿主中的平台授权 Token
+    if (req.method === 'DELETE' && url.startsWith('/api/duty/tokens')) {
+      try {
+        clearTokensFromStorage();
+        clearPlatformTokenFile();
+        return sendJsonResponse(res, 200, { success: true });
+      } catch (error) {
+        return sendJsonResponse(res, 500, {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     next();

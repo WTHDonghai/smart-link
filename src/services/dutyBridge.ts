@@ -3,12 +3,16 @@ import type {
   DutyCoordinatorStatus,
   StationIdentity,
   SystemLogEntry,
+  PlatformAuthTokens,
 } from '../types';
 import {
   startChannelDutyHttp,
   stopChannelDutyHttp,
   fetchDutyStatusHttp,
+  syncDutyTokensHttp,
+  clearDutyTokensHttp,
 } from './dutyRuntimeApi';
+import { loadTokensFromStorage } from './platformAuth';
 
 export interface ElectronDutyApi {
   startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
@@ -19,12 +23,42 @@ export interface ElectronDutyApi {
     station?: StationIdentity | null;
     logs?: SystemLogEntry[];
   }>;
+  syncTokens?(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }>;
+  clearTokens?(): Promise<{ success: boolean; message?: string }>;
 }
 
 interface WindowWithElectronDuty {
   electron?: {
     duty?: ElectronDutyApi;
   };
+}
+
+/**
+ * 同步平台 Token 凭据至后台 Node/Electron 宿主环境
+ */
+export async function syncDutyTokens(
+  tokens: PlatformAuthTokens
+): Promise<{ success: boolean; message?: string }> {
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as WindowWithElectronDuty;
+    if (win.electron?.duty?.syncTokens) {
+      return win.electron.duty.syncTokens(tokens);
+    }
+  }
+  return await syncDutyTokensHttp(tokens);
+}
+
+/**
+ * 清除后台 Node/Electron 宿主环境中的平台 Token 凭据
+ */
+export async function clearDutyTokens(): Promise<{ success: boolean; message?: string }> {
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as WindowWithElectronDuty;
+    if (win.electron?.duty?.clearTokens) {
+      return win.electron.duty.clearTokens();
+    }
+  }
+  return await clearDutyTokensHttp();
 }
 
 /**
@@ -37,6 +71,16 @@ export async function startDutyByChannel(
   const code = (channelCode || '').trim().toUpperCase();
   if (!code) {
     throw new Error('值守渠道编码 channelCode 不能为空');
+  }
+
+  // 先行动步：若当前前端持有有效 Token，先行自动向后台同步，避免 Node 环境因存储隔离缺失凭证
+  const currentTokens = loadTokensFromStorage();
+  if (currentTokens && currentTokens.accessToken) {
+    try {
+      await syncDutyTokens(currentTokens);
+    } catch {
+      // 容错继续，不阻断主流程
+    }
   }
 
   // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC

@@ -9,8 +9,9 @@ import { SystemLogsView } from './components/logs/SystemLogsView';
 import { RemarkTemplateModal } from './components/channels/RemarkTemplateModal';
 import { PlatformLoginView } from './components/auth/PlatformLoginView';
 import { ToastNotification } from './components/common/ToastNotification';
-import { platformAuthService, classifyAuthError } from './services/platformAuth';
+import { platformAuthService, classifyAuthError, loadTokensFromStorage } from './services/platformAuth';
 import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/slices/authSlice';
+import { syncDutyTokens, clearDutyTokens } from './services/dutyBridge';
 
 export default function App() {
   const dispatch = useAppDispatch();
@@ -19,11 +20,13 @@ export default function App() {
   const authStatus = useAppSelector((state) => state.auth.status);
 
   useEffect(() => {
-    // 1. 订阅 Token 变更广播，无论是登录、后台调度还是业务 API 401 自动刷新，均实时同步 Redux 内存
+    // 1. 订阅 Token 变更广播，无论是登录、后台调度还是业务 API 401 自动刷新，均实时同步 Redux 内存及后台 Node 宿主
     const unsubscribeToken = platformAuthService.onTokenChange((tokens) => {
       if (tokens) {
         dispatch(tokenRefreshed(tokens));
+        void syncDutyTokens(tokens);
       } else {
+        void clearDutyTokens();
         dispatch((dispatchAction, getState) => {
           const authState = getState().auth;
           if (authState.status !== 'login-required' || authState.tokens !== null) {
@@ -32,6 +35,12 @@ export default function App() {
         });
       }
     });
+
+    // 2. 挂载时，若前端已有已登录有效 Token，主动向后台 Node 宿主同步一次
+    const initialTokens = loadTokensFromStorage();
+    if (initialTokens && initialTokens.accessToken) {
+      void syncDutyTokens(initialTokens);
+    }
 
     // 2. 启动文旅平台 Token 后台自动续期调度器
     platformAuthService.startRefreshScheduler((_tokens, error) => {

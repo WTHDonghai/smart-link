@@ -10,6 +10,7 @@ import {
   fallbackMac,
   normalizeBaseUrl,
   getDefaultStationConfigDir,
+  getDefaultStationCacheFile,
 } from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import type { StationIdentity } from '../../../src/types';
@@ -60,7 +61,8 @@ describe('stationIdentity', () => {
       const originalEnv = process.env.SMARTLINK_USER_DATA_DIR;
       try {
         process.env.SMARTLINK_USER_DATA_DIR = '/custom/electron/userdata';
-        expect(getDefaultStationConfigDir()).toBe(path.join('/custom/electron/userdata', '.config'));
+        expect(getDefaultStationConfigDir()).toBe('/custom/electron/userdata');
+        expect(getDefaultStationCacheFile()).toBe(path.join('/custom/electron/userdata', 'platform-station.json'));
       } finally {
         if (originalEnv !== undefined) {
           process.env.SMARTLINK_USER_DATA_DIR = originalEnv;

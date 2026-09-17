@@ -6,7 +6,14 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
+import {
+  initNodePlatformTokens,
+  savePlatformTokenFile,
+  clearPlatformTokenFile,
+} from '../src/crawler/duty/platformTokenStore';
+import { saveTokensToStorage, clearTokensFromStorage } from '../src/services/platformAuth';
 import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
+import type { PlatformAuthTokens } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -167,6 +174,21 @@ export function registerDutyIpcHandlers(): void {
       station: dutyOrchestrationEngine.getStationIdentity(),
       logs: dutyOrchestrationEngine.getRecentDutyLogs(since || 0),
     };
+  });
+
+  ipcMain.handle('duty:sync-tokens', async (_event, tokens: PlatformAuthTokens) => {
+    if (!tokens || !tokens.accessToken) {
+      return { success: false, message: '无效的 Token 载荷' };
+    }
+    saveTokensToStorage(tokens);
+    savePlatformTokenFile(tokens);
+    return { success: true };
+  });
+
+  ipcMain.handle('duty:clear-tokens', async () => {
+    clearTokensFromStorage();
+    clearPlatformTokenFile();
+    return { success: true };
   });
 
   dutyOrchestrationEngine.subscribeLogs((entry) => {
@@ -379,6 +401,9 @@ if (process.type === 'browser') {
   app.whenReady().then(async () => {
     // 注入应用数据持久化目录，防止在打包后的只读安装目录下引发 EACCES
     process.env.SMARTLINK_USER_DATA_DIR = app.getPath('userData');
+
+    // 初始化已持久化的文旅平台 Token 凭据至 Node 内存
+    initNodePlatformTokens();
 
     // 默认平台网关环境变量托管（若宿主环境未指定）
     if (!process.env.VITE_PLATFORM_BASE_URL) {

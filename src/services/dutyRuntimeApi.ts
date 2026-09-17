@@ -10,6 +10,7 @@ import type {
   DutyTaskResultPayload,
   DutyTaskCreationBatch,
   SystemLogEntry,
+  PlatformAuthTokens,
 } from '../types';
 
 export const DUTY_ENDPOINTS = {
@@ -22,6 +23,7 @@ export const DUTY_ENDPOINTS = {
   LOCAL_DUTY_START: '/api/duty/start',
   LOCAL_DUTY_STOP: '/api/duty/stop',
   LOCAL_DUTY_STATUS: '/api/duty/status',
+  LOCAL_DUTY_TOKENS: '/api/duty/tokens',
 } as const;
 
 /**
@@ -213,4 +215,32 @@ export async function fetchDutyStatusHttp(since?: number): Promise<{
     station?: StationIdentity | null;
     logs?: SystemLogEntry[];
   }>;
+}
+
+/**
+ * 本地开发服务器中间件：同步平台 Token 凭据至 Node 宿主环境
+ */
+export async function syncDutyTokensHttp(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tokens),
+  });
+  if (!res.ok) {
+    throw new Error(`同步 Token 失败 (${res.status})`);
+  }
+  return res.json() as Promise<{ success: boolean; message?: string }>;
+}
+
+/**
+ * 本地开发服务器中间件：清除 Node 宿主环境中的平台 Token
+ */
+export async function clearDutyTokensHttp(): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    throw new Error(`清除 Token 失败 (${res.status})`);
+  }
+  return res.json() as Promise<{ success: boolean; message?: string }>;
 }

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../src/crawler/types';
-import type { SystemLogEntry, StationIdentity } from '../src/types';
+import type { SystemLogEntry, StationIdentity, PlatformAuthTokens } from '../src/types';
 
 /**
  * 桌面端预加载 API 契约
@@ -20,6 +20,8 @@ export interface ElectronDutyApi {
     station?: StationIdentity | null;
     logs?: SystemLogEntry[];
   }>;
+  syncTokens?(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }>;
+  clearTokens?(): Promise<{ success: boolean; message?: string }>;
   onLog?(callback: (entry: SystemLogEntry) => void): () => void;
 }
 
@@ -41,6 +43,12 @@ const dutyApi: ElectronDutyApi = {
   },
   getStatus: (since?: number) => {
     return ipcRenderer.invoke('duty:status', since);
+  },
+  syncTokens: (tokens: PlatformAuthTokens) => {
+    return ipcRenderer.invoke('duty:sync-tokens', tokens);
+  },
+  clearTokens: () => {
+    return ipcRenderer.invoke('duty:clear-tokens');
   },
   onLog: (callback: (entry: SystemLogEntry) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, entry: SystemLogEntry) => callback(entry);
