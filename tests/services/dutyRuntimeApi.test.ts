@@ -60,17 +60,56 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
         appId: 'smart-link',
       });
 
-      expect(res).toEqual({
-        stationId: 'station-999',
-        appId: 'smart-link',
-        stationName: '前台工位',
-      });
+      expect(res).toEqual(
+        expect.objectContaining({
+          stationId: 'station-999',
+          appId: 'smart-link',
+          stationName: '前台工位',
+          hostname: 'mac-mini',
+          ip: '192.168.1.100',
+          macAddress: '00:11:22:33:44:55',
+        })
+      );
       expect(mockRequest).toHaveBeenCalledWith(
         DUTY_ENDPOINTS.STATION_REGISTER,
         expect.objectContaining({
           method: 'POST',
         })
       );
+    });
+
+    it('Fail-Fast: 当中台未返回有效 stationId 时阻断抛出异常', async () => {
+      mockRequest.mockResolvedValueOnce({
+        code: '0000',
+        success: true,
+        data: { stationId: '', appId: 'smart-link' },
+      });
+
+      await expect(
+        registerStation({
+          macAddress: '00:11:22:33:44:55',
+          hostname: 'mac-mini',
+          ip: '192.168.1.100',
+          appId: 'smart-link',
+        })
+      ).rejects.toThrow('平台工位注册失败：中台未返回有效的 stationId');
+    });
+
+    it('Fail-Fast: 当中台返回的 appId 与期望不一致时阻断抛出异常', async () => {
+      mockRequest.mockResolvedValueOnce({
+        code: '0000',
+        success: true,
+        data: { stationId: 'station-123', appId: 'mismatch-app' },
+      });
+
+      await expect(
+        registerStation({
+          macAddress: '00:11:22:33:44:55',
+          hostname: 'mac-mini',
+          ip: '192.168.1.100',
+          appId: 'smart-link',
+        })
+      ).rejects.toThrow('平台工位注册异常：appId 不匹配');
     });
   });
 

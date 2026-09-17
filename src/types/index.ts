@@ -178,7 +178,9 @@ export type LogModule =
   | 'PRODUCT'
   | 'CHANNEL'
   | 'PLAYWRIGHT'
-  | 'SYSTEM';
+  | 'DUTY_TASK'
+  | 'SYSTEM'
+  | 'API';
 
 export type LogEventType =
   // 平台认证
@@ -211,6 +213,19 @@ export type LogEventType =
   | 'PLAYWRIGHT_CAPTCHA_DETECTED'
   | 'PLAYWRIGHT_CAPTCHA_SOLVED'
   | 'PLAYWRIGHT_HEARTBEAT'
+  // 任务驱动值守 (Duty Task)
+  | 'DUTY_STATION_REGISTER'
+  | 'DUTY_ACTUAL_STATE_REPORT'
+  | 'DUTY_TASK_CLAIM'
+  | 'DUTY_TASK_EXECUTE_START'
+  | 'DUTY_TASK_EXECUTE_SUCCESS'
+  | 'DUTY_TASK_EXECUTE_FAILED'
+  | 'DUTY_TASK_CREATE_DOWNSTREAM'
+  | 'DUTY_TASK_RESULT_SUBMIT'
+  // 接口请求与网络调用
+  | 'API_REQUEST_SUCCESS'
+  | 'API_REQUEST_FAILED'
+  | 'API_REQUEST_ERROR'
   // 系统内核与异常
   | 'SYS_UNHANDLED_ERROR'
   | 'SYS_UNHANDLED_REJECTION'
@@ -231,6 +246,20 @@ export interface SystemLogEntry {
   message: string;
   details?: string;
   meta?: Record<string, unknown>;
+
+  // 任务上下文专有元字段 (Task Metadata)
+  taskId?: string;
+  msgType?: DutyTaskMessageType | string;
+  taskActionStage?: 'CLAIM' | 'EXECUTE' | 'RESULT' | 'REPORT';
+  taskStatus?: 'SUCCEEDED' | 'FAILED' | 'PROCESSING' | 'PENDING';
+  taskResult?: unknown;
+
+  // 接口请求专有元字段 (API Request & Response Metadata)
+  apiUrl?: string;
+  apiMethod?: string;
+  apiParams?: unknown;   // 请求入参 (URL query / request body)
+  apiResponse?: unknown; // 接口返回 (response body / error payload)
+  httpStatus?: number;   // HTTP 状态码
 }
 
 export interface LogFilterParams {
@@ -427,16 +456,33 @@ export interface StationRegistration {
 }
 
 /**
- * 工位注册成功回执
+ * 机器指纹配置选项 (支持测试与自定义注入)
+ */
+export interface StationMachineProfileOptions {
+  appId?: string;
+  agentVersion?: string;
+  customHostname?: string;
+  customPlatform?: string;
+  customRelease?: string;
+  customArch?: string;
+  customMac?: string;
+  customIp?: string;
+}
+
+/**
+ * 工位注册与识别身份
  */
 export interface StationIdentity {
   stationId: string;
   appId: string;
+  platformBaseUrl?: string;
   stationName?: string;
   macAddress?: string;
   ip?: string;
   hostname?: string;
-  registeredAt?: number;
+  osName?: string;
+  agentVersion?: string;
+  registeredAt?: number | string;
 }
 
 /**

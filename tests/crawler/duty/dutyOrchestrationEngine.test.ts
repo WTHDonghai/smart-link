@@ -258,5 +258,70 @@ describe('dutyOrchestrationEngine', () => {
         })
       );
     });
+
+    it('should capture structured task logs with CLAIM, EXECUTE, and RESULT stages including msgType, taskId, and result status', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-log-test-1',
+        businessId: 'MT-BIZ-101',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-log-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      mockRunner.executeResult = {
+        status: 'SUCCEEDED',
+        result: { pmsOrderId: 'PMS-9988' },
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const logs = engine.getRecentDutyLogs();
+      const taskLogs = logs.filter((l) => l.taskId === 'task-log-test-1');
+
+      // 必须包含 CLAIM 阶段日志
+      const claimLog = taskLogs.find((l) => l.taskActionStage === 'CLAIM');
+      expect(claimLog).toBeDefined();
+      expect(claimLog?.msgType).toBe('OTA_IMPORT_ORDER');
+      expect(claimLog?.module).toBe('DUTY_TASK');
+      expect(claimLog?.apiUrl).toBe('/toolkit/toolbox/task-claims');
+      expect(claimLog?.apiMethod).toBe('POST');
+      expect(claimLog?.apiParams).toEqual({
+        stationId: 'st-unit-test-1',
+        appId: 'smart-link',
+        direction: 'FORWARD',
+      });
+      expect(claimLog?.apiResponse).toEqual(task);
+
+      // 必须包含 EXECUTE 阶段日志
+      const execLog = taskLogs.find((l) => l.taskActionStage === 'EXECUTE');
+      expect(execLog).toBeDefined();
+      expect(execLog?.msgType).toBe('OTA_IMPORT_ORDER');
+
+      // 必须包含 RESULT 阶段日志
+      const resultLog = taskLogs.find((l) => l.taskActionStage === 'RESULT' && l.event === 'DUTY_TASK_EXECUTE_SUCCESS');
+      expect(resultLog).toBeDefined();
+      expect(resultLog?.msgType).toBe('OTA_IMPORT_ORDER');
+      expect(resultLog?.taskStatus).toBe('SUCCEEDED');
+      expect(resultLog?.taskResult).toEqual({ pmsOrderId: 'PMS-9988' });
+      expect(resultLog?.apiUrl).toBe('/toolkit/toolbox/tasks/task-log-test-1/result');
+      expect(resultLog?.apiMethod).toBe('PUT');
+      expect(resultLog?.apiParams).toEqual({
+        taskId: 'task-log-test-1',
+        status: 'SUCCEEDED',
+        result: { pmsOrderId: 'PMS-9988' },
+        errorCode: undefined,
+        errorMessage: undefined,
+      });
+      expect(resultLog?.apiResponse).toEqual({ pmsOrderId: 'PMS-9988' });
+    });
   });
 });

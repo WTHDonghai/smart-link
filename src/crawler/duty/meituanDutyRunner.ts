@@ -144,22 +144,32 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     // 2. 页面导航与登录态嗅探
     await updateVisualTrackerStatus(page, '🤖 正在导航至美团商家后台待处理订单页面...', 'action');
     await page.goto(this.targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    try {
+      await page.bringToFront();
+    } catch {
+      // 忽略前置失败
+    }
+
+    this.running = true;
 
     const currentUrl = page.url();
     if (currentUrl.includes('passport.meituan.com') || currentUrl.includes('/login') || currentUrl.includes('/auth')) {
       await updateVisualTrackerStatus(page, '⚠️ 美团账号尚未登录，请在当前窗口中扫码登录...', 'warn');
-      try {
-        await page.waitForURL(
-          (u) => !u.href.includes('passport.meituan.com') && !u.href.includes('/login') && !u.href.includes('/auth'),
-          { timeout: 120000 }
-        );
-      } catch {
-        throw new Error('等待美团商家扫码登录超时，请重新启动值守');
-      }
+      // 后台异步监听登录完成，不阻塞值守启动流程
+      void (async () => {
+        try {
+          await page.waitForURL(
+            (u) => !u.href.includes('passport.meituan.com') && !u.href.includes('/login') && !u.href.includes('/auth'),
+            { timeout: 300000 }
+          );
+          await updateVisualTrackerStatus(page, '🛡️ 美团账号已成功登录，正在长效监听订单流...', 'success');
+        } catch {
+          // 超时由后续刷新处理
+        }
+      })();
+    } else {
+      await updateVisualTrackerStatus(page, '🛡️ 美团订单值守已激活，正在长效监听订单流...', 'success');
     }
-
-    await updateVisualTrackerStatus(page, '🛡️ 美团订单值守已激活，正在长效监听订单流...', 'success');
-    this.running = true;
   }
 
   public async stop(): Promise<void> {

@@ -105,11 +105,19 @@ export function registerDutyIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('duty:status', async () => {
+  ipcMain.handle('duty:status', async (_event, since?: number) => {
     return {
       channels: dutyOrchestrationEngine.getChannelDutyStatus(),
       coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
+      station: dutyOrchestrationEngine.getStationIdentity(),
+      logs: dutyOrchestrationEngine.getRecentDutyLogs(since || 0),
     };
+  });
+
+  dutyOrchestrationEngine.subscribeLogs((entry) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('duty:log-entry', entry);
+    }
   });
 }
 

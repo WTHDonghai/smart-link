@@ -72,9 +72,13 @@ export function createDutyApiMiddleware() {
 
     // 3. GET /api/duty/status：查询当前值守状态
     if (req.method === 'GET' && url.startsWith('/api/duty/status')) {
+      const urlObj = new URL(url, 'http://localhost');
+      const since = Number(urlObj.searchParams.get('since') || 0);
       return sendJsonResponse(res, 200, {
         channels: dutyOrchestrationEngine.getChannelDutyStatus(),
         coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
+        station: dutyOrchestrationEngine.getStationIdentity(),
+        logs: dutyOrchestrationEngine.getRecentDutyLogs(since),
       });
     }
 

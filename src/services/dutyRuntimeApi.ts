@@ -9,6 +9,7 @@ import type {
   DutyClaimedTask,
   DutyTaskResultPayload,
   DutyTaskCreationBatch,
+  SystemLogEntry,
 } from '../types';
 
 export const DUTY_ENDPOINTS = {
@@ -65,10 +66,24 @@ export async function registerStation(payload: StationRegistration): Promise<Sta
     body: JSON.stringify(payload),
   });
   const data = unwrapDutyEnvelope<Record<string, unknown>>(res);
+  const stationId = String(data.stationId || '').trim();
+  if (!stationId) {
+    throw new Error('平台工位注册失败：中台未返回有效的 stationId');
+  }
+  const appId = String(data.appId || payload.appId).trim();
+  if (payload.appId && appId !== payload.appId) {
+    throw new Error(`平台工位注册异常：appId 不匹配 (期望: ${payload.appId}, 实际: ${appId})`);
+  }
   return {
-    stationId: String(data.stationId || '').trim(),
-    appId: String(data.appId || payload.appId).trim(),
+    stationId,
+    appId,
     stationName: typeof data.stationName === 'string' ? data.stationName : undefined,
+    hostname: payload.hostname,
+    ip: payload.ip,
+    macAddress: payload.macAddress,
+    osName: payload.osName,
+    agentVersion: payload.agentVersion,
+    registeredAt: Date.now(),
   };
 }
 
@@ -181,16 +196,21 @@ export async function stopChannelDutyHttp(channelCode: string): Promise<{ succes
 /**
  * 本地开发服务器中间件：查询当前各渠道值守与协调器状态
  */
-export async function fetchDutyStatusHttp(): Promise<{
+export async function fetchDutyStatusHttp(since?: number): Promise<{
   channels: Record<string, ChannelDutyInfo>;
   coordinatorStatus: DutyCoordinatorStatus;
+  station?: StationIdentity | null;
+  logs?: SystemLogEntry[];
 }> {
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_STATUS);
+  const url = since ? `${DUTY_ENDPOINTS.LOCAL_DUTY_STATUS}?since=${since}` : DUTY_ENDPOINTS.LOCAL_DUTY_STATUS;
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`获取值守状态失败 (${res.status})`);
   }
   return res.json() as Promise<{
     channels: Record<string, ChannelDutyInfo>;
     coordinatorStatus: DutyCoordinatorStatus;
+    station?: StationIdentity | null;
+    logs?: SystemLogEntry[];
   }>;
 }

@@ -8,6 +8,7 @@ import type {
   InternalProductOptions,
   ChannelDutyInfo,
   DutyCoordinatorStatus,
+  StationIdentity,
   GuardianStats,
 } from '../../types';
 import {
@@ -26,6 +27,7 @@ import {
   queryDutyStatus,
 } from '../../services/dutyBridge';
 import { showToast } from './appSlice';
+import { addLogs } from './systemLogSlice';
 
 export interface OrderGuardianState {
   orders: ToolkitOrder[];
@@ -41,6 +43,7 @@ export interface OrderGuardianState {
 
   channelDuty: Record<string, ChannelDutyInfo>;
   coordinatorStatus: DutyCoordinatorStatus;
+  station: StationIdentity | null;
 
   activeEditOrder: ToolkitOrder | null;
   productOptions: InternalProductOptions;
@@ -86,6 +89,7 @@ const initialState: OrderGuardianState = {
 
   channelDuty: initialChannelDuty,
   coordinatorStatus: 'STOPPED',
+  station: null,
 
   activeEditOrder: null,
   productOptions: { roomTypes: [], rateCodes: [], reservationTypes: [] },
@@ -245,12 +249,16 @@ export const toggleChannelDutyThunk = createAsyncThunk(
 );
 
 /**
- * 同步当前全盘值守状态
+ * 同步当前全盘值守状态与调度任务日志
  */
 export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
-  async () => {
-    return queryDutyStatus();
+  async (_, { dispatch }) => {
+    const res = await queryDutyStatus();
+    if (res.logs && res.logs.length > 0) {
+      dispatch(addLogs(res.logs));
+    }
+    return res;
   }
 );
 
@@ -390,6 +398,9 @@ export const orderGuardianSlice = createSlice({
     // syncStatus
     builder.addCase(syncDutyStatusThunk.fulfilled, (state, action) => {
       state.coordinatorStatus = action.payload.coordinatorStatus;
+      if (action.payload.station !== undefined) {
+        state.station = action.payload.station;
+      }
       for (const [code, info] of Object.entries(action.payload.channels)) {
         state.channelDuty[code] = info;
       }

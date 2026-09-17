@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { toggleChannelDutyThunk } from '../../store/slices/orderGuardianSlice';
+import { toggleChannelDutyThunk, syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
 import { ChannelBadge } from '../common/ChannelBadge';
 import {
   Play,
@@ -9,6 +9,7 @@ import {
   AlertCircle,
   ShieldCheck,
   Activity,
+  Server,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
@@ -45,10 +46,30 @@ export const ChannelDutyPanel: React.FC = () => {
   const dispatch = useAppDispatch();
   const channelDuty = useAppSelector((state) => state.orderGuardian.channelDuty);
   const coordinatorStatus = useAppSelector((state) => state.orderGuardian.coordinatorStatus);
+  const station = useAppSelector((state) => state.orderGuardian.station);
   const [collapsed, setCollapsed] = useState(false);
 
   const activeCount = Object.values(channelDuty).filter((c) => c.status === 'RUNNING').length;
   const coordinatorBadge = formatCoordinatorBadge(coordinatorStatus);
+
+  // 组件挂载时获取一次当前值守与工位身份
+  useEffect(() => {
+    void dispatch(syncDutyStatusThunk());
+  }, [dispatch]);
+
+  // 当有值守渠道正在启动或运行时，每 2 秒轮询同步状态与任务调度日志
+  useEffect(() => {
+    const hasActive = Object.values(channelDuty).some(
+      (c) => c.status === 'RUNNING' || c.status === 'STARTING'
+    );
+    if (!hasActive) return;
+
+    const timer = setInterval(() => {
+      void dispatch(syncDutyStatusThunk());
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [dispatch, channelDuty]);
 
   const handleToggle = (channelCode: string) => {
     void dispatch(toggleChannelDutyThunk(channelCode));
@@ -74,6 +95,16 @@ export const ChannelDutyPanel: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {station?.stationId && (
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border rounded-full bg-slate-50 text-slate-700 border-slate-200"
+              title={`主机名: ${station.hostname || '-'} | IP: ${station.ip || '-'} | MAC: ${station.macAddress || '-'}`}
+              role="status"
+            >
+              <Server className="w-3.5 h-3.5 text-slate-500" />
+              <span className="font-mono text-[11px]">工位: {station.stationId}</span>
+            </span>
+          )}
           <span
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border rounded-full ${coordinatorBadge.tone}`}
             role="status"

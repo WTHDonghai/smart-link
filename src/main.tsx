@@ -20,6 +20,20 @@ logger.init({
 // 3. 从 IndexedDB 异步水合最近 7 天内的持久化运行日志
 store.dispatch(hydrateLogsFromStorage());
 
+// 4. 监听 Electron 原生端推送的实时任务调度日志流 (若处于 Electron 桌面环境)
+if (typeof window !== 'undefined') {
+  const win = window as unknown as {
+    electron?: {
+      duty?: {
+        onLog?: (cb: (entry: import('./types').SystemLogEntry) => void) => () => void;
+      };
+    };
+  };
+  win.electron?.duty?.onLog?.((entry) => {
+    store.dispatch(addLog(entry));
+  });
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Provider store={store}>

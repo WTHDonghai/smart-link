@@ -225,11 +225,13 @@ describe('orderGuardianSlice reducer', () => {
             CTRIP: { channelCode: 'CTRIP', status: 'RUNNING' as const },
           },
           coordinatorStatus: 'CLAIMING' as const,
+          station: { stationId: 'station-sh-999', appId: 'smart-link' },
         },
       };
       const next = orderGuardianReducer(undefined, action);
       expect(next.coordinatorStatus).toBe('CLAIMING');
       expect(next.channelDuty.CTRIP?.status).toBe('RUNNING');
+      expect(next.station?.stationId).toBe('station-sh-999');
     });
   });
 

@@ -4,9 +4,10 @@ import {
   PlatformApiError,
   PLATFORM_MODULES,
   TOOLKIT_MODULE,
+  registerApiLogListener,
 } from '../../src/services/platformApi';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
-import { PlatformAuthTokens } from '../../src/types';
+import { PlatformAuthTokens, SystemLogEntry } from '../../src/types';
 
 describe('platformApi - 接口调用、认证注入与 401 透明重试', () => {
   beforeEach(() => {
@@ -180,5 +181,151 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     expect(PLATFORM_MODULES.RATE_MANAGEMENT).toBe('rate-management');
     expect(PLATFORM_MODULES.IDENTITY).toBe('identity');
     expect(TOOLKIT_MODULE).toBe('toolkit');
+  });
+
+  it('成功调用时完整捕获并记录请求入参 (Body) 与接口返回数据 (Response)', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ code: '0000', data: { taskId: 'task-1001', status: 'CLAIMED' } }),
+      } as unknown as Response);
+
+      const requestBody = {
+        stationId: 'station-sh-01',
+        appId: 'smart-link',
+        direction: 'FORWARD',
+      };
+
+      const res = await requestPlatformApi<{ code: string; data: { taskId: string; status: string } }>(
+        '/toolkit/toolbox/task-claims',
+        {
+          baseUrl: 'https://pms.example.com',
+          method: 'POST',
+          body: JSON.stringify(requestBody),
+        }
+      );
+
+      expect(res.code).toBe('0000');
+      expect(res.data.taskId).toBe('task-1001');
+
+      // 验证日志中完整记录了请求入参与接口返回
+      const apiSuccessLog = capturedLogs.find((l) => l.event === 'API_REQUEST_SUCCESS');
+      expect(apiSuccessLog).toBeDefined();
+      expect(apiSuccessLog?.apiUrl).toBe('/toolkit/toolbox/task-claims');
+      expect(apiSuccessLog?.apiMethod).toBe('POST');
+      expect(apiSuccessLog?.httpStatus).toBe(200);
+      expect(apiSuccessLog?.apiParams).toEqual({
+        stationId: 'station-sh-01',
+        appId: 'smart-link',
+        direction: 'FORWARD',
+      });
+      expect(apiSuccessLog?.apiResponse).toEqual({
+        code: '0000',
+        data: { taskId: 'task-1001', status: 'CLAIMED' },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('HTTP 错误时完整捕获并记录请求入参与错误响应报文', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ code: 'PARAM_ERROR', msg: '工位标识非法或不存在' }),
+      } as unknown as Response);
+
+      const requestBody = { stationId: 'invalid-station' };
+
+      await expect(
+        requestPlatformApi('/toolkit/toolbox/task-claims', {
+          baseUrl: 'https://pms.example.com',
+          method: 'POST',
+          body: JSON.stringify(requestBody),
+        })
+      ).rejects.toThrow('平台接口调用失败 (400): 工位标识非法或不存在');
+
+      const failedLog = capturedLogs.find((l) => l.event === 'API_REQUEST_FAILED');
+      expect(failedLog).toBeDefined();
+      expect(failedLog?.apiMethod).toBe('POST');
+      expect(failedLog?.apiUrl).toBe('/toolkit/toolbox/task-claims');
+      expect(failedLog?.httpStatus).toBe(400);
+      expect(failedLog?.apiParams).toEqual({ stationId: 'invalid-station' });
+      expect(failedLog?.apiResponse).toEqual({ code: 'PARAM_ERROR', msg: '工位标识非法或不存在' });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('URL 查询参数时解析提取 query 对象作为 apiParams', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ records: [], total: 0 }),
+      } as unknown as Response);
+
+      await requestPlatformApi('/api/v1/orders?page=2&pageSize=20&status=WAIT_CONFIRM', {
+        baseUrl: 'https://pms.example.com',
+      });
+
+      const successLog = capturedLogs.find((l) => l.event === 'API_REQUEST_SUCCESS');
+      expect(successLog).toBeDefined();
+      expect(successLog?.apiParams).toEqual({
+        page: '2',
+        pageSize: '20',
+        status: 'WAIT_CONFIRM',
+      });
+      expect(successLog?.apiResponse).toEqual({ records: [], total: 0 });
+    } finally {
+      unsubscribe();
+    }
   });
 });

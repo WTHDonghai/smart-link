@@ -79,6 +79,7 @@ describe('dutyBridge', () => {
       const mockStatus = {
         channels: { MEITUAN: { channelCode: 'MEITUAN', status: 'RUNNING' as const } },
         coordinatorStatus: 'CLAIMING' as const,
+        station: { stationId: 'station-desktop-001', appId: 'smart-link' },
       };
       (window as unknown as { electron: { duty: { getStatus: () => Promise<typeof mockStatus> } } }).electron = {
         duty: { getStatus: vi.fn().mockResolvedValue(mockStatus) },
@@ -87,16 +88,19 @@ describe('dutyBridge', () => {
       const res = await queryDutyStatus();
       expect(res.coordinatorStatus).toBe('CLAIMING');
       expect(res.channels.MEITUAN.status).toBe('RUNNING');
+      expect(res.station?.stationId).toBe('station-desktop-001');
     });
 
     it('queries HTTP in web mode', async () => {
       vi.mocked(dutyRuntimeApi.fetchDutyStatusHttp).mockResolvedValueOnce({
         channels: {},
         coordinatorStatus: 'STOPPED',
+        station: { stationId: 'station-web-002', appId: 'smart-link' },
       });
 
       const res = await queryDutyStatus();
       expect(res.coordinatorStatus).toBe('STOPPED');
+      expect(res.station?.stationId).toBe('station-web-002');
     });
 
     it('fails fast and throws when HTTP query fails', async () => {

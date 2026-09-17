@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../src/crawler/types';
+import type { SystemLogEntry, StationIdentity } from '../src/types';
 
 /**
  * 桌面端预加载 API 契约
@@ -13,10 +14,13 @@ export interface ElectronCrawlerApi {
 export interface ElectronDutyApi {
   startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
   stopDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
-  getStatus(): Promise<{
+  getStatus(since?: number): Promise<{
     channels: Record<string, { channelCode: string; status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED'; lastStartedAt?: number; error?: string }>;
     coordinatorStatus: 'STOPPED' | 'IDLE' | 'CLAIMING' | 'EXECUTING' | 'REPORTING' | 'CLAIM_BACKOFF' | 'DEGRADED';
+    station?: StationIdentity | null;
+    logs?: SystemLogEntry[];
   }>;
+  onLog?(callback: (entry: SystemLogEntry) => void): () => void;
 }
 
 const crawlerApi: ElectronCrawlerApi = {
@@ -35,8 +39,15 @@ const dutyApi: ElectronDutyApi = {
   stopDuty: (channelCode: string) => {
     return ipcRenderer.invoke('duty:stop', channelCode);
   },
-  getStatus: () => {
-    return ipcRenderer.invoke('duty:status');
+  getStatus: (since?: number) => {
+    return ipcRenderer.invoke('duty:status', since);
+  },
+  onLog: (callback: (entry: SystemLogEntry) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, entry: SystemLogEntry) => callback(entry);
+    ipcRenderer.on('duty:log-entry', listener);
+    return () => {
+      ipcRenderer.removeListener('duty:log-entry', listener);
+    };
   },
 };
 

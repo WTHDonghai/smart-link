@@ -1,4 +1,9 @@
-import type { ChannelDutyInfo, DutyCoordinatorStatus } from '../types';
+import type {
+  ChannelDutyInfo,
+  DutyCoordinatorStatus,
+  StationIdentity,
+  SystemLogEntry,
+} from '../types';
 import {
   startChannelDutyHttp,
   stopChannelDutyHttp,
@@ -8,9 +13,11 @@ import {
 export interface ElectronDutyApi {
   startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
   stopDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
-  getStatus(): Promise<{
+  getStatus(since?: number): Promise<{
     channels: Record<string, ChannelDutyInfo>;
     coordinatorStatus: DutyCoordinatorStatus;
+    station?: StationIdentity | null;
+    logs?: SystemLogEntry[];
   }>;
 }
 
@@ -70,18 +77,20 @@ export async function stopDutyByChannel(
 /**
  * 查询当前值守状态
  */
-export async function queryDutyStatus(): Promise<{
+export async function queryDutyStatus(since?: number): Promise<{
   channels: Record<string, ChannelDutyInfo>;
   coordinatorStatus: DutyCoordinatorStatus;
+  station?: StationIdentity | null;
+  logs?: SystemLogEntry[];
 }> {
   // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC
   if (typeof window !== 'undefined') {
     const win = window as unknown as WindowWithElectronDuty;
     if (win.electron?.duty?.getStatus) {
-      return win.electron.duty.getStatus();
+      return win.electron.duty.getStatus(since);
     }
   }
 
   // 2. 默认走本地 HTTP 服务
-  return await fetchDutyStatusHttp();
+  return await fetchDutyStatusHttp(since);
 }

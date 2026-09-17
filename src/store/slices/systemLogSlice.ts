@@ -104,6 +104,10 @@ export const systemLogSlice = createSlice({
       const timestamp = action.payload.timestamp ?? formatLogTimestamp(now);
       const id = action.payload.id ?? `log-${createdAt}-${Math.random().toString(36).slice(2, 6)}`;
 
+      if (state.logs.some((l) => l.id === id)) {
+        return;
+      }
+
       const entry: SystemLogEntry = {
         ...action.payload,
         id,
@@ -117,6 +121,24 @@ export const systemLogSlice = createSlice({
       // 实时流内存保留最多 500 条
       if (state.logs.length > 500) {
         state.logs.pop();
+      }
+    },
+    addLogs: (state, action: PayloadAction<SystemLogEntry[]>) => {
+      if (!action.payload || action.payload.length === 0) return;
+      const existingIds = new Set(state.logs.map((l) => l.id));
+      const newEntries: SystemLogEntry[] = [];
+      for (const item of action.payload) {
+        if (!existingIds.has(item.id)) {
+          existingIds.add(item.id);
+          newEntries.push(item);
+        }
+      }
+      if (newEntries.length === 0) return;
+      newEntries.sort((a, b) => b.createdAt - a.createdAt);
+      state.logs.unshift(...newEntries);
+      state.storedLogCount += newEntries.length;
+      if (state.logs.length > 500) {
+        state.logs.splice(500);
       }
     },
     hydrateLogs: (state, action: PayloadAction<SystemLogEntry[]>) => {
@@ -156,6 +178,7 @@ export const {
   toggleAutoScroll,
   setStoredLogCount,
   addLog,
+  addLogs,
   hydrateLogs,
   clearLogs,
 } = systemLogSlice.actions;
