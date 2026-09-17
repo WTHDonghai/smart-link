@@ -93,8 +93,17 @@ export function createCrawlerApiMiddleware() {
     // 3. POST /api/crawler/profile/sync：从日常 Chrome 同步登录态
     if (req.method === 'POST' && url.startsWith('/api/crawler/profile/sync')) {
       try {
-        const body = await parseJsonBody<{ channelCode?: string }>(req).catch(() => ({ channelCode: 'MEITUAN' }));
-        const result = syncChromeProfile({ channelCode: (body.channelCode || 'MEITUAN').trim().toUpperCase() });
+        let body: { channelCode?: string } = {};
+        try {
+          body = await parseJsonBody<{ channelCode?: string }>(req);
+        } catch (parseErr) {
+          return sendJsonResponse(res, 400, {
+            success: false,
+            error: parseErr instanceof Error ? parseErr.message : '无效的 JSON 请求体',
+          });
+        }
+        const channelCode = (body.channelCode || 'MEITUAN').trim().toUpperCase();
+        const result = syncChromeProfile({ channelCode });
         return sendJsonResponse(res, 200, { success: true, data: result });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

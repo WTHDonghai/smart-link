@@ -170,8 +170,62 @@ export function normalizeMeituanHotelCandidates(
   return Array.from(byKey.values());
 }
 
+export interface MeituanDropdownItemInput {
+  fullText?: string;
+  nameText?: string;
+  poiId?: string;
+  partnerId?: string;
+}
+
+/**
+ * 从美团前端门店下拉项的属性和文本中健壮解析门店实体
+ * 优先从属性与类名提取，避免正则对合法含数字店名（如 10086 号店）的误删
+ */
+export function parseMeituanDropdownItem(input: MeituanDropdownItemInput): RawMeituanStoreItem | null {
+  const fullText = (input.fullText || '').trim();
+  const rawNameText = (input.nameText || '').trim();
+
+  // 1. 优先从属性获取 poiId，若无则从 fullText 提取数字 ID
+  let poiId = (input.poiId || '').trim();
+  if (!poiId && fullText) {
+    const idMatch = fullText.match(/\b\d{5,}\b/);
+    if (idMatch) {
+      poiId = idMatch[0];
+    }
+  }
+
+  if (!poiId) {
+    return null;
+  }
+
+  // 2. 提取店名：优先使用具体的 nameText，仅剔除特定的 poiId，避免误删店名本身的合法数字
+  let name = rawNameText || fullText;
+  if (poiId) {
+    // 仅精准剔除当前匹配到的 poiId（支持带括号形式或独立单词）
+    name = name.replace(new RegExp(`[\\(（]\\s*${poiId}\\s*[\\)）]`, 'g'), '');
+    name = name.replace(new RegExp(`\\b${poiId}\\b`, 'g'), '');
+  }
+
+  name = name
+    .replace(/授权|已经到底了/g, '')
+    .replace(/[\(（]\s*[\)）]/g, '')
+    .trim();
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    poiId,
+    partnerId: (input.partnerId || '').trim(),
+    name,
+    source: 'store-dropdown-dom',
+  };
+}
+
 /**
  * 规范化美团目标 URL，确保定位到正确的门店调价/中心路由
+ * 遵循 Fail-Fast 原则：当传入非空但非法的 URL 时，必须显式抛出 Error
  */
 export function resolveMeituanTargetUrl(channelUrl?: string): string {
   if (!channelUrl || !channelUrl.trim()) {
@@ -183,7 +237,8 @@ export function resolveMeituanTargetUrl(channelUrl?: string): string {
     url.hash = '';
     url.searchParams.delete('iUrl');
     return url.toString();
-  } catch {
-    return DEFAULT_MEITUAN_CATALOG_URL;
+  } catch (err) {
+    throw new Error(`非法的美团目标渠道 URL: ${channelUrl} (${err instanceof Error ? err.message : String(err)})`);
   }
 }
+

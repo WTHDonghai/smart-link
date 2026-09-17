@@ -49,3 +49,12 @@ export interface CollectorOptions {
   timeoutMs: number;
   onLog?: (log: CollectorLogPayload) => void;
 }
+
+export interface ProfileSyncResult {
+  success: boolean;
+  sourceDir: string;
+  sourceProfile: string;
+  targetDir: string;
+  message: string;
+}
+

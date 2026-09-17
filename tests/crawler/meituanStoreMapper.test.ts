@@ -3,16 +3,22 @@ import {
   extractMeituanStoresFromResponses,
   normalizeMeituanHotelCandidates,
   resolveMeituanTargetUrl,
+  parseMeituanDropdownItem,
   DEFAULT_MEITUAN_CATALOG_URL,
 } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
 
 describe('meituanStoreMapper', () => {
   describe('resolveMeituanTargetUrl', () => {
-    it('returns default catalog URL when input is empty or invalid', () => {
+    it('returns default catalog URL when input is empty or undefined', () => {
       expect(resolveMeituanTargetUrl('')).toBe(DEFAULT_MEITUAN_CATALOG_URL);
       expect(resolveMeituanTargetUrl('   ')).toBe(DEFAULT_MEITUAN_CATALOG_URL);
       expect(resolveMeituanTargetUrl(undefined)).toBe(DEFAULT_MEITUAN_CATALOG_URL);
-      expect(resolveMeituanTargetUrl('not-a-valid-url')).toBe(DEFAULT_MEITUAN_CATALOG_URL);
+    });
+
+    it('throws explicit error when input is an invalid URL format according to Fail-Fast principle', () => {
+      expect(() => resolveMeituanTargetUrl('not-a-valid-url')).toThrow(
+        '非法的美团目标渠道 URL: not-a-valid-url'
+      );
     });
 
     it('converges custom domain URL to batch-price pathname and strips hash/iUrl', () => {
@@ -198,6 +204,47 @@ describe('meituanStoreMapper', () => {
       ];
       const candidates = normalizeMeituanHotelCandidates(incomplete);
       expect(candidates).toHaveLength(0);
+    });
+  });
+
+  describe('parseMeituanDropdownItem', () => {
+    it('extracts poiId and name from explicit attributes and clean name text', () => {
+      const input = {
+        fullText: '美团酒店 (109988) 已授权',
+        nameText: '汉庭优佳酒店(杭州武林门中心店)',
+        poiId: '109988',
+        partnerId: '8801',
+      };
+
+      const result = parseMeituanDropdownItem(input);
+      expect(result).not.toBeNull();
+      expect(result?.poiId).toBe('109988');
+      expect(result?.partnerId).toBe('8801');
+      expect(result?.name).toBe('汉庭优佳酒店(杭州武林门中心店)');
+      expect(result?.source).toBe('store-dropdown-dom');
+    });
+
+    it('preserves legitimate numbers inside hotel names while stripping only matched poiId', () => {
+      const input = {
+        fullText: '10086号城市客栈(654321)',
+        nameText: '10086号城市客栈(654321)',
+        poiId: '654321',
+      };
+
+      const result = parseMeituanDropdownItem(input);
+      expect(result).not.toBeNull();
+      expect(result?.poiId).toBe('654321');
+      expect(result?.name).toBe('10086号城市客栈');
+    });
+
+    it('returns null when neither attribute nor text contains valid numeric poiId', () => {
+      const input = {
+        fullText: '暂无门店数据或请选择其他账号',
+        nameText: '暂无门店数据',
+      };
+
+      const result = parseMeituanDropdownItem(input);
+      expect(result).toBeNull();
     });
   });
 });

@@ -135,4 +135,17 @@ describe('errorNormalizer - 统一错误智能归一化解析器', () => {
     expect(normalized.rawMessage).toBe('Some unexpected internal failure code: 0x999');
     expect(normalized.retryable).toBe(true);
   });
+
+  it('应当精准识别 Playwright 缺失本地 Chrome 可执行文件为 CRAWLER_CHROME_NOT_FOUND', () => {
+    const chromeMissingMsg =
+      "browserType.launchPersistentContext: Executable doesn't exist at /Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const normalized = normalizeAppError(chromeMissingMsg, 'CRAWLER');
+
+    expect(normalized.code).toBe('CRAWLER_CHROME_NOT_FOUND');
+    expect(normalized.domain).toBe('CRAWLER');
+    expect(normalized.userTitle).toBe('未检测到 Chrome 浏览器');
+    expect(normalized.userMessage).toContain('Google Chrome');
+    expect(normalized.suggestion).toContain('安装官方 Google Chrome 浏览器');
+    expect(normalized.retryable).toBe(true);
+  });
 });

@@ -98,6 +98,14 @@ export const ERROR_DICTIONARY: Record<AppErrorCode, AppErrorDefinition> = {
     suggestion: '请通过桌面浏览器窗口手动完成人机验证后继续。',
     retryable: false,
   },
+  CRAWLER_CHROME_NOT_FOUND: {
+    code: 'CRAWLER_CHROME_NOT_FOUND',
+    domain: 'CRAWLER',
+    userTitle: '未检测到 Chrome 浏览器',
+    userMessage: '自动化采集引擎依赖本机 Google Chrome 浏览器运行，当前环境未找到可执行程序。',
+    suggestion: '请先在电脑上安装官方 Google Chrome 浏览器后重新尝试采集。',
+    retryable: true,
+  },
 
   // --- 系统与通用网络域 (NET_* / SYS_*) ---
   NET_OFFLINE: {

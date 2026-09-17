@@ -1,21 +1,15 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import type { ProfileSyncResult } from './types';
+
+export type { ProfileSyncResult };
 
 export interface ProfileSyncOptions {
   channelCode?: string; // 目标渠道标识（大写），如 'MEITUAN'
   channelId?: string; // 兼容向后兼容性
   customSourceDir?: string; // 可选的自定义源 Chrome 路径
   customSourceProfile?: string; // 可选的自定义源 Profile 名称 (如 'Profile 7')
-}
-
-export interface ProfileSyncResult {
-  success: boolean;
-  sourceDir: string;
-  sourceProfile: string;
-  targetDir: string;
-  message: string;
 }
 
 /**
@@ -34,11 +28,97 @@ export function detectDefaultChromeSourceDir(): string {
 }
 
 /**
+ * 判定指定文件或目录是否应在精简同步时被排除
+ */
+function shouldExcludeProfileItem(srcPath: string, sourceRoot: string): boolean {
+  const rel = path.relative(sourceRoot, srcPath);
+  if (!rel || rel === '.') return false;
+
+  const baseName = path.basename(srcPath);
+  const normalizedRel = rel.replace(/\\/g, '/');
+
+  // 1. 锁与临时文件
+  if (baseName === 'LOCK' || baseName.endsWith('.lock') || baseName.endsWith('.tmp')) {
+    return true;
+  }
+
+  // 2. 根级单例锁与套接字
+  if (baseName === 'SingletonLock' || baseName === 'SingletonCookie' || baseName === 'SingletonSocket') {
+    return true;
+  }
+
+  // 3. 敏感数据与历史浏览记录 (以特定前缀开头的文件或目录)
+  const excludedPrefixes = [
+    'Login Data',
+    'History',
+    'Bookmarks',
+    'Favicons',
+    'Top Sites',
+    'Shortcuts',
+    'Web Data',
+    'Extension Cookies',
+    'Safe Browsing Cookies',
+    'Network Action Predictor',
+    'AutofillStrikeDatabase',
+  ];
+  for (const prefix of excludedPrefixes) {
+    if (baseName.startsWith(prefix)) return true;
+  }
+
+  // 4. 会话与活动标签页、扩展及庞大渲染缓存
+  const excludedExactNames = [
+    'Current Session',
+    'Current Tabs',
+    'Last Session',
+    'Last Tabs',
+    'Sessions',
+    'Session Storage',
+    'Visited Links',
+    'Accounts',
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'ShaderCache',
+    'GrShaderCache',
+    'DawnGraphiteCache',
+    'DawnWebGPUCache',
+    'Media Cache',
+    'blob_storage',
+    'Extensions',
+    'Extension Rules',
+    'Extension Scripts',
+    'Extension State',
+    'Local Extension Settings',
+    'Managed Extension Settings',
+    'Sync Extension Settings',
+    'Sync Data',
+    'DNR Extension Rules',
+    'Web Applications',
+    'Shared Dictionary',
+  ];
+  if (excludedExactNames.includes(baseName)) {
+    return true;
+  }
+
+  // 5. 路径片段匹配
+  if (
+    normalizedRel.includes('Service Worker/CacheStorage') ||
+    normalizedRel.includes('Service Worker/ScriptCache') ||
+    normalizedRel.includes('Storage/ext')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * 将日常 Chrome 的当前活跃 Profile 登录态精简同步到 Smart-Link 本地独立 Profile 中
  * 策略：
  * 1. 排他性过滤：不复制密码库 (Login Data)、历史记录 (History)、标签页会话 (Sessions) 或体积庞大的渲染缓存
  * 2. 仅保留站点授权所需关键数据：Cookies、Local Storage、IndexedDB、Preferences
  * 3. 规范化目标 Local State 为 Default，避免多 Profile 冲突并消除崩溃恢复弹窗
+ * 4. 采用 Node 原生文件系统操作，杜绝外部命令注入并跨平台兼容
  */
 export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSyncResult {
   const sourceRoot = options.customSourceDir || detectDefaultChromeSourceDir();
@@ -67,79 +147,20 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
 
   // 2. 确定目标工作目录 (.chrome-profile/<channelCode>)
   const channelCode = (options.channelCode || options.channelId || 'MEITUAN').trim().toUpperCase();
-  const targetRoot = path.resolve(process.cwd(), '.chrome-profile', channelCode.toLowerCase());
+  const baseDir = process.env.SMARTLINK_USER_DATA_DIR || process.cwd();
+  const targetRoot = path.resolve(baseDir, '.chrome-profile', channelCode.toLowerCase());
   const targetProfileDir = path.join(targetRoot, 'Default');
 
   if (!fs.existsSync(targetProfileDir)) {
     fs.mkdirSync(targetProfileDir, { recursive: true });
   }
 
-  // 3. 执行选择性精简复制 (排除私密及锁文件)
-  const rsyncExcludes = [
-    '--exclude=/Accounts/',
-    '--exclude=/AutofillStrikeDatabase/',
-    '--exclude=/Bookmarks*',
-    '--exclude=/Cache/',
-    '--exclude=/Code Cache/',
-    '--exclude=/Current Session',
-    '--exclude=/Current Tabs',
-    '--exclude=/DawnGraphiteCache/',
-    '--exclude=/DawnWebGPUCache/',
-    '--exclude=/DNR Extension Rules/',
-    '--exclude=/Extension Cookies*',
-    '--exclude=/Extension Rules/',
-    '--exclude=/Extension Scripts/',
-    '--exclude=/Extension State/',
-    '--exclude=/Extensions/',
-    '--exclude=/Favicons*',
-    '--exclude=/GPUCache/',
-    '--exclude=/GrShaderCache/',
-    '--exclude=/History*',
-    '--exclude=/Last Session',
-    '--exclude=/Last Tabs',
-    '--exclude=/Local Extension Settings/',
-    '--exclude=/Login Data*',
-    '--exclude=/Managed Extension Settings/',
-    '--exclude=/Media Cache/',
-    '--exclude=/Network Action Predictor*',
-    '--exclude=/Safe Browsing Cookies*',
-    '--exclude=/Service Worker/CacheStorage/',
-    '--exclude=/Service Worker/ScriptCache/',
-    '--exclude=/Session Storage/',
-    '--exclude=/Sessions/',
-    '--exclude=/ShaderCache/',
-    '--exclude=/Shared Dictionary/',
-    '--exclude=/Shortcuts*',
-    '--exclude=/Storage/ext/',
-    '--exclude=/Sync Data/',
-    '--exclude=/Sync Extension Settings/',
-    '--exclude=/Top Sites*',
-    '--exclude=/Visited Links',
-    '--exclude=/Web Applications/',
-    '--exclude=/Web Data*',
-    '--exclude=/blob_storage/',
-    '--exclude=LOCK',
-    '--exclude=*.lock',
-    '--exclude=*.tmp',
-  ];
-
-  try {
-    const excludeArgs = rsyncExcludes.join(' ');
-    // 使用 rsync 进行高速非阻塞增量复制
-    execSync(`rsync -a ${excludeArgs} "${sourceProfileDir}/" "${targetProfileDir}/"`, {
-      stdio: 'pipe',
-    });
-  } catch (err) {
-    // 降级使用 Node 递归复制关键子目录
-    const essentialItems = ['Cookies', 'Network', 'Local Storage', 'IndexedDB', 'Preferences'];
-    for (const item of essentialItems) {
-      const srcItem = path.join(sourceProfileDir, item);
-      const dstItem = path.join(targetProfileDir, item);
-      if (fs.existsSync(srcItem)) {
-        fs.cpSync(srcItem, dstItem, { recursive: true, force: true });
-      }
-    }
-  }
+  // 3. 执行 Node 原生选择性精简复制 (排除私密、历史记录与锁文件)
+  fs.cpSync(sourceProfileDir, targetProfileDir, {
+    recursive: true,
+    force: true,
+    filter: (src) => !shouldExcludeProfileItem(src, sourceProfileDir),
+  });
 
   // 4. 清除遗留会话与锁文件
   const filesToClean = [
@@ -153,7 +174,11 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
   ];
   for (const item of filesToClean) {
     if (fs.existsSync(item)) {
-      fs.rmSync(item, { recursive: true, force: true });
+      try {
+        fs.rmSync(item, { recursive: true, force: true });
+      } catch {
+        // 忽略非致命锁清理异常
+      }
     }
   }
 
@@ -173,34 +198,29 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     }
   }
 
-  // 4.2 若存在 SQLite 格式的 Cookies 数据库，执行 WAL Checkpoint 合并并清理日志文件
+  // 4.2 清理遗留的 SQLite WAL 缓存日志文件，避免多进程冲突
   const targetCookiesCandidate = [
     path.join(targetProfileDir, 'Network', 'Cookies'),
     path.join(targetProfileDir, 'Cookies'),
   ].find((c) => fs.existsSync(c));
 
   if (targetCookiesCandidate) {
-    try {
-      const header = fs.readFileSync(targetCookiesCandidate).subarray(0, 16);
-      if (header.equals(Buffer.from('SQLite format 3\0'))) {
-        execSync(`sqlite3 "${targetCookiesCandidate}" "PRAGMA wal_checkpoint(TRUNCATE);"`, {
-          stdio: 'ignore',
-        });
-        const walFile = `${targetCookiesCandidate}-wal`;
-        const shmFile = `${targetCookiesCandidate}-shm`;
-        if (fs.existsSync(walFile)) fs.rmSync(walFile, { force: true });
-        if (fs.existsSync(shmFile)) fs.rmSync(shmFile, { force: true });
+    const walFile = `${targetCookiesCandidate}-wal`;
+    const shmFile = `${targetCookiesCandidate}-shm`;
+    if (fs.existsSync(walFile)) {
+      try {
+        fs.rmSync(walFile, { force: true });
+      } catch {
+        // 忽略异常
       }
-    } catch {
-      // 忽略非致命 sqlite3 检查点异常
     }
-  }
-
-  // 4.3 赋予目标目录全部写权限，避免源只读文件导致 Playwright 无法写入
-  try {
-    execSync(`chmod -R u+w "${targetRoot}"`, { stdio: 'ignore' });
-  } catch {
-    // 忽略在 Windows/非类 Unix 环境下的 chmod
+    if (fs.existsSync(shmFile)) {
+      try {
+        fs.rmSync(shmFile, { force: true });
+      } catch {
+        // 忽略异常
+      }
+    }
   }
 
   // 5. 规范化写入 targetRoot/Local State
