@@ -1,9 +1,51 @@
 import { platformAuthService, getPlatformBaseUrl } from './platformAuth';
 import { joinApiUrl } from '../utils/url';
+import { logger } from './logger';
+import type { LogModule, SystemLogEntry } from '../types';
 
 export interface PlatformApiOptions extends RequestInit {
   baseUrl?: string;
   timeoutMs?: number;
+  module?: LogModule;
+}
+
+export type ApiLogListener = (entry: SystemLogEntry) => void;
+const apiLogListeners = new Set<ApiLogListener>();
+
+export function registerApiLogListener(listener: ApiLogListener): () => void {
+  apiLogListeners.add(listener);
+  return () => {
+    apiLogListeners.delete(listener);
+  };
+}
+
+function broadcastApiLog(entry: SystemLogEntry): void {
+  for (const listener of apiLogListeners) {
+    try {
+      listener(entry);
+    } catch {
+      // 隔离单点监听异常
+    }
+  }
+}
+
+function inferModuleFromPath(path: string): LogModule {
+  if (path.includes('/toolbox/task') || path.includes('/toolbox/station') || path.includes('/toolbox/actual-state')) {
+    return 'DUTY_TASK';
+  }
+  if (path.includes('/orders')) {
+    return 'ORDER';
+  }
+  if (path.includes('/hotels')) {
+    return 'HOTEL';
+  }
+  if (path.includes('/channels') || path.includes('/channel')) {
+    return 'CHANNEL';
+  }
+  if (path.includes('/oauth') || path.includes('/identity') || path.includes('/auth')) {
+    return 'AUTH';
+  }
+  return 'API';
 }
 
 /**
@@ -52,6 +94,29 @@ export async function requestPlatformApi<T = unknown>(
 ): Promise<T> {
   const { baseUrl = getPlatformBaseUrl(), timeoutMs = 15000, ...fetchOptions } = options;
   const fullUrl = joinApiUrl(baseUrl, path);
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  const startTime = Date.now();
+
+  // 1. 解析提取请求入参 (URL 查询参数或 Body 负载)
+  let requestParams: unknown = undefined;
+  if (fetchOptions.body) {
+    if (typeof fetchOptions.body === 'string') {
+      try {
+        requestParams = JSON.parse(fetchOptions.body);
+      } catch {
+        requestParams = fetchOptions.body;
+      }
+    } else {
+      requestParams = fetchOptions.body;
+    }
+  } else if (path.includes('?')) {
+    const searchPart = path.slice(path.indexOf('?') + 1);
+    const paramsObj: Record<string, string> = {};
+    new URLSearchParams(searchPart).forEach((val, key) => {
+      paramsObj[key] = val;
+    });
+    requestParams = paramsObj;
+  }
 
   let token = await platformAuthService.getValidAccessToken();
 
@@ -78,32 +143,104 @@ export async function requestPlatformApi<T = unknown>(
     }
   };
 
-  let response = await makeRequest(token);
+  try {
+    let response = await makeRequest(token);
 
-  // 遇 401 执行一次单飞透明刷新并重试
-  if (response.status === 401) {
-    token = await platformAuthService.getValidAccessToken({ forceRefresh: true });
-    response = await makeRequest(token);
-  }
-
-  if (!response.ok) {
-    let errorDetail = '';
-    try {
-      const errJson = (await response.json()) as { msg?: string; message?: string; error?: string };
-      errorDetail = errJson.msg || errJson.message || errJson.error || '';
-    } catch {
-      // 无法解析 JSON 则采用状态码
+    // 遇 401 执行一次单飞透明刷新并重试
+    if (response.status === 401) {
+      token = await platformAuthService.getValidAccessToken({ forceRefresh: true });
+      response = await makeRequest(token);
     }
-    throw new PlatformApiError(
-      response.status,
-      `平台接口调用失败 (${response.status})${errorDetail ? `: ${errorDetail}` : ''}`,
-      { url: fullUrl, errorDetail }
-    );
-  }
 
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return (await response.json()) as T;
+    const durationMs = Date.now() - startTime;
+
+    if (!response.ok) {
+      let errorDetail = '';
+      let responseData: unknown = undefined;
+      try {
+        if (typeof response.json === 'function') {
+          responseData = await response.json();
+          const errJson = responseData as Record<string, unknown>;
+          errorDetail = String(errJson.msg || errJson.message || errJson.error || '');
+        } else if (typeof response.text === 'function') {
+          const text = await response.text();
+          errorDetail = text;
+          responseData = text;
+        }
+      } catch {
+        // 无法解析 JSON 则采用状态码
+      }
+
+      const logEntry = logger.track('API_REQUEST_FAILED', {
+        level: 'ERROR',
+        module: options.module || inferModuleFromPath(path),
+        message: `[接口失败] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
+        details: errorDetail || `HTTP ${response.status}`,
+        durationMs,
+        apiUrl: path,
+        apiMethod: method,
+        apiParams: requestParams,
+        apiResponse: responseData,
+        httpStatus: response.status,
+      });
+      broadcastApiLog(logEntry);
+
+      throw new PlatformApiError(
+        response.status,
+        `平台接口调用失败 (${response.status})${errorDetail ? `: ${errorDetail}` : ''}`,
+        { url: fullUrl, errorDetail }
+      );
+    }
+
+    let responseData: unknown = undefined;
+    const contentType = response.headers?.get?.('content-type') || '';
+    if (contentType.includes('application/json') && typeof response.json === 'function') {
+      responseData = await response.json();
+    } else if (typeof response.text === 'function') {
+      const text = await response.text();
+      try {
+        responseData = text ? JSON.parse(text) : undefined;
+      } catch {
+        responseData = text;
+      }
+    } else if (typeof response.json === 'function') {
+      responseData = await response.json();
+    }
+
+    const logEntry = logger.track('API_REQUEST_SUCCESS', {
+      level: 'INFO',
+      module: options.module || inferModuleFromPath(path),
+      message: `[接口调用] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
+      durationMs,
+      apiUrl: path,
+      apiMethod: method,
+      apiParams: requestParams,
+      apiResponse: responseData,
+      httpStatus: response.status,
+    });
+    broadcastApiLog(logEntry);
+
+    return responseData as T;
+  } catch (err) {
+    if (err instanceof PlatformApiError) {
+      throw err;
+    }
+    const durationMs = Date.now() - startTime;
+    const errorMsg = err instanceof Error ? err.message : String(err);
+
+    const logEntry = logger.track('API_REQUEST_ERROR', {
+      level: 'ERROR',
+      module: options.module || inferModuleFromPath(path),
+      message: `[接口网络异常] [${method}] ${path}: ${errorMsg}`,
+      details: errorMsg,
+      durationMs,
+      apiUrl: path,
+      apiMethod: method,
+      apiParams: requestParams,
+      apiResponse: { error: errorMsg },
+    });
+    broadcastApiLog(logEntry);
+
+    throw err;
   }
-  return (await response.text()) as T;
 }

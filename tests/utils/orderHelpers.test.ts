@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { isOrderSuccess, formatSyncTime } from '../../src/utils/orderHelpers';
-import { OrderStatus } from '../../src/types';
+import {
+  isOrderSuccess,
+  formatSyncTime,
+  getAllowedOrderActions,
+  getOrderActionDisabledReason,
+  formatCurrency,
+  calculateNightsAndPricing,
+  getOrderStatusMeta,
+} from '../../src/utils/orderHelpers';
+import type { OrderStatus } from '../../src/types';
 
 describe('orderHelpers', () => {
   describe('isOrderSuccess', () => {
@@ -53,6 +61,99 @@ describe('orderHelpers', () => {
       expect(formatSyncTime('刚刚 (直接导入)')).toBe('刚刚 (直接导入)');
       expect(formatSyncTime('刚刚 (手动重推)')).toBe('刚刚 (手动重推)');
       expect(formatSyncTime('5秒前')).toBe('5秒前');
+    });
+  });
+
+  describe('getAllowedOrderActions', () => {
+    it('allows EDIT, IMPORT, DELETE exclusively for FAILED status', () => {
+      expect(getAllowedOrderActions('FAILED')).toEqual(['EDIT', 'IMPORT', 'DELETE']);
+      expect(getAllowedOrderActions('failed')).toEqual(['EDIT', 'IMPORT', 'DELETE']);
+    });
+
+    it('allows CANCEL exclusively for SUCCESS status', () => {
+      expect(getAllowedOrderActions('SUCCESS')).toEqual(['CANCEL']);
+      expect(getAllowedOrderActions('success')).toEqual(['CANCEL']);
+    });
+
+    it('returns empty array for PENDING, IMPORTING, CANCEL or unknown statuses', () => {
+      expect(getAllowedOrderActions('PENDING')).toEqual([]);
+      expect(getAllowedOrderActions('IMPORTING')).toEqual([]);
+      expect(getAllowedOrderActions('CANCEL')).toEqual([]);
+      expect(getAllowedOrderActions('UNKNOWN')).toEqual([]);
+      expect(getAllowedOrderActions('')).toEqual([]);
+    });
+  });
+
+  describe('getOrderActionDisabledReason', () => {
+    it('returns empty string when action is allowed', () => {
+      expect(getOrderActionDisabledReason('EDIT', 'FAILED')).toBe('');
+      expect(getOrderActionDisabledReason('IMPORT', 'FAILED')).toBe('');
+      expect(getOrderActionDisabledReason('DELETE', 'FAILED')).toBe('');
+      expect(getOrderActionDisabledReason('CANCEL', 'SUCCESS')).toBe('');
+    });
+
+    it('returns descriptive reason when action is disabled', () => {
+      expect(getOrderActionDisabledReason('EDIT', 'SUCCESS')).toBe('仅失败订单允许编辑');
+      expect(getOrderActionDisabledReason('IMPORT', 'PENDING')).toBe('仅失败订单允许重新导入');
+      expect(getOrderActionDisabledReason('DELETE', 'IMPORTING')).toBe('仅失败订单允许删除');
+      expect(getOrderActionDisabledReason('CANCEL', 'FAILED')).toBe('仅成功订单允许取消');
+    });
+  });
+
+  describe('formatCurrency', () => {
+    it('formats numeric amounts to CNY currency string', () => {
+      expect(formatCurrency(120)).toBe('¥120.00');
+      expect(formatCurrency(99.5)).toBe('¥99.50');
+      expect(formatCurrency(0)).toBe('¥0.00');
+    });
+
+    it('handles empty or missing input gracefully', () => {
+      expect(formatCurrency(undefined)).toBe('-');
+      expect(formatCurrency(null)).toBe('-');
+      expect(formatCurrency('')).toBe('-');
+    });
+  });
+
+  describe('calculateNightsAndPricing', () => {
+    it('calculates nights and returns nightly prices for consecutive dates', () => {
+      const res = calculateNightsAndPricing('2026-10-01', '2026-10-03', [], 100);
+      expect(res.nights).toBe(2);
+      expect(res.pricing).toEqual([
+        { date: '2026-10-01', price: 100 },
+        { date: '2026-10-02', price: 100 },
+      ]);
+      expect(res.totalPrice).toBe(200);
+    });
+
+    it('preserves existing prices when dates match', () => {
+      const existing = [
+        { date: '2026-10-01', price: 150 },
+        { date: '2026-10-02', price: 180 },
+      ];
+      const res = calculateNightsAndPricing('2026-10-01', '2026-10-04', existing, 100);
+      expect(res.nights).toBe(3);
+      expect(res.pricing).toEqual([
+        { date: '2026-10-01', price: 150 },
+        { date: '2026-10-02', price: 180 },
+        { date: '2026-10-03', price: 100 },
+      ]);
+      expect(res.totalPrice).toBe(430);
+    });
+
+    it('returns empty result when dates are invalid or departure <= arrival', () => {
+      expect(calculateNightsAndPricing('2026-10-03', '2026-10-01').nights).toBe(0);
+      expect(calculateNightsAndPricing('invalid', '2026-10-01').nights).toBe(0);
+      expect(calculateNightsAndPricing('2026-10-01', '2026-10-01').nights).toBe(0);
+    });
+  });
+
+  describe('getOrderStatusMeta', () => {
+    it('returns correct label and tone for each status', () => {
+      expect(getOrderStatusMeta('SUCCESS')).toEqual({ label: '成功', tone: 'success' });
+      expect(getOrderStatusMeta('FAILED')).toEqual({ label: '失败', tone: 'failed' });
+      expect(getOrderStatusMeta('PENDING')).toEqual({ label: '待确认', tone: 'warning' });
+      expect(getOrderStatusMeta('IMPORTING')).toEqual({ label: '导入中', tone: 'info' });
+      expect(getOrderStatusMeta('CANCEL')).toEqual({ label: '已取消', tone: 'neutral' });
     });
   });
 });

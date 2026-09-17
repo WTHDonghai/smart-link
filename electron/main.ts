@@ -5,12 +5,77 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
+import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
+import { closeAllBrowserSessions } from '../src/crawler/browserManager';
+import { logger } from '../src/services/logger';
+import {
+  initNodePlatformTokens,
+  savePlatformTokenFile,
+  clearPlatformTokenFile,
+} from '../src/crawler/duty/platformTokenStore';
+import { saveTokensToStorage, clearTokensFromStorage } from '../src/services/platformAuth';
 import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
+import type { PlatformAuthTokens } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * 从本地配置文件安全解析并加载环境变量至当前 Node 进程
+ */
+function parseAndLoadEnvFile(envPath: string, override = false): void {
+  if (!fs.existsSync(envPath)) return;
+  try {
+    const raw = fs.readFileSync(envPath, 'utf-8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (key && (override || process.env[key] === undefined)) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch {
+    // 忽略加载异常
+  }
+}
+
+/**
+ * 初始化 Electron 主进程环境变量（支持 --mode 与单一数据源对齐）
+ */
+export function initProcessEnvironment(): void {
+  const args = process.argv.slice(2);
+  let mode = process.env.MODE || 'development';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--mode' && args[i + 1]) {
+      mode = args[i + 1].trim();
+      break;
+    }
+  }
+
+  const cwd = process.cwd();
+  parseAndLoadEnvFile(path.resolve(cwd, '.env'), false);
+  if (mode && mode !== 'development') {
+    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}`), true);
+  }
+  parseAndLoadEnvFile(path.resolve(cwd, '.env.local'), true);
+  if (mode && mode !== 'development') {
+    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}.local`), true);
+  }
+  process.env.MODE = mode;
+}
+
+initProcessEnvironment();
+
 
 /**
  * 注册桌面端原生 IPC 通信监听器
@@ -66,6 +131,156 @@ export function registerCrawlerIpcHandlers(): void {
       }
     }
   );
+}
+
+/**
+ * 注册桌面端原生值守 IPC 监听器
+ */
+export function registerDutyIpcHandlers(): void {
+  ipcMain.handle('duty:start', async (_event, channelCode: string) => {
+    const code = (channelCode || '').trim().toUpperCase();
+    if (!code) {
+      return { success: false, message: '渠道编码不能为空' };
+    }
+    try {
+      const res = await dutyOrchestrationEngine.startDuty(code);
+      return res;
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  ipcMain.handle('duty:stop', async (_event, channelCode: string) => {
+    const code = (channelCode || '').trim().toUpperCase();
+    if (!code) {
+      return { success: false, message: '渠道编码不能为空' };
+    }
+    try {
+      const res = await dutyOrchestrationEngine.stopDuty(code);
+      return res;
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  ipcMain.handle('duty:status', async (_event, since?: number) => {
+    return {
+      channels: dutyOrchestrationEngine.getChannelDutyStatus(),
+      coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
+      station: dutyOrchestrationEngine.getStationIdentity(),
+      logs: dutyOrchestrationEngine.getRecentDutyLogs(since || 0),
+    };
+  });
+
+  ipcMain.handle('duty:sync-tokens', async (_event, tokens: PlatformAuthTokens) => {
+    if (!tokens || !tokens.accessToken) {
+      return { success: false, message: '无效的 Token 载荷' };
+    }
+    saveTokensToStorage(tokens);
+    savePlatformTokenFile(tokens);
+    return { success: true };
+  });
+
+  ipcMain.handle('duty:clear-tokens', async () => {
+    clearTokensFromStorage();
+    clearPlatformTokenFile();
+    return { success: true };
+  });
+
+  // 3. 一键停止所有渠道值守与后台调度
+  ipcMain.handle('duty:stop-all', async () => {
+    try {
+      return await dutyOrchestrationEngine.stopAllDuty();
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  // 4. 应用级退出与全量资源回收调度
+  ipcMain.handle('app:teardown', async () => {
+    try {
+      await teardownApplicationResources();
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  dutyOrchestrationEngine.subscribeLogs((entry) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('duty:log-entry', entry);
+    }
+  });
+}
+
+let isTearingDown = false;
+let teardownPromise: Promise<void> | null = null;
+
+/**
+ * 唯一的应用退出与全量资源回收调度函数
+ * 具备幂等性防护、2.5 秒超时兜底熔断与异常隔离保障，按序关闭值守、清退浏览器子进程并持久化日志
+ */
+export async function teardownApplicationResources(timeoutMs = 2500): Promise<void> {
+  if (isTearingDown && teardownPromise) {
+    return teardownPromise;
+  }
+  isTearingDown = true;
+
+  const teardownAction = async (): Promise<void> => {
+    // 1. 停止所有值守任务、清除心跳并通知中台离线
+    try {
+      await dutyOrchestrationEngine.stopAllDuty();
+    } catch (err) {
+      console.warn('[Smart-Link] 停止值守任务异常:', err);
+    }
+
+    // 2. 并发安全关闭所有未释放的 BrowserContext，清空活跃集合并释放 Profile 物理锁文件
+    try {
+      await closeAllBrowserSessions();
+    } catch (err) {
+      console.warn('[Smart-Link] 关闭浏览器子进程异常:', err);
+    }
+
+    // 3. 立即刷新日志持久化存储缓冲
+    try {
+      await logger.flushStorage();
+    } catch (err) {
+      console.warn('[Smart-Link] 刷新持久化日志缓冲异常:', err);
+    }
+  };
+
+  const timeoutFallback = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[Smart-Link] teardownApplicationResources 超时 ${timeoutMs}ms，执行强制兜底熔断`);
+      resolve();
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  });
+
+  teardownPromise = Promise.race([teardownAction(), timeoutFallback]);
+  await teardownPromise;
+}
+
+/**
+ * 重置资源回收状态标志（仅供单元测试隔离使用）
+ */
+export function resetTeardownStateForTest(): void {
+  isTearingDown = false;
+  teardownPromise = null;
 }
 
 /**
@@ -266,11 +481,41 @@ export async function createMainWindow(): Promise<BrowserWindow> {
   return mainWindow;
 }
 
+let isAppQuitting = false;
+
 // 仅在被 Electron 主进程直接启动时激活生命周期
 if (process.type === 'browser') {
+  // 拦截应用退出，保证后台值守、浏览器子进程与日志资源彻底清理完成后退出
+  app.on('before-quit', (event) => {
+    if (isAppQuitting) {
+      return;
+    }
+    event.preventDefault();
+    isAppQuitting = true;
+    void teardownApplicationResources().finally(() => {
+      app.exit(0);
+    });
+  });
+
+  // 注册操作系统中断信号处理
+  process.on('SIGINT', () => {
+    void teardownApplicationResources().finally(() => {
+      process.exit(0);
+    });
+  });
+
+  process.on('SIGTERM', () => {
+    void teardownApplicationResources().finally(() => {
+      process.exit(0);
+    });
+  });
+
   app.whenReady().then(async () => {
     // 注入应用数据持久化目录，防止在打包后的只读安装目录下引发 EACCES
     process.env.SMARTLINK_USER_DATA_DIR = app.getPath('userData');
+
+    // 初始化已持久化的文旅平台 Token 凭据至 Node 内存
+    initNodePlatformTokens();
 
     // 默认平台网关环境变量托管（若宿主环境未指定）
     if (!process.env.VITE_PLATFORM_BASE_URL) {
@@ -278,6 +523,7 @@ if (process.type === 'browser') {
     }
 
     registerCrawlerIpcHandlers();
+    registerDutyIpcHandlers();
     await createMainWindow();
 
     app.on('activate', async () => {

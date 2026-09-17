@@ -2,16 +2,21 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
-import { createCrawlerApiMiddleware } from './src/server/crawlerMiddleware';
 
 function crawlerApiPlugin(): Plugin {
   return {
     name: 'smartlink-crawler-api',
-    configureServer(server) {
+    async configureServer(server) {
+      const { createCrawlerApiMiddleware } = await import('./src/server/crawlerMiddleware');
+      const { createDutyApiMiddleware } = await import('./src/server/dutyMiddleware');
       server.middlewares.use(createCrawlerApiMiddleware());
+      server.middlewares.use(createDutyApiMiddleware());
     },
-    configurePreviewServer(server) {
+    async configurePreviewServer(server) {
+      const { createCrawlerApiMiddleware } = await import('./src/server/crawlerMiddleware');
+      const { createDutyApiMiddleware } = await import('./src/server/dutyMiddleware');
       server.middlewares.use(createCrawlerApiMiddleware());
+      server.middlewares.use(createDutyApiMiddleware());
     },
   };
 }

@@ -4,6 +4,7 @@ import {
   LogModule,
   LogEventType,
   LogFilterParams,
+  DutyTaskMessageType,
 } from '../types';
 import { logStorage, formatLogTimestamp } from './logStorage';
 
@@ -16,6 +17,20 @@ export interface TrackOptions {
   durationMs?: number;
   details?: string;
   meta?: Record<string, unknown>;
+
+  // 任务上下文元字段
+  taskId?: string;
+  msgType?: DutyTaskMessageType | string;
+  taskActionStage?: 'CLAIM' | 'EXECUTE' | 'RESULT' | 'REPORT';
+  taskStatus?: 'SUCCEEDED' | 'FAILED' | 'PROCESSING' | 'PENDING';
+  taskResult?: unknown;
+
+  // 接口请求专有元字段 (API Request & Response Metadata)
+  apiUrl?: string;
+  apiMethod?: string;
+  apiParams?: unknown;
+  apiResponse?: unknown;
+  httpStatus?: number;
 }
 
 export type LogListener = (entry: SystemLogEntry) => void;
@@ -151,6 +166,18 @@ export class LoggerService {
     if (options.durationMs !== undefined) entry.durationMs = options.durationMs;
     if (options.details) entry.details = options.details;
     if (options.meta) entry.meta = options.meta;
+
+    if (options.taskId) entry.taskId = options.taskId;
+    if (options.msgType) entry.msgType = options.msgType;
+    if (options.taskActionStage) entry.taskActionStage = options.taskActionStage;
+    if (options.taskStatus) entry.taskStatus = options.taskStatus;
+    if (options.taskResult !== undefined) entry.taskResult = options.taskResult;
+
+    if (options.apiUrl) entry.apiUrl = options.apiUrl;
+    if (options.apiMethod) entry.apiMethod = options.apiMethod;
+    if (options.apiParams !== undefined) entry.apiParams = options.apiParams;
+    if (options.apiResponse !== undefined) entry.apiResponse = options.apiResponse;
+    if (options.httpStatus !== undefined) entry.httpStatus = options.httpStatus;
 
     return entry;
   }

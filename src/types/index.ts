@@ -178,7 +178,9 @@ export type LogModule =
   | 'PRODUCT'
   | 'CHANNEL'
   | 'PLAYWRIGHT'
-  | 'SYSTEM';
+  | 'DUTY_TASK'
+  | 'SYSTEM'
+  | 'API';
 
 export type LogEventType =
   // 平台认证
@@ -211,6 +213,19 @@ export type LogEventType =
   | 'PLAYWRIGHT_CAPTCHA_DETECTED'
   | 'PLAYWRIGHT_CAPTCHA_SOLVED'
   | 'PLAYWRIGHT_HEARTBEAT'
+  // 任务驱动值守 (Duty Task)
+  | 'DUTY_STATION_REGISTER'
+  | 'DUTY_ACTUAL_STATE_REPORT'
+  | 'DUTY_TASK_CLAIM'
+  | 'DUTY_TASK_EXECUTE_START'
+  | 'DUTY_TASK_EXECUTE_SUCCESS'
+  | 'DUTY_TASK_EXECUTE_FAILED'
+  | 'DUTY_TASK_CREATE_DOWNSTREAM'
+  | 'DUTY_TASK_RESULT_SUBMIT'
+  // 接口请求与网络调用
+  | 'API_REQUEST_SUCCESS'
+  | 'API_REQUEST_FAILED'
+  | 'API_REQUEST_ERROR'
   // 系统内核与异常
   | 'SYS_UNHANDLED_ERROR'
   | 'SYS_UNHANDLED_REJECTION'
@@ -231,6 +246,20 @@ export interface SystemLogEntry {
   message: string;
   details?: string;
   meta?: Record<string, unknown>;
+
+  // 任务上下文专有元字段 (Task Metadata)
+  taskId?: string;
+  msgType?: DutyTaskMessageType | string;
+  taskActionStage?: 'CLAIM' | 'EXECUTE' | 'RESULT' | 'REPORT';
+  taskStatus?: 'SUCCEEDED' | 'FAILED' | 'PROCESSING' | 'PENDING';
+  taskResult?: unknown;
+
+  // 接口请求专有元字段 (API Request & Response Metadata)
+  apiUrl?: string;
+  apiMethod?: string;
+  apiParams?: unknown;   // 请求入参 (URL query / request body)
+  apiResponse?: unknown; // 接口返回 (response body / error payload)
+  httpStatus?: number;   // HTTP 状态码
 }
 
 export interface LogFilterParams {
@@ -254,6 +283,264 @@ export interface GuardianStats {
   todayFailed?: number;
   pendingManual?: number;
   avgTransferSeconds?: number;
+}
+
+/**
+ * 文旅中台订单处理状态
+ */
+export type ToolkitOrderStatus = 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCEL' | 'IMPORTING';
+
+/**
+ * 订单允许执行的人工操作类型
+ */
+export type ToolkitOrderAction = 'EDIT' | 'IMPORT' | 'DELETE' | 'CANCEL';
+
+/**
+ * 每日价格明细项
+ */
+export interface NightlyPricing {
+  date: string;
+  price: number;
+}
+
+/**
+ * 文旅中台标准订单实体契约
+ */
+export interface ToolkitOrder {
+  id: string;
+  unitId: string;
+  unitName: string;
+  otaChannel: string;
+  otaOrderId: string;
+  contact: {
+    name: string;
+    mobile: string;
+  };
+  booking: {
+    arrival: string;
+    departure: string;
+    roomType: string;
+    roomTypeId?: string;
+    rateCode: string;
+    paytype: string;
+    nights: number;
+    quantity: number;
+    totalPrice: number;
+    pricing: NightlyPricing[];
+  };
+  status: ToolkitOrderStatus;
+  errorMessage?: string;
+  pmsOrderId?: string;
+  remark?: string;
+  updatedAt?: string;
+  allowedActions: ToolkitOrderAction[];
+}
+
+/**
+ * 文旅中台订单 4 项核心统计指标
+ */
+export interface ToolkitOrderStatistics {
+  today: number;
+  pending: number;
+  success: number;
+  failed: number;
+}
+
+/**
+ * 文旅订单查询参数
+ */
+export interface ToolkitOrderFilters {
+  page: number;
+  pageSize: number;
+  status: string;
+  query: string;
+  arrivalStart: string;
+  arrivalEnd: string;
+  unitId?: string;
+  otaChannel?: string;
+}
+
+/**
+ * 订单分页查询响应
+ */
+export interface ToolkitOrderPageResult {
+  records: ToolkitOrder[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+/**
+ * 酒店内部产品选项目录 (用于订单编辑绑定)
+ */
+export interface InternalProductOptions {
+  roomTypes: Array<{ code: string; name: string }>;
+  rateCodes: Array<{ rateCode: string; name: string }>;
+  reservationTypes: Array<{ code: string; name: string }>;
+}
+
+/**
+ * 订单编辑草稿载荷
+ */
+export interface ToolkitOrderDraft {
+  otaOrderId: string;
+  contact: {
+    name: string;
+    mobile: string;
+  };
+  booking: {
+    roomType: string;
+    roomTypeId: string;
+    rateCode: string;
+    paytype: string;
+    arrival: string;
+    departure: string;
+    quantity: number;
+    pricing: NightlyPricing[];
+  };
+  remark?: string;
+}
+
+/**
+ * 渠道自动化值守单渠道运行状态
+ */
+export type ChannelDutyStatus = 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED';
+
+/**
+ * 全局任务协调器运行状态
+ */
+export type DutyCoordinatorStatus =
+  | 'STOPPED'
+  | 'IDLE'
+  | 'CLAIMING'
+  | 'EXECUTING'
+  | 'REPORTING'
+  | 'CLAIM_BACKOFF'
+  | 'DEGRADED';
+
+/**
+ * 单渠道值守状态实体
+ */
+export interface ChannelDutyInfo {
+  channelCode: string;
+  status: ChannelDutyStatus;
+  lastStartedAt?: number;
+  error?: string;
+}
+
+/**
+ * 实际状态上报载荷 (POST /toolkit/toolbox/actual-state/report)
+ */
+export interface ActualStateReportPayload {
+  stationId: string;
+  apps: Array<{
+    appId: string;
+    actualVersion: string;
+    status: 'RUNNING' | 'STOP';
+    lastStartedAt: number;
+    reportedAt: number;
+    otaCollectionTargets: Array<{ otaChannelCode: string }>;
+  }>;
+}
+
+/**
+ * 工位注册请求体 (POST /toolkit/toolbox/station/register)
+ */
+export interface StationRegistration {
+  macAddress: string;
+  hostname: string;
+  ip: string;
+  appId: string;
+  osName?: string;
+  agentVersion?: string;
+}
+
+/**
+ * 机器指纹配置选项 (支持测试与自定义注入)
+ */
+export interface StationMachineProfileOptions {
+  appId?: string;
+  agentVersion?: string;
+  customHostname?: string;
+  customPlatform?: string;
+  customRelease?: string;
+  customArch?: string;
+  customMac?: string;
+  customIp?: string;
+}
+
+/**
+ * 工位注册与识别身份
+ */
+export interface StationIdentity {
+  stationId: string;
+  appId: string;
+  platformBaseUrl?: string;
+  stationName?: string;
+  macAddress?: string;
+  ip?: string;
+  hostname?: string;
+  osName?: string;
+  agentVersion?: string;
+  registeredAt?: number | string;
+}
+
+/**
+ * 文旅中台任务消息类型
+ */
+export type DutyTaskMessageType =
+  | 'OTA_COLLECT_ORDER'
+  | 'OTA_IMPORT_ORDER'
+  | 'OTA_CANCEL_ORDER'
+  | 'OTA_CONFIRM_IMPORT'
+  | 'OTA_CONFIRM_CANCEL';
+
+/**
+ * 任务领取长轮询请求体 (POST /toolkit/toolbox/task-claims)
+ */
+export interface DutyTaskClaimRequest {
+  stationId: string;
+  appId: string;
+  direction?: 'FORWARD' | 'BACKWARD' | 'INBOUND';
+}
+
+/**
+ * 领取到的中台任务实体
+ */
+export interface DutyClaimedTask {
+  id: string;
+  businessId: string;
+  businessType: string;
+  msgType: DutyTaskMessageType;
+  stationId: string;
+  leaseToken: string;
+  data: string; // Base64 encoded JSON
+  createdTime?: string;
+}
+
+/**
+ * 任务执行结果提交载荷 (PUT /toolkit/toolbox/tasks/:id/result)
+ */
+export interface DutyTaskResultPayload {
+  taskId: string;
+  status: 'SUCCEEDED' | 'FAILED';
+  result?: Record<string, unknown>;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/**
+ * 批量创建下游任务载荷 (POST /toolkit/toolbox/tasks)
+ */
+export interface DutyTaskCreationBatch {
+  stationId: string;
+  appId: string;
+  items: Array<{
+    msgType: 'OTA_IMPORT_ORDER' | 'OTA_CANCEL_ORDER';
+    businessId: string;
+    unitId?: string;
+    data: unknown;
+  }>;
 }
 
 export interface PlatformAuthTokens {

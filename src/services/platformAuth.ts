@@ -37,6 +37,15 @@ export interface ClassifiedAuthError extends Error {
   oauthError?: string;
 }
 
+interface MetaWithEnv {
+  env?: {
+    DEV?: boolean;
+    PROD?: boolean;
+    MODE?: string;
+    VITE_PLATFORM_BASE_URL?: string;
+  };
+}
+
 export function getEnvironmentMode(): { mode: string; isDev: boolean; isProd: boolean } {
   if (typeof process !== 'undefined' && process.env?.NODE_ENV) {
     const env = process.env.NODE_ENV;
@@ -47,10 +56,11 @@ export function getEnvironmentMode(): { mode: string; isDev: boolean; isProd: bo
     };
   }
 
-  if (typeof import.meta !== 'undefined' && import.meta.env) {
-    const isDev = Boolean(import.meta.env.DEV);
-    const isProd = Boolean(import.meta.env.PROD);
-    const mode = String(import.meta.env.MODE || (isDev ? 'development' : 'production'));
+  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
+  if (meta?.env) {
+    const isDev = Boolean(meta.env.DEV);
+    const isProd = Boolean(meta.env.PROD);
+    const mode = String(meta.env.MODE || (isDev ? 'development' : 'production'));
     return { mode, isDev, isProd };
   }
 
@@ -74,9 +84,10 @@ export function getPlatformBaseUrl(): string {
       ? (window as unknown as { electron?: { env?: { platformBaseUrl?: string } } }).electron?.env?.platformBaseUrl
       : undefined;
 
+  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
   const envUrl =
     (typeof process !== 'undefined' && process.env?.VITE_PLATFORM_BASE_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL) ||
+    meta?.env?.VITE_PLATFORM_BASE_URL ||
     electronUrl;
 
   if (!envUrl || !envUrl.trim()) {
@@ -192,8 +203,21 @@ function notifyTokenChange(tokens: PlatformAuthTokens | null): void {
 
 const activeSchedulers = new Set<PlatformAuthService>();
 
+let inMemoryTokens: PlatformAuthTokens | null = null;
+
+export function setInMemoryTokens(tokens: PlatformAuthTokens | null): void {
+  inMemoryTokens = tokens;
+}
+
 export function saveTokensToStorage(tokens: PlatformAuthTokens): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
+  inMemoryTokens = tokens;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
+    } catch {
+      // 忽略存储配额或权限异常
+    }
+  }
   notifyTokenChange(tokens);
   for (const scheduler of activeSchedulers) {
     if (scheduler.isSchedulerActive()) {
@@ -203,28 +227,36 @@ export function saveTokensToStorage(tokens: PlatformAuthTokens): void {
 }
 
 export function loadTokensFromStorage(): PlatformAuthTokens | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PlatformAuthTokens;
-    if (!parsed.accessToken || !parsed.refreshToken || !parsed.expiresAt) {
-      return null;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as PlatformAuthTokens;
+        if (parsed.accessToken && parsed.refreshToken && parsed.expiresAt) {
+          inMemoryTokens = parsed;
+          return parsed;
+        }
+      }
+    } catch {
+      // 容错回退内存缓存
     }
-    return parsed;
-  } catch {
-    return null;
   }
+  return inMemoryTokens;
 }
 
 export function clearTokensFromStorage(): void {
-  let hasTokens = false;
-  try {
-    hasTokens = Boolean(localStorage.getItem(STORAGE_KEY));
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // 忽略异常
+  const hadInMemory = Boolean(inMemoryTokens);
+  inMemoryTokens = null;
+  let hadStorage = false;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      hadStorage = Boolean(localStorage.getItem(STORAGE_KEY));
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // 忽略异常
+    }
   }
-  if (hasTokens) {
+  if (hadStorage || hadInMemory) {
     notifyTokenChange(null);
   }
 }

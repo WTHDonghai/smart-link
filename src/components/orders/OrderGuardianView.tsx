@@ -1,377 +1,317 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { 
-  toggleAutoGuarding, 
-  setOrderFilterStatus, 
-  retryOrderTransfer,
-  importOrderDirectly, 
-  deleteOrder, 
-  cancelOrder, 
-  updateOrder,
-  setSearchKeyword, 
-  setDateRange, 
+import {
+  fetchOrdersThunk,
+  fetchStatisticsThunk,
+  executeOrderActionThunk,
+  loadOrderEditorThunk,
+  saveOrderDraftThunk,
+  syncDutyStatusThunk,
+  setFilterStatus,
+  setFilterQuery,
+  setDateRange,
+  setPagination,
   resetFilters,
-  selectGuardianStats 
+  closeEditDrawer,
 } from '../../store/slices/orderGuardianSlice';
-import { showToast } from '../../store/slices/appSlice';
+import type { ToolkitOrder, ToolkitOrderDraft } from '../../types';
+import { ChannelDutyPanel } from './ChannelDutyPanel';
 import { logger } from '../../services/logger';
-import { GuardianOrder, OrderStatus } from '../../types';
-import { isOrderSuccess } from '../../utils/orderHelpers';
-import { EditOrderModal } from './EditOrderModal';
 import { OrderStatsCards } from './OrderStatsCards';
 import { OrderFilterBar } from './OrderFilterBar';
-import { OrderBatchBar } from './OrderBatchBar';
 import { OrderTable } from './OrderTable';
+import { EditOrderDrawer } from './EditOrderDrawer';
 import { Pagination } from '../common/Pagination';
+import { Modal } from '../common/Modal';
+import { AlertCircle, RefreshCw } from 'lucide-react';
+import { showToast } from '../../store/slices/appSlice';
+
+interface ConfirmModalState {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  isDanger?: boolean;
+  onConfirm: () => void;
+}
 
 export const OrderGuardianView: React.FC = () => {
   const dispatch = useAppDispatch();
+
+  // State selectors
   const orders = useAppSelector((state) => state.orderGuardian.orders);
-  const stats = useAppSelector(selectGuardianStats);
-  const isAutoGuarding = useAppSelector((state) => state.orderGuardian.isAutoGuarding);
-  const filterStatus = useAppSelector((state) => state.orderGuardian.filterStatus);
-  const searchKeyword = useAppSelector((state) => state.orderGuardian.searchKeyword);
-  const startDate = useAppSelector((state) => state.orderGuardian.startDate);
-  const endDate = useAppSelector((state) => state.orderGuardian.endDate);
+  const total = useAppSelector((state) => state.orderGuardian.total);
+  const loading = useAppSelector((state) => state.orderGuardian.loading);
+  const error = useAppSelector((state) => state.orderGuardian.error);
+  const actionLoadingId = useAppSelector((state) => state.orderGuardian.actionLoadingId);
 
-  // Local Filter Form States
-  const [keywordInput, setKeywordInput] = useState(searchKeyword);
-  const [startInput, setStartInput] = useState(startDate);
-  const [endInput, setEndInput] = useState(endDate);
+  const statistics = useAppSelector((state) => state.orderGuardian.statistics);
+  const statsLoading = useAppSelector((state) => state.orderGuardian.statsLoading);
+  const filters = useAppSelector((state) => state.orderGuardian.filters);
 
-  // Pagination states
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const activeEditOrder = useAppSelector((state) => state.orderGuardian.activeEditOrder);
+  const productOptions = useAppSelector((state) => state.orderGuardian.productOptions);
+  const drawerLoading = useAppSelector((state) => state.orderGuardian.drawerLoading);
+  const drawerSaving = useAppSelector((state) => state.orderGuardian.drawerSaving);
+  const drawerError = useAppSelector((state) => state.orderGuardian.drawerError);
 
-  // Selection states for batch actions
-  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  // Local search inputs
+  const [localQuery, setLocalQuery] = useState(filters.query);
+  const [localArrivalStart, setLocalArrivalStart] = useState(filters.arrivalStart);
+  const [localArrivalEnd, setLocalArrivalEnd] = useState(filters.arrivalEnd);
 
-  // Active editing modal state
-  const [editingOrder, setEditingOrder] = useState<GuardianOrder | null>(null);
+  // Confirmation modal state
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
 
-  // Filter orders with useMemo
-  const filteredOrders = useMemo(() => {
-    return orders.filter((o) => {
-      if (filterStatus !== 'all') {
-        if (filterStatus === 'success') {
-          if (!isOrderSuccess(o.status)) return false;
-        } else if (filterStatus === 'pending') {
-          if (o.status !== 'pending') return false;
-        } else if (filterStatus === 'failed') {
-          if (o.status !== 'failed') return false;
-        } else if (filterStatus === 'cancelled') {
-          if (o.status !== 'cancelled') return false;
-        } else {
-          if (o.status !== filterStatus) return false;
-        }
-      }
+  // Initial fetch on mount
+  useEffect(() => {
+    void dispatch(fetchOrdersThunk());
+    void dispatch(fetchStatisticsThunk());
+    void dispatch(syncDutyStatusThunk());
+  }, [dispatch]);
 
-      if (searchKeyword.trim()) {
-        const kw = searchKeyword.toLowerCase();
-        const matchNo = o.otaOrderNo.toLowerCase().includes(kw);
-        const matchPms = o.pmsOrderNo.toLowerCase().includes(kw);
-        const matchGuest = o.guestName.toLowerCase().includes(kw);
-        const matchPhone = o.guestPhone.includes(kw);
-        const matchHotel = o.hotelName.toLowerCase().includes(kw);
-        if (!matchNo && !matchPms && !matchGuest && !matchPhone && !matchHotel) {
-          return false;
-        }
-      }
+  // Synchronize local filter inputs if filters reset
+  useEffect(() => {
+    setLocalQuery(filters.query);
+    setLocalArrivalStart(filters.arrivalStart);
+    setLocalArrivalEnd(filters.arrivalEnd);
+  }, [filters.query, filters.arrivalStart, filters.arrivalEnd]);
 
-      if (startDate && o.checkInDate < startDate) return false;
-      if (endDate && o.checkInDate > endDate) return false;
-
-      return true;
-    });
-  }, [orders, filterStatus, searchKeyword, startDate, endDate]);
-
-  // Calculate pagination metrics
-  const totalItems = filteredOrders.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
-
-  // Paginated records
-  const startIndex = (safeCurrentPage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalItems);
-  const paginatedOrders = filteredOrders.slice(startIndex, endIndex);
-
-  const handlePageChange = (page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-    }
-  };
-
-  const handlePageSizeChange = (size: number) => {
-    setPageSize(size);
-    setCurrentPage(1);
+  // Handlers for filter bar
+  const handleStatusChange = (status: string) => {
+    dispatch(setFilterStatus(status));
+    void dispatch(fetchOrdersThunk({ status, page: 1 }));
   };
 
   const handleSearch = () => {
-    setCurrentPage(1);
-    dispatch(setSearchKeyword(keywordInput));
-    dispatch(setDateRange({ startDate: startInput, endDate: endInput }));
-  };
-
-  const handleReset = () => {
-    setCurrentPage(1);
-    setKeywordInput('');
-    setStartInput('');
-    setEndInput('');
-    dispatch(resetFilters());
-  };
-
-  const handleTabChange = (status: 'all' | OrderStatus) => {
-    setCurrentPage(1);
-    dispatch(setOrderFilterStatus(status));
-  };
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    dispatch(showToast({
-      title: '已复制单号',
-      description: text,
-      type: 'success'
-    }));
-  };
-
-  const handleToggleSelectAll = () => {
-    const currentPageIds = paginatedOrders.map(o => o.id);
-    const allSelected = currentPageIds.every(id => selectedOrderIds.includes(id));
-    if (allSelected) {
-      setSelectedOrderIds(prev => prev.filter(id => !currentPageIds.includes(id)));
-    } else {
-      setSelectedOrderIds(prev => Array.from(new Set([...prev, ...currentPageIds])));
+    if (localArrivalStart && localArrivalEnd && localArrivalStart > localArrivalEnd) {
+      dispatch(
+        showToast({
+          type: 'error',
+          title: '日期区间无效',
+          description: '入住开始日期不能晚于结束日期',
+        })
+      );
+      return;
     }
-  };
-
-  const handleToggleSelectOrder = (id: string) => {
-    setSelectedOrderIds(prev => 
-      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    dispatch(setFilterQuery(localQuery));
+    dispatch(setDateRange({ startDate: localArrivalStart, endDate: localArrivalEnd }));
+    void dispatch(
+      fetchOrdersThunk({
+        query: localQuery,
+        arrivalStart: localArrivalStart,
+        arrivalEnd: localArrivalEnd,
+        page: 1,
+      })
     );
   };
 
-  const handleDirectImport = (order: GuardianOrder) => {
-    dispatch(importOrderDirectly(order.id));
-    dispatch(showToast({
-      title: '订单导入成功',
-      description: `订单 ${order.otaOrderNo} 已成功推入中台并生成确认号`,
-      type: 'success'
-    }));
+  const handleReset = () => {
+    dispatch(resetFilters());
+    setLocalQuery('');
+    setLocalArrivalStart('');
+    setLocalArrivalEnd('');
+    void dispatch(
+      fetchOrdersThunk({
+        page: 1,
+        status: 'all',
+        query: '',
+        arrivalStart: '',
+        arrivalEnd: '',
+      })
+    );
+  };
+
+  // Handlers for pagination
+  const handlePageChange = (newPage: number) => {
+    dispatch(setPagination({ page: newPage }));
+    void dispatch(fetchOrdersThunk({ page: newPage }));
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    dispatch(setPagination({ page: 1, pageSize: newSize }));
+    void dispatch(fetchOrdersThunk({ page: 1, pageSize: newSize }));
+  };
+
+  // Handlers for order actions
+  const handleEdit = (order: ToolkitOrder) => {
+    void dispatch(loadOrderEditorThunk(order.id));
+  };
+
+  const handleImport = (order: ToolkitOrder) => {
     logger.track('ORDER_TRANSFER_PMS_SUCCESS', {
       module: 'ORDER',
-      level: 'SUCCESS',
-      channelId: order.channelId,
-      orderNo: order.otaOrderNo,
-      message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderNo} 成功入账`,
-      details: `酒店: ${order.hotelName} | 房型: ${order.roomTypeName} | 客人: ${order.guestName}`,
-      meta: { otaOrderNo: order.otaOrderNo, pmsOrderNo: order.pmsOrderNo, price: order.otaPrice }
+      level: 'INFO',
+      channelId: order.otaChannel,
+      orderNo: order.otaOrderId,
+      message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderId}`,
+      details: `酒店: ${order.unitName} | 房型: ${order.booking.roomType} | 客人: ${order.contact.name}`,
+      meta: { otaOrderId: order.otaOrderId, pmsOrderId: order.pmsOrderId, price: order.booking.totalPrice },
+    });
+    void dispatch(executeOrderActionThunk({ id: order.id, action: 'IMPORT' }));
+  };
+
+  const handleDelete = (order: ToolkitOrder) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '确认删除失败订单',
+      message: `确定要删除 OTA 订单「${order.otaOrderId}」吗？此操作不可逆。`,
+      isDanger: true,
+      onConfirm: () => {
+        logger.track('ORDER_DELETE_CONFIRM', {
+          module: 'ORDER',
+          level: 'WARN',
+          channelId: order.otaChannel,
+          orderNo: order.otaOrderId,
+          message: `[OrderGuardian] 用户确认删除失败订单 ${order.otaOrderId}`,
+        });
+        void dispatch(executeOrderActionThunk({ id: order.id, action: 'DELETE' }));
+      },
     });
   };
 
-  const handleRetryOrder = (order: GuardianOrder) => {
-    dispatch(retryOrderTransfer(order.id));
-    dispatch(showToast({
-      title: '已触发直连重推',
-      description: `订单 ${order.otaOrderNo} 正在向文旅中台重新推送`,
-      type: 'info'
-    }));
-    logger.track('ORDER_BATCH_RETRY', {
+  const handleCancel = (order: ToolkitOrder) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '确认取消订单',
+      message: `确定要在中台发起取消订单「${order.otaOrderId}」吗？`,
+      isDanger: false,
+      onConfirm: () => {
+        logger.track('ORDER_CANCEL_CONFIRM', {
+          module: 'ORDER',
+          level: 'INFO',
+          channelId: order.otaChannel,
+          orderNo: order.otaOrderId,
+          message: `[OrderGuardian] 用户发起取消中台订单 ${order.otaOrderId}`,
+        });
+        void dispatch(executeOrderActionThunk({ id: order.id, action: 'CANCEL' }));
+      },
+    });
+  };
+
+  const handleSaveDraft = (id: string, draft: ToolkitOrderDraft) => {
+    logger.track('ORDER_DRAFT_SAVE', {
       module: 'ORDER',
-      level: 'PLAYWRIGHT',
-      channelId: order.channelId,
-      orderNo: order.otaOrderNo,
-      message: `[OrderGuardian] 直连重推订单 ${order.otaOrderNo} 到文旅中台`,
-      details: `重试渠道: ${order.channelName} | 状态置为 processing`,
-      meta: { otaOrderNo: order.otaOrderNo, channelId: order.channelId }
+      level: 'INFO',
+      orderNo: draft.otaOrderId,
+      message: `[OrderGuardian] 用户保存订单草稿 ${draft.otaOrderId}`,
+      details: `房型: ${draft.booking.roomType} | 房价码: ${draft.booking.rateCode} | 入住人: ${draft.contact.name}`,
     });
-  };
-
-  const handleDeleteOrder = (order: GuardianOrder) => {
-    dispatch(deleteOrder(order.id));
-    setSelectedOrderIds(prev => prev.filter(id => id !== order.id));
-    dispatch(showToast({
-      title: '已删除订单记录',
-      description: `订单 ${order.otaOrderNo} 已从值守列表中移除`,
-      type: 'info'
-    }));
-  };
-
-  const handleCancelOrder = (order: GuardianOrder) => {
-    dispatch(cancelOrder(order.id));
-    dispatch(showToast({
-      title: '已取消订单',
-      description: `订单 ${order.otaOrderNo} 状态已更新为取消`,
-      type: 'info'
-    }));
-  };
-
-  // Batch operations
-  const handleBatchRetry = () => {
-    selectedOrderIds.forEach(id => {
-      dispatch(retryOrderTransfer(id));
-    });
-    dispatch(showToast({
-      title: '已批量直连重推',
-      description: `已向中台重新推送选中的 ${selectedOrderIds.length} 笔订单`,
-      type: 'success'
-    }));
-    setSelectedOrderIds([]);
-  };
-
-  const handleBatchImport = () => {
-    selectedOrderIds.forEach(id => {
-      dispatch(importOrderDirectly(id));
-    });
-    dispatch(showToast({
-      title: '已批量强制导入',
-      description: `已直接导入选中的 ${selectedOrderIds.length} 笔订单`,
-      type: 'success'
-    }));
-    setSelectedOrderIds([]);
-  };
-
-  const handleBatchCancel = () => {
-    selectedOrderIds.forEach(id => {
-      dispatch(cancelOrder(id));
-    });
-    dispatch(showToast({
-      title: '已批量取消订单',
-      description: `已取消选中的 ${selectedOrderIds.length} 笔订单`,
-      type: 'info'
-    }));
-    setSelectedOrderIds([]);
-  };
-
-  const handleSaveEditedOrder = (updatedData: Partial<GuardianOrder>, shouldImport: boolean) => {
-    if (!editingOrder) return;
-
-    dispatch(updateOrder({
-      id: editingOrder.id,
-      ...updatedData
-    }));
-
-    if (shouldImport) {
-      dispatch(importOrderDirectly(editingOrder.id));
-      dispatch(showToast({
-        title: '订单已保存并导入',
-        description: `订单 ${editingOrder.otaOrderNo} 已同步至中台并确认`,
-        type: 'success'
-      }));
-    } else {
-      dispatch(showToast({
-        title: '订单信息已更新',
-        description: `已保存对订单 ${editingOrder.otaOrderNo} 的修改`,
-        type: 'info'
-      }));
-    }
-    setEditingOrder(null);
-  };
-
-  const handleToggleGuarding = () => {
-    dispatch(toggleAutoGuarding());
-    if (!isAutoGuarding) {
-      dispatch(showToast({
-        title: '自动订单值守已启动',
-        description: '系统将每 30 秒轮询 OTA 平台新订单并自动入账',
-        type: 'success'
-      }));
-      logger.track('ORDER_POLL_START', {
-        module: 'ORDER',
-        level: 'INFO',
-        message: '[OrderGuardian] 启动全自动订单值守监听器 (轮询间隔 30s)'
-      });
-    } else {
-      dispatch(showToast({
-        title: '自动订单值守已暂停',
-        description: '后台自动抓取与搬单监听已暂停',
-        type: 'info'
-      }));
-      logger.track('ORDER_POLL_SUCCESS', {
-        module: 'ORDER',
-        level: 'WARN',
-        message: '[OrderGuardian] 订单值守监听器已暂停'
-      });
-    }
+    void dispatch(saveOrderDraftThunk({ id, draft }));
   };
 
   return (
-    <div className="w-full h-full max-w-[1400px] mx-auto flex flex-col p-6 text-[#0b1c30] overflow-hidden min-h-0">
-      {/* 统一页面头部 */}
-      <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#e2e8f0] shrink-0 mb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-1.5 h-4.5 rounded-full bg-[#004ac6] shrink-0" />
-          <h1 className="text-xl font-bold text-[#0b1c30] tracking-tight">
-            订单值守
-          </h1>
-          <span className="text-xs text-[#737686] ml-2 font-mono">
-            共 {orders.length} 笔订单
-          </span>
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f8f9ff] p-4 gap-3">
+      {/* 模块 1: 渠道自动化值守面板 */}
+      <ChannelDutyPanel />
+
+      {/* 模块 2: 订单 4 项核心指标统计 */}
+      <OrderStatsCards statistics={statistics} loading={statsLoading} />
+
+      {/* 错误告警横幅 */}
+      {error && (
+        <div className="px-4 py-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-rose-700 text-xs shrink-0">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => dispatch(fetchOrdersThunk())}
+            className="flex items-center gap-1 font-semibold hover:underline cursor-pointer ml-4"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>重试</span>
+          </button>
         </div>
-      </div>
+      )}
 
-      {/* 顶部统计卡片 */}
-      <OrderStatsCards stats={stats} />
-
-      {/* 搜索与筛选区域 */}
+      {/* 模块 3: 多维状态筛选与搜索 */}
       <OrderFilterBar
-        filterStatus={filterStatus}
-        onTabChange={handleTabChange}
-        isAutoGuarding={isAutoGuarding}
-        onToggleGuarding={handleToggleGuarding}
-        keywordInput={keywordInput}
-        setKeywordInput={setKeywordInput}
-        startInput={startInput}
-        setStartInput={setStartInput}
-        endInput={endInput}
-        setEndInput={setEndInput}
+        status={filters.status}
+        onStatusChange={handleStatusChange}
+        query={localQuery}
+        onQueryChange={setLocalQuery}
+        arrivalStart={localArrivalStart}
+        arrivalEnd={localArrivalEnd}
+        onArrivalStartChange={setLocalArrivalStart}
+        onArrivalEndChange={setLocalArrivalEnd}
         onSearch={handleSearch}
         onReset={handleReset}
+        loading={loading}
       />
 
-      {/* 批量操作工具条 */}
-      <OrderBatchBar
-        selectedCount={selectedOrderIds.length}
-        onClearSelection={() => setSelectedOrderIds([])}
-        onBatchRetry={handleBatchRetry}
-        onBatchImport={handleBatchImport}
-        onBatchCancel={handleBatchCancel}
+      {/* 模块 4: 高密订单表格 */}
+      <OrderTable
+        orders={orders}
+        actionLoadingId={actionLoadingId}
+        onEdit={handleEdit}
+        onImport={handleImport}
+        onDelete={handleDelete}
+        onCancel={handleCancel}
       />
 
-      {/* 订单表格与分页一体化容器 */}
-      <div className="flex-1 min-h-0 bg-white rounded-xl border border-[#dce9ff] flex flex-col overflow-hidden shadow-xs">
-        <OrderTable
-          orders={paginatedOrders}
-          selectedOrderIds={selectedOrderIds}
-          onToggleSelectAll={handleToggleSelectAll}
-          onToggleSelectOrder={handleToggleSelectOrder}
-          onCopy={handleCopy}
-          onOpenEdit={(ord) => setEditingOrder(ord)}
-          onRetry={handleRetryOrder}
-          onDirectImport={handleDirectImport}
-          onDeleteOrder={handleDeleteOrder}
-          onCancelOrder={handleCancelOrder}
-        />
-
-        {/* 底部分页条 */}
+      {/* 模块 5: 底部分页控件 */}
+      <div className="shrink-0 bg-white p-2.5 rounded-xl border border-[#e2e8f0] shadow-2xs">
         <Pagination
-          totalItems={totalItems}
-          currentPage={safeCurrentPage}
-          pageSize={pageSize}
+          totalItems={total}
+          currentPage={filters.page}
+          pageSize={filters.pageSize}
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
-          pageSizeOptions={[5, 10, 20, 50]}
-          itemUnit="条订单"
+          pageSizeOptions={[10, 20, 50, 100]}
+          itemUnit="笔订单"
         />
       </div>
 
-      {/* 订单编辑弹窗 */}
-      {editingOrder && (
-        <EditOrderModal
-          order={editingOrder}
-          isOpen={Boolean(editingOrder)}
-          onClose={() => setEditingOrder(null)}
-          onSave={handleSaveEditedOrder}
-        />
+      {/* 模块 6: 编辑抽屉 */}
+      <EditOrderDrawer
+        order={activeEditOrder}
+        productOptions={productOptions}
+        isOpen={!!activeEditOrder}
+        isLoading={drawerLoading}
+        isSaving={drawerSaving}
+        error={drawerError}
+        onClose={() => dispatch(closeEditDrawer())}
+        onSave={handleSaveDraft}
+      />
+
+      {/* 模块 7: 二次确认对话框 */}
+      {confirmModal && (
+        <Modal
+          isOpen={confirmModal.isOpen}
+          onClose={() => setConfirmModal(null)}
+          title={confirmModal.title}
+          maxWidth="sm"
+          footer={
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="px-3.5 py-1.5 bg-white hover:bg-[#eff4ff] border border-[#dce9ff] text-[#434655] rounded-lg text-xs font-medium cursor-pointer transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmModal.onConfirm();
+                  setConfirmModal(null);
+                }}
+                className={`px-3.5 py-1.5 text-white rounded-lg text-xs font-semibold shadow-2xs cursor-pointer transition-colors ${
+                  confirmModal.isDanger
+                    ? 'bg-[#ba1a1a] hover:bg-[#93000a]'
+                    : 'bg-[#004ac6] hover:bg-[#003da6]'
+                }`}
+              >
+                确认
+              </button>
+            </div>
+          }
+        >
+          <p className="text-xs text-[#434655] leading-relaxed py-2">
+            {confirmModal.message}
+          </p>
+        </Modal>
       )}
     </div>
   );

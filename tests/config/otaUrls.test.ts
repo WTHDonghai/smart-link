@@ -3,7 +3,8 @@ import {
   getEnvVar,
   getOtaChannelUrl,
   getMeituanCatalogUrl,
-  DEFAULT_FALLBACK_URLS,
+  getOtaOrderUrl,
+  getMeituanOrderUrl,
 } from '../../src/config/otaUrls';
 import { resolveMeituanTargetUrl } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
 
@@ -32,12 +33,13 @@ describe('otaUrls config & single source of truth', () => {
   });
 
   describe('getOtaChannelUrl', () => {
-    it('returns default fallback URL when environment variable is not set', () => {
+    it('throws explicit error when environment variable is not set (Fail-Fast)', () => {
       delete process.env.VITE_OTA_MEITUAN_URL;
-      delete process.env.VITE_OTA_DOUYIN_URL;
+      expect(() => getOtaChannelUrl('MEITUAN')).toThrow('未配置渠道「MEITUAN」的目标访问地址');
+    });
 
-      expect(getOtaChannelUrl('MEITUAN')).toBe(DEFAULT_FALLBACK_URLS.MEITUAN);
-      expect(getOtaChannelUrl('DOUYIN')).toBe(DEFAULT_FALLBACK_URLS.DOUYIN);
+    it('throws explicit error for unsupported channel code', () => {
+      expect(() => getOtaChannelUrl('UNKNOWN_CHANNEL')).toThrow('不支持的 OTA 渠道编码');
     });
 
     it('returns custom mock URL when environment variable is configured', () => {
@@ -81,4 +83,44 @@ describe('otaUrls config & single source of truth', () => {
       expect(resolveMeituanTargetUrl()).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
     });
   });
+
+  describe('getOtaOrderUrl & getMeituanOrderUrl', () => {
+    it('throws explicit error when environment variable is not set (Fail-Fast)', () => {
+      delete process.env.VITE_OTA_MEITUAN_ORDER_URL;
+      delete process.env.VITE_OTA_DOUYIN_ORDER_URL;
+
+      expect(() => getMeituanOrderUrl()).toThrow('未配置渠道「MEITUAN」的订单值守地址');
+      expect(() => getOtaOrderUrl('MEITUAN')).toThrow('未配置渠道「MEITUAN」的订单值守地址');
+      expect(() => getOtaOrderUrl('DOUYIN')).toThrow('未配置渠道「DOUYIN」的订单值守地址');
+    });
+
+    it('throws explicit error for unsupported order channel code', () => {
+      expect(() => getOtaOrderUrl('UNKNOWN_CHANNEL')).toThrow('不支持的订单值守 OTA 渠道编码');
+    });
+
+    it('returns mock order URL when VITE_OTA_MEITUAN_ORDER_URL is configured', () => {
+      process.env.VITE_OTA_MEITUAN_ORDER_URL =
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
+
+      expect(getMeituanOrderUrl()).toBe(
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+      );
+      expect(getOtaOrderUrl('MEITUAN')).toBe(
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+      );
+    });
+
+    it('supports MEITUAN_BIZ falling back to MEITUAN_ORDER_URL', () => {
+      process.env.VITE_OTA_MEITUAN_ORDER_URL =
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
+
+      expect(getOtaOrderUrl('MEITUAN_BIZ')).toBe(
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+      );
+      expect(getOtaOrderUrl('meituanbiz')).toBe(
+        'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+      );
+    });
+  });
 });
+

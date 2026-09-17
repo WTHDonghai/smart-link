@@ -9,8 +9,10 @@ import systemLogReducer, {
   setFilterSearch,
   toggleAutoScroll,
   addLog,
+  addLogs,
   hydrateLogs,
   clearLogs,
+  clearAllLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import { SystemLogEntry } from '../../../src/types';
 
@@ -175,6 +177,108 @@ describe('systemLogSlice', () => {
       expect(nextState.logs.some((l) => l.id === 'existing-log-499')).toBe(false);
       expect(nextState.logs[499].id).toBe('existing-log-498');
     });
+
+    it('preserves task metadata including taskId, msgType, taskActionStage, taskStatus, and taskResult', () => {
+      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+
+      const nextState = systemLogReducer(
+        initialState,
+        addLog({
+          level: 'SUCCESS',
+          module: 'DUTY_TASK',
+          event: 'DUTY_TASK_EXECUTE_SUCCESS',
+          message: '[任务结果 RESULT] 任务 OTA_IMPORT_ORDER 执行成功',
+          taskId: 'task-abc-123',
+          msgType: 'OTA_IMPORT_ORDER',
+          taskActionStage: 'RESULT',
+          taskStatus: 'SUCCEEDED',
+          taskResult: { imported: true, pmsOrderNo: 'PMS-001' },
+        })
+      );
+
+      expect(nextState.logs.length).toBe(1);
+      const log = nextState.logs[0];
+      expect(log.taskId).toBe('task-abc-123');
+      expect(log.msgType).toBe('OTA_IMPORT_ORDER');
+      expect(log.taskActionStage).toBe('RESULT');
+      expect(log.taskStatus).toBe('SUCCEEDED');
+      expect(log.taskResult).toEqual({ imported: true, pmsOrderNo: 'PMS-001' });
+    });
+
+    it('deduplicates logs when adding an entry with an existing id', () => {
+      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+
+      const firstState = systemLogReducer(
+        initialState,
+        addLog({
+          id: 'log-dedup-1',
+          level: 'INFO',
+          message: '原始消息',
+        })
+      );
+      expect(firstState.logs.length).toBe(1);
+
+      // 再次添加相同 id 的日志，应当被去重跳过
+      const secondState = systemLogReducer(
+        firstState,
+        addLog({
+          id: 'log-dedup-1',
+          level: 'INFO',
+          message: '重复消息',
+        })
+      );
+      expect(secondState.logs.length).toBe(1);
+      expect(secondState.logs[0].message).toBe('原始消息');
+    });
+  });
+
+  describe('addLogs batch', () => {
+    it('appends multiple logs in batch while skipping existing duplicates', () => {
+      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+
+      const existingLog: SystemLogEntry = {
+        id: 'log-batch-1',
+        timestamp: '2026-09-17 12:00:00.000',
+        createdAt: 1000,
+        level: 'INFO',
+        message: 'Existing log 1',
+      };
+
+      const withExisting = systemLogReducer(initialState, hydrateLogs([existingLog]));
+      expect(withExisting.logs.length).toBe(1);
+
+      const batch: SystemLogEntry[] = [
+        existingLog, // 重复项
+        {
+          id: 'log-batch-2',
+          timestamp: '2026-09-17 12:01:00.000',
+          createdAt: 2000,
+          level: 'SUCCESS',
+          module: 'DUTY_TASK',
+          taskActionStage: 'CLAIM',
+          msgType: 'OTA_COLLECT_ORDER',
+          message: 'New batch log 2',
+        },
+        {
+          id: 'log-batch-3',
+          timestamp: '2026-09-17 12:02:00.000',
+          createdAt: 3000,
+          level: 'SUCCESS',
+          module: 'DUTY_TASK',
+          taskActionStage: 'RESULT',
+          taskStatus: 'SUCCEEDED',
+          msgType: 'OTA_COLLECT_ORDER',
+          message: 'New batch log 3',
+        },
+      ];
+
+      const afterBatch = systemLogReducer(withExisting, addLogs(batch));
+      expect(afterBatch.logs.length).toBe(3);
+      // 最新创建的应位于队首
+      expect(afterBatch.logs[0].id).toBe('log-batch-3');
+      expect(afterBatch.logs[1].id).toBe('log-batch-2');
+      expect(afterBatch.logs[2].id).toBe('log-batch-1');
+    });
   });
 
   describe('hydrateLogs', () => {
@@ -199,8 +303,8 @@ describe('systemLogSlice', () => {
     });
   });
 
-  describe('clearLogs', () => {
-    it('clears active logs in state to empty array', () => {
+  describe('clearLogs and clearAllLogs', () => {
+    it('clears active logs and resets storedLogCount to 0 in state', () => {
       const initialState = systemLogReducer(undefined, { type: '@@INIT' });
       const withLog = systemLogReducer(
         initialState,
@@ -210,10 +314,40 @@ describe('systemLogSlice', () => {
         })
       );
       expect(withLog.logs.length).toBe(1);
+      expect(withLog.storedLogCount).toBe(1);
 
       const clearedState = systemLogReducer(withLog, clearLogs());
       expect(clearedState.logs).toEqual([]);
       expect(clearedState.logs.length).toBe(0);
+      expect(clearedState.storedLogCount).toBe(0);
+    });
+
+    it('resets logs and storedLogCount when clearAllLogs is pending or fulfilled', () => {
+      const withLog = {
+        ...systemLogReducer(undefined, { type: '@@INIT' }),
+        logs: [
+          {
+            id: 'log-1',
+            timestamp: '2026-09-17 12:00:00.000',
+            createdAt: 1000,
+            level: 'INFO' as const,
+            message: '测试待清理日志',
+          },
+        ],
+        storedLogCount: 1,
+      };
+
+      const pendingState = systemLogReducer(withLog, {
+        type: clearAllLogs.pending.type,
+      });
+      expect(pendingState.logs).toEqual([]);
+      expect(pendingState.storedLogCount).toBe(0);
+
+      const fulfilledState = systemLogReducer(withLog, {
+        type: clearAllLogs.fulfilled.type,
+      });
+      expect(fulfilledState.logs).toEqual([]);
+      expect(fulfilledState.storedLogCount).toBe(0);
     });
   });
 });

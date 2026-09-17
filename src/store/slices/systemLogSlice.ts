@@ -1,6 +1,7 @@
 import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import { SystemLogEntry, LogLevel, LogModule } from '../../types';
 import { logStorage, formatLogTimestamp } from '../../services/logStorage';
+import { logger } from '../../services/logger';
 
 export interface SystemLogState {
   logs: SystemLogEntry[];
@@ -56,6 +57,16 @@ export const purgeExpiredLogs = createAsyncThunk(
   }
 );
 
+/**
+ * 彻底清空所有日志（包括内存日志流、logger 缓冲与 IndexedDB 持久化存储）
+ */
+export const clearAllLogs = createAsyncThunk(
+  'systemLog/clearAllLogs',
+  async () => {
+    await logger.clearAll();
+  }
+);
+
 export const systemLogSlice = createSlice({
   name: 'systemLog',
   initialState,
@@ -104,6 +115,10 @@ export const systemLogSlice = createSlice({
       const timestamp = action.payload.timestamp ?? formatLogTimestamp(now);
       const id = action.payload.id ?? `log-${createdAt}-${Math.random().toString(36).slice(2, 6)}`;
 
+      if (state.logs.some((l) => l.id === id)) {
+        return;
+      }
+
       const entry: SystemLogEntry = {
         ...action.payload,
         id,
@@ -119,11 +134,30 @@ export const systemLogSlice = createSlice({
         state.logs.pop();
       }
     },
+    addLogs: (state, action: PayloadAction<SystemLogEntry[]>) => {
+      if (!action.payload || action.payload.length === 0) return;
+      const existingIds = new Set(state.logs.map((l) => l.id));
+      const newEntries: SystemLogEntry[] = [];
+      for (const item of action.payload) {
+        if (!existingIds.has(item.id)) {
+          existingIds.add(item.id);
+          newEntries.push(item);
+        }
+      }
+      if (newEntries.length === 0) return;
+      newEntries.sort((a, b) => b.createdAt - a.createdAt);
+      state.logs.unshift(...newEntries);
+      state.storedLogCount += newEntries.length;
+      if (state.logs.length > 500) {
+        state.logs.splice(500);
+      }
+    },
     hydrateLogs: (state, action: PayloadAction<SystemLogEntry[]>) => {
       state.logs = action.payload;
     },
     clearLogs: (state) => {
       state.logs = [];
+      state.storedLogCount = 0;
     },
   },
   extraReducers: (builder) => {
@@ -141,6 +175,14 @@ export const systemLogSlice = createSlice({
       })
       .addCase(purgeExpiredLogs.fulfilled, (state, action) => {
         state.storedLogCount = action.payload.remainingCount;
+      })
+      .addCase(clearAllLogs.pending, (state) => {
+        state.logs = [];
+        state.storedLogCount = 0;
+      })
+      .addCase(clearAllLogs.fulfilled, (state) => {
+        state.logs = [];
+        state.storedLogCount = 0;
       });
   },
 });
@@ -156,6 +198,7 @@ export const {
   toggleAutoScroll,
   setStoredLogCount,
   addLog,
+  addLogs,
   hydrateLogs,
   clearLogs,
 } = systemLogSlice.actions;
