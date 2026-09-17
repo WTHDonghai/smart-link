@@ -1,30 +1,16 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import type { ProfileSyncResult } from './types';
+import { detectDefaultChromeSourceDir, resolveChromeProfileDir } from './paths';
 
 export type { ProfileSyncResult };
+export { detectDefaultChromeSourceDir, resolveChromeProfileDir };
 
 export interface ProfileSyncOptions {
   channelCode?: string; // 目标渠道标识（大写），如 'MEITUAN'
   channelId?: string; // 兼容向后兼容性
   customSourceDir?: string; // 可选的自定义源 Chrome 路径
   customSourceProfile?: string; // 可选的自定义源 Profile 名称 (如 'Profile 7')
-}
-
-/**
- * 自动探测当前操作系统中 Google Chrome 的默认用户数据根目录
- */
-export function detectDefaultChromeSourceDir(): string {
-  const platform = os.platform();
-  if (platform === 'darwin') {
-    return path.join(os.homedir(), 'Library/Application Support/Google/Chrome');
-  }
-  if (platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData/Local');
-    return path.join(localAppData, 'Google/Chrome/User Data');
-  }
-  return path.join(os.homedir(), '.config/google-chrome');
 }
 
 /**
@@ -147,8 +133,7 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
 
   // 2. 确定目标工作目录 (.chrome-profile/<channelCode>)
   const channelCode = (options.channelCode || options.channelId || 'MEITUAN').trim().toUpperCase();
-  const baseDir = process.env.SMARTLINK_USER_DATA_DIR || process.cwd();
-  const targetRoot = path.resolve(baseDir, '.chrome-profile', channelCode.toLowerCase());
+  const targetRoot = resolveChromeProfileDir(channelCode);
   const targetProfileDir = path.join(targetRoot, 'Default');
 
   if (!fs.existsSync(targetProfileDir)) {

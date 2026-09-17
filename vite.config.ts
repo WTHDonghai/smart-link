@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { createCrawlerApiMiddleware } from './src/server/crawlerMiddleware';
 
 function crawlerApiPlugin(): Plugin {
@@ -16,7 +16,11 @@ function crawlerApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  // 同步环境变量至当前 Node 进程，确保 Vite 中间件及服务端爬虫引擎具备相同变量可见性
+  Object.assign(process.env, env);
+
   return {
     base: './',
     plugins: [react(), tailwindcss(), crawlerApiPlugin()],

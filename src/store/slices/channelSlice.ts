@@ -22,6 +22,7 @@ import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
   DEFAULT_DOUYIN_REMARK_TEMPLATE,
 } from '../../services/protocols/douyinProtocol';
+import { getOtaChannelUrl } from '../../config/otaUrls';
 
 export const SCHEMA_STORAGE_PREFIX = 'smartlink_schema_';
 export const TEMPLATE_STORAGE_PREFIX = 'smartlink_template_';
@@ -144,7 +145,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
     ],
     remarkTemplate: DEFAULT_MEITUAN_REMARK_TEMPLATE,
     protocolSchema: DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
-    storeCrawlUrl: 'https://me.meituan.com/ebooking/merchant/product/batch-price',
+    storeCrawlUrl: getOtaChannelUrl('MEITUAN'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -161,7 +162,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'meituanbiz_vip', label: '美团企业采购 VIP (MEITUAN_CORP)' }
     ],
     remarkTemplate: '【企业商旅协议】OTA单号:{OTA订单号} | 企业统一结算 | {入住人} | 请提供增值税专用发票',
-    storeCrawlUrl: 'https://me.meituan.com/ebooking/merchant/product/batch-price',
+    storeCrawlUrl: getOtaChannelUrl('MEITUAN_BIZ'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -179,7 +180,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
     ],
     remarkTemplate: DEFAULT_DOUYIN_REMARK_TEMPLATE,
     protocolSchema: DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
-    storeCrawlUrl: 'https://life.douyin.com/p/poi-manage/home',
+    storeCrawlUrl: getOtaChannelUrl('DOUYIN'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -197,7 +198,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'ctrip_agent', label: '携程代理分销 (CTRIP_AGENT)' }
     ],
     remarkTemplate: '【携程直销】订单号:{OTA订单号}，房型:{房型名称}，入住人:{入住人}，底价:{底价}，请及时排房。',
-    storeCrawlUrl: 'https://ebooking.ctrip.com/',
+    storeCrawlUrl: getOtaChannelUrl('CTRIP'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -214,7 +215,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'tongcheng_b2b', label: '同程企业集采 (TC_B2B)' }
     ],
     remarkTemplate: '【同程订单】外部单号:{OTA订单号}，客人:{入住人}，间夜:{间夜数}，无早。',
-    storeCrawlUrl: 'https://ebooking.ly.com/',
+    storeCrawlUrl: getOtaChannelUrl('TONGCHENG'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -231,7 +232,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'fliggy_alitrip', label: '阿里商旅分销 (ALITRIP_CORP)' }
     ],
     remarkTemplate: '【飞猪信用住】单号:{OTA订单号}，免押免查房，离店后自动结算。',
-    storeCrawlUrl: 'https://hotel.fliggy.com/',
+    storeCrawlUrl: getOtaChannelUrl('FLIGGY'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -248,7 +249,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'qunar_b2b', label: '去哪儿同业分销 (QUNAR_B2B)' }
     ],
     remarkTemplate: '【去哪儿】单号:{OTA订单号}，预留至20:00，房型:{房型名称}。',
-    storeCrawlUrl: 'https://ebooking.qunar.com/',
+    storeCrawlUrl: getOtaChannelUrl('QUNAR'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -265,7 +266,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'red_trips', label: '小红书文旅预订 (RED_TRIPS)' }
     ],
     remarkTemplate: '【小红书种草单】单号:{OTA订单号}，网红探店客户，送欢迎水果礼遇。',
-    storeCrawlUrl: 'https://ark.xiaohongshu.com/',
+    storeCrawlUrl: getOtaChannelUrl('RED'),
     status: 'active',
     crawlerStatus: 'online'
   }

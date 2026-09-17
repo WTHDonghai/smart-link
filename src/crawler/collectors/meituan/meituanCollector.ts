@@ -2,7 +2,6 @@ import type { Page, BrowserContext, Response } from 'playwright';
 import type { ChannelHotelCollector } from '../base';
 import type { DiscoveredHotelCandidate, CollectorOptions } from '../../types';
 import {
-  DEFAULT_MEITUAN_CATALOG_URL,
   resolveMeituanTargetUrl,
   extractMeituanStoresFromResponses,
   normalizeMeituanHotelCandidates,
@@ -13,7 +12,10 @@ import { updateVisualTrackerStatus, visualClickLocator } from '../../visualTrack
 
 export class MeituanHotelCollector implements ChannelHotelCollector {
   public readonly channelCode = 'MEITUAN';
-  public readonly defaultTargetUrl = DEFAULT_MEITUAN_CATALOG_URL;
+
+  public get defaultTargetUrl(): string {
+    return this.resolveTargetUrl();
+  }
 
   public resolveTargetUrl(customUrl?: string): string {
     return resolveMeituanTargetUrl(customUrl);
@@ -32,6 +34,14 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
       message: `[Meituan:Collector] 开始准备导航至美团门店目标地址: ${targetUrl}`,
     });
 
+    const targetHost = (() => {
+      try {
+        return new URL(targetUrl).hostname;
+      } catch {
+        return '';
+      }
+    })();
+
     const capturedResponses: unknown[] = [];
 
     // 1. 注册网络监听器（用于捕获 /accountpoi/poiInfos 等核心 JSON 数据包）
@@ -40,12 +50,15 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
         const isJson = contentType.includes('application/json') || url.includes('/accountpoi/poiInfos');
+        const isStaticAsset = /\.(png|jpg|jpeg|gif|svg|ico|css|js|woff2?|map)($|\?)/i.test(url);
 
-        if (
-          isJson &&
-          (url.includes('meituan.com') || url.includes('me.meituan.com')) &&
-          !/\.(png|jpg|jpeg|gif|svg|ico|css|js|woff2?|map)($|\?)/i.test(url)
-        ) {
+        // 动态匹配：目标主机名（支持本地 Mock 如 127.0.0.1、localhost）、真实美团域名或核心 API 路径
+        const isTargetHostOrPath =
+          Boolean(targetHost && url.includes(targetHost)) ||
+          url.includes('/accountpoi/poiInfos') ||
+          url.includes('meituan.com');
+
+        if (isJson && isTargetHostOrPath && !isStaticAsset) {
           const bodyText = await response.text();
           if (bodyText && bodyText.trim()) {
             try {
