@@ -190,6 +190,162 @@ export interface GuardianStats {
   avgTransferSeconds?: number;
 }
 
+/**
+ * 文旅中台订单处理状态
+ */
+export type ToolkitOrderStatus = 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCEL' | 'IMPORTING';
+
+/**
+ * 订单允许执行的人工操作类型
+ */
+export type ToolkitOrderAction = 'EDIT' | 'IMPORT' | 'DELETE' | 'CANCEL';
+
+/**
+ * 每日价格明细项
+ */
+export interface NightlyPricing {
+  date: string;
+  price: number;
+}
+
+/**
+ * 文旅中台标准订单实体契约
+ */
+export interface ToolkitOrder {
+  id: string;
+  unitId: string;
+  unitName: string;
+  otaChannel: string;
+  otaOrderId: string;
+  contact: {
+    name: string;
+    mobile: string;
+  };
+  booking: {
+    arrival: string;
+    departure: string;
+    roomType: string;
+    roomTypeId?: string;
+    rateCode: string;
+    paytype: string;
+    nights: number;
+    quantity: number;
+    totalPrice: number;
+    pricing: NightlyPricing[];
+  };
+  status: ToolkitOrderStatus;
+  errorMessage?: string;
+  pmsOrderId?: string;
+  remark?: string;
+  updatedAt?: string;
+  allowedActions: ToolkitOrderAction[];
+}
+
+/**
+ * 文旅中台订单 4 项核心统计指标
+ */
+export interface ToolkitOrderStatistics {
+  today: number;
+  pending: number;
+  success: number;
+  failed: number;
+}
+
+/**
+ * 文旅订单查询参数
+ */
+export interface ToolkitOrderFilters {
+  page: number;
+  pageSize: number;
+  status: string;
+  query: string;
+  arrivalStart: string;
+  arrivalEnd: string;
+}
+
+/**
+ * 订单分页查询响应
+ */
+export interface ToolkitOrderPageResult {
+  records: ToolkitOrder[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+/**
+ * 酒店内部产品选项目录 (用于订单编辑绑定)
+ */
+export interface InternalProductOptions {
+  roomTypes: Array<{ code: string; name: string }>;
+  rateCodes: Array<{ rateCode: string; name: string }>;
+  reservationTypes: Array<{ code: string; name: string }>;
+}
+
+/**
+ * 订单编辑草稿载荷
+ */
+export interface ToolkitOrderDraft {
+  otaOrderId: string;
+  contact: {
+    name: string;
+    mobile: string;
+  };
+  booking: {
+    roomType: string;
+    roomTypeId: string;
+    rateCode: string;
+    paytype: string;
+    arrival: string;
+    departure: string;
+    quantity: number;
+    pricing: NightlyPricing[];
+  };
+  remark?: string;
+}
+
+/**
+ * 渠道自动化值守单渠道运行状态
+ */
+export type ChannelDutyStatus = 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED';
+
+/**
+ * 全局任务协调器运行状态
+ */
+export type DutyCoordinatorStatus =
+  | 'STOPPED'
+  | 'IDLE'
+  | 'CLAIMING'
+  | 'EXECUTING'
+  | 'REPORTING'
+  | 'CLAIM_BACKOFF'
+  | 'DEGRADED';
+
+/**
+ * 单渠道值守状态实体
+ */
+export interface ChannelDutyInfo {
+  channelCode: string;
+  status: ChannelDutyStatus;
+  lastStartedAt?: number;
+  error?: string;
+}
+
+/**
+ * 实际状态上报载荷 (POST /toolkit/toolbox/actual-state/report)
+ */
+export interface ActualStateReportPayload {
+  stationId: string;
+  apps: Array<{
+    appId: string;
+    actualVersion: string;
+    status: 'RUNNING' | 'STOP';
+    lastStartedAt: number;
+    reportedAt: number;
+    otaCollectionTargets: Array<{ otaChannelCode: string }>;
+  }>;
+}
+
 export interface PlatformAuthTokens {
   accessToken: string;
   refreshToken: string;

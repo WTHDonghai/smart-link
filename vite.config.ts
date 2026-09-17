@@ -3,15 +3,18 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, type Plugin } from 'vite';
 import { createCrawlerApiMiddleware } from './src/server/crawlerMiddleware';
+import { createDutyApiMiddleware } from './src/server/dutyMiddleware';
 
 function crawlerApiPlugin(): Plugin {
   return {
     name: 'smartlink-crawler-api',
     configureServer(server) {
       server.middlewares.use(createCrawlerApiMiddleware());
+      server.middlewares.use(createDutyApiMiddleware());
     },
     configurePreviewServer(server) {
       server.middlewares.use(createCrawlerApiMiddleware());
+      server.middlewares.use(createDutyApiMiddleware());
     },
   };
 }

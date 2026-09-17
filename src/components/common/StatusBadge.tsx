@@ -8,6 +8,7 @@ export type StatusVariant =
   | 'info' 
   | 'cancelled' 
   | 'pending'
+  | 'neutral'
   | 'playwright';
 
 export interface StatusBadgeProps {
@@ -57,6 +58,12 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       defaultIcon: <Info className="w-3 h-3" />,
     },
     cancelled: {
+      bg: 'bg-gray-100',
+      text: 'text-gray-600',
+      border: 'border-gray-200',
+      defaultIcon: <Ban className="w-3 h-3" />,
+    },
+    neutral: {
       bg: 'bg-gray-100',
       text: 'text-gray-600',
       border: 'border-gray-200',
