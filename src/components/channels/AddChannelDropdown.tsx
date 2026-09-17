@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { ALL_CHANNELS_CATALOG, addChannelById } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { Plus, ChevronDown, Check, PlusCircle } from 'lucide-react';
 
 export const AddChannelDropdown: React.FC = () => {
@@ -32,11 +32,13 @@ export const AddChannelDropdown: React.FC = () => {
       description: '请为新渠道选择对应的文旅接收系统并保存',
       type: 'success'
     }));
-    dispatch(addLog({
+    logger.track('CHANNEL_MAPPING_SAVE', {
+      module: 'CHANNEL',
       level: 'INFO',
       channelId,
-      message: `[ChannelManager] Added new OTA channel: ${channelName} (${channelId}). Associated default routing and Playwright context.`
-    }));
+      message: `[ChannelManager] 已新增 OTA 渠道: ${channelName} (${channelId})`,
+      meta: { channelName, channelId }
+    });
     setIsOpen(false);
   };
 

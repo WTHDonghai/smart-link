@@ -9,7 +9,7 @@ import {
   batchDeleteProducts
 } from '../../store/slices/productSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { 
   Search, 
   X, 
@@ -205,13 +205,14 @@ export const ProductSyncView: React.FC = () => {
       })
     );
 
-    dispatch(
-      addLog({
-        level: 'INFO',
-        channelId: product.otaChannelId,
-        message: `[ProductSync] Saved product mapping for ${product.otaProductName} (${product.otaProductCode})`
-      })
-    );
+    logger.track('PRODUCT_MAPPING_MATCH', {
+      module: 'PRODUCT',
+      level: 'INFO',
+      channelId: product.otaChannelId,
+      message: `[ProductSync] 已保存房型映射「${product.otaProductName}」(${product.otaProductCode})`,
+      details: `内部房型: ${updatedPayload.internalRoomType} | 房价码: ${updatedPayload.rateCode}`,
+      meta: { productCode: product.otaProductCode, internalRoomType: updatedPayload.internalRoomType }
+    });
   };
 
   const handleDeleteRow = (product: ProductMapping) => {
@@ -224,13 +225,13 @@ export const ProductSyncView: React.FC = () => {
         type: 'info'
       })
     );
-    dispatch(
-      addLog({
-        level: 'WARN',
-        channelId: product.otaChannelId,
-        message: `[ProductSync] Deleted product mapping ${product.otaProductName} (${product.otaProductCode})`
-      })
-    );
+    logger.track('PRODUCT_MAPPING_MATCH', {
+      module: 'PRODUCT',
+      level: 'WARN',
+      channelId: product.otaChannelId,
+      message: `[ProductSync] 已移除房型映射「${product.otaProductName}」(${product.otaProductCode})`,
+      details: `已从当前映射库中删除`
+    });
   };
 
   // 批量保存
@@ -268,13 +269,14 @@ export const ProductSyncView: React.FC = () => {
       })
     );
 
-    dispatch(
-      addLog({
-        level: 'INFO',
-        channelId: filterChannel,
-        message: `[ProductSync] Batch saved ${selectedIds.length} products: ${selectedIds.join(', ')}`
-      })
-    );
+    logger.track('PRODUCT_MAPPING_MATCH', {
+      module: 'PRODUCT',
+      level: 'INFO',
+      channelId: filterChannel,
+      message: `[ProductSync] 批量保存了 ${selectedIds.length} 个房型产品映射`,
+      details: `产品ID: ${selectedIds.join(', ')}`,
+      meta: { count: selectedIds.length }
+    });
   };
 
   // 批量删除
@@ -292,13 +294,13 @@ export const ProductSyncView: React.FC = () => {
       })
     );
 
-    dispatch(
-      addLog({
-        level: 'WARN',
-        channelId: filterChannel,
-        message: `[ProductSync] Batch deleted ${count} products`
-      })
-    );
+    logger.track('PRODUCT_MAPPING_MATCH', {
+      module: 'PRODUCT',
+      level: 'WARN',
+      channelId: filterChannel,
+      message: `[ProductSync] 批量删除了 ${count} 个房型产品映射`,
+      meta: { deletedCount: count }
+    });
   };
 
   // 保存所有更改 (包括未勾选但已修改的行)
@@ -350,13 +352,14 @@ export const ProductSyncView: React.FC = () => {
           type: 'success'
         })
       );
-      dispatch(
-        addLog({
-          level: 'INFO',
-          channelId: filterChannel,
-          message: `[ProductCrawl] Playwright crawled products for hotel ${filterHotel}, total matched: ${filteredProducts.length}`
-        })
-      );
+      logger.track('PLAYWRIGHT_PAGE_NAVIGATE', {
+        module: 'PLAYWRIGHT',
+        level: 'INFO',
+        channelId: filterChannel,
+        message: `[ProductCrawl] Playwright 完成酒店「${filterHotel}」产品抓取`,
+        details: `匹配到 ${filteredProducts.length} 个房型产品条目`,
+        meta: { hotelName: filterHotel, matchedCount: filteredProducts.length }
+      });
     }, 1500);
   };
 

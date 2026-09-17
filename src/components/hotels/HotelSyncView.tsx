@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { setIsScraping, setFilterChannel, setSearchKeyword, updateHotelMapping, addDiscoveredHotel } from '../../store/slices/hotelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { Search, RefreshCw, ChevronDown, Save, X } from 'lucide-react';
 import { HotelMapping } from '../../types';
 import { SearchableSelect } from '../common/SearchableSelect';
@@ -78,11 +78,20 @@ export const HotelSyncView: React.FC = () => {
       type: 'success'
     }));
 
-    dispatch(addLog({
+    dispatch(showToast({
+      title: `已保存「${hotel.otaHotelName}」映射`,
+      description: `对应中台酒店：${pmsName} (${pmsId})`,
+      type: 'success'
+    }));
+
+    logger.track('HOTEL_SYNC_SUCCESS', {
+      module: 'HOTEL',
       level: 'INFO',
       channelId: hotel.otaChannelId,
-      message: `[HotelSync] Saved mapping for ${hotel.otaHotelName} (${hotel.otaHotelId}) -> ${pmsName} (${pmsId})`
-    }));
+      message: `[HotelSync] 已保存酒店映射「${hotel.otaHotelName}」-> ${pmsName} (${pmsId})`,
+      details: `OTA酒店ID: ${hotel.otaHotelId} | PMS酒店ID: ${pmsId}`,
+      meta: { otaHotelId: hotel.otaHotelId, pmsHotelId: pmsId }
+    });
   };
 
   const handleStartPlaywrightCrawl = () => {
@@ -94,10 +103,12 @@ export const HotelSyncView: React.FC = () => {
       type: 'info'
     }));
 
-    dispatch(addLog({
+    logger.track('PLAYWRIGHT_WORKER_START', {
+      module: 'PLAYWRIGHT',
       level: 'PLAYWRIGHT',
-      message: '[Playwright:Crawler] Initiated headless Chromium cluster for hotel inventory fetch.'
-    }));
+      message: '[Playwright:Crawler] Initiated headless Chromium cluster for hotel inventory fetch.',
+      details: 'Cluster pool size: 2 | Context: isolated-incognito'
+    });
 
     setTimeout(() => {
       // Simulate discovering a new hotel
@@ -121,10 +132,13 @@ export const HotelSyncView: React.FC = () => {
         description: '成功拉取最新酒店信息，自动完成 PMS 库字典比对',
         type: 'success'
       }));
-      dispatch(addLog({
+      logger.track('HOTEL_SYNC_SUCCESS', {
+        module: 'HOTEL',
         level: 'SUCCESS',
-        message: '[Playwright:Crawler] Extracted 1 new property "桔子水晶酒店(杭州西湖武林广场店)" and verified pricing matrix.'
-      }));
+        message: '[HotelSync:Playwright] 成功采集新上线酒店「桔子水晶酒店(杭州西湖武林广场店)」并完成比对',
+        details: '已导入 16 个物理房型与价格日历矩阵',
+        meta: { otaHotelId: 'MT-HZ-99014', roomCount: 16 }
+      });
     }, 2200);
   };
 

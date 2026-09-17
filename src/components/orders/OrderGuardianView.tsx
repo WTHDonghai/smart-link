@@ -14,7 +14,7 @@ import {
   selectGuardianStats 
 } from '../../store/slices/orderGuardianSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { GuardianOrder, OrderStatus } from '../../types';
 import { isOrderSuccess } from '../../utils/orderHelpers';
 import { EditOrderModal } from './EditOrderModal';
@@ -157,11 +157,15 @@ export const OrderGuardianView: React.FC = () => {
       description: `订单 ${order.otaOrderNo} 已成功推入中台并生成确认号`,
       type: 'success'
     }));
-    dispatch(addLog({
+    logger.track('ORDER_TRANSFER_PMS_SUCCESS', {
+      module: 'ORDER',
       level: 'SUCCESS',
       channelId: order.channelId,
-      message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderNo} 成功`
-    }));
+      orderNo: order.otaOrderNo,
+      message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderNo} 成功入账`,
+      details: `酒店: ${order.hotelName} | 房型: ${order.roomTypeName} | 客人: ${order.guestName}`,
+      meta: { otaOrderNo: order.otaOrderNo, pmsOrderNo: order.pmsOrderNo, price: order.otaPrice }
+    });
   };
 
   const handleRetryOrder = (order: GuardianOrder) => {
@@ -171,11 +175,15 @@ export const OrderGuardianView: React.FC = () => {
       description: `订单 ${order.otaOrderNo} 正在向文旅中台重新推送`,
       type: 'info'
     }));
-    dispatch(addLog({
+    logger.track('ORDER_BATCH_RETRY', {
+      module: 'ORDER',
       level: 'PLAYWRIGHT',
       channelId: order.channelId,
-      message: `[OrderGuardian] 直连重推订单 ${order.otaOrderNo} 到中台`
-    }));
+      orderNo: order.otaOrderNo,
+      message: `[OrderGuardian] 直连重推订单 ${order.otaOrderNo} 到文旅中台`,
+      details: `重试渠道: ${order.channelName} | 状态置为 processing`,
+      meta: { otaOrderNo: order.otaOrderNo, channelId: order.channelId }
+    });
   };
 
   const handleDeleteOrder = (order: GuardianOrder) => {
@@ -267,20 +275,22 @@ export const OrderGuardianView: React.FC = () => {
         description: '系统将每 30 秒轮询 OTA 平台新订单并自动入账',
         type: 'success'
       }));
-      dispatch(addLog({
+      logger.track('ORDER_POLL_START', {
+        module: 'ORDER',
         level: 'INFO',
-        message: '[OrderGuardian] 启动全自动订单值守监听器'
-      }));
+        message: '[OrderGuardian] 启动全自动订单值守监听器 (轮询间隔 30s)'
+      });
     } else {
       dispatch(showToast({
         title: '自动订单值守已暂停',
         description: '后台自动抓取与搬单监听已暂停',
         type: 'info'
       }));
-      dispatch(addLog({
+      logger.track('ORDER_POLL_SUCCESS', {
+        module: 'ORDER',
         level: 'WARN',
-        message: '[OrderGuardian] 订单值守已暂停'
-      }));
+        message: '[OrderGuardian] 订单值守监听器已暂停'
+      });
     }
   };
 

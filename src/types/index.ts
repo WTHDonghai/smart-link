@@ -120,13 +120,79 @@ export interface GuardianOrder {
   crawlerDurationMs: number;
 }
 
+export type LogLevel = 'PLAYWRIGHT' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
+
+export type LogModule =
+  | 'AUTH'
+  | 'ORDER'
+  | 'HOTEL'
+  | 'PRODUCT'
+  | 'CHANNEL'
+  | 'PLAYWRIGHT'
+  | 'SYSTEM';
+
+export type LogEventType =
+  // 平台认证
+  | 'AUTH_LOGIN_START'
+  | 'AUTH_LOGIN_SUCCESS'
+  | 'AUTH_LOGIN_FAILED'
+  | 'AUTH_TOKEN_REFRESH'
+  | 'AUTH_LOGOUT'
+  // 订单守护与分发
+  | 'ORDER_POLL_START'
+  | 'ORDER_POLL_SUCCESS'
+  | 'ORDER_TRANSFER_PMS_SUCCESS'
+  | 'ORDER_TRANSFER_PMS_FAILED'
+  | 'ORDER_BATCH_RETRY'
+  | 'ORDER_MANUAL_UPDATE'
+  // 渠道映射
+  | 'CHANNEL_MAPPING_SAVE'
+  | 'CHANNEL_PROTOCOL_UPDATE'
+  | 'CHANNEL_TEMPLATE_UPDATE'
+  | 'CHANNEL_RESET_DEFAULT'
+  // 房型与价格同步
+  | 'HOTEL_SYNC_START'
+  | 'HOTEL_SYNC_SUCCESS'
+  | 'HOTEL_SYNC_FAILED'
+  | 'PRODUCT_MAPPING_MATCH'
+  | 'PRODUCT_PRICE_PUSH'
+  // Playwright 自动化引擎
+  | 'PLAYWRIGHT_WORKER_START'
+  | 'PLAYWRIGHT_PAGE_NAVIGATE'
+  | 'PLAYWRIGHT_CAPTCHA_DETECTED'
+  | 'PLAYWRIGHT_CAPTCHA_SOLVED'
+  | 'PLAYWRIGHT_HEARTBEAT'
+  // 系统内核与异常
+  | 'SYS_UNHANDLED_ERROR'
+  | 'SYS_UNHANDLED_REJECTION'
+  | 'SYS_STORAGE_PURGE'
+  | 'SYS_NETWORK_ONLINE'
+  | 'SYS_NETWORK_OFFLINE';
+
 export interface SystemLogEntry {
   id: string;
   timestamp: string;
-  level: 'PLAYWRIGHT' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
+  createdAt: number;
+  level: LogLevel;
+  module?: LogModule;
+  event?: LogEventType | string;
   channelId?: string;
+  orderNo?: string;
+  durationMs?: number;
   message: string;
   details?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface LogFilterParams {
+  level?: 'ALL' | LogLevel;
+  module?: 'ALL' | LogModule;
+  event?: string;
+  channelId?: string;
+  orderNo?: string;
+  timeRange?: 'ALL' | '1D' | '3D' | '7D';
+  onlyErrors?: boolean;
+  search?: string;
 }
 
 export interface GuardianStats {
