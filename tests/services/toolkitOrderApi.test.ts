@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   normalizeToolkitOrder,
+  normalizeToolkitOrderFilters,
+  ORDER_STATUSES,
   fetchToolkitOrders,
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
@@ -74,8 +76,86 @@ describe('toolkitOrderApi', () => {
     });
   });
 
+  describe('normalizeToolkitOrderFilters', () => {
+    it('exports the standard ORDER_STATUSES constant', () => {
+      expect(ORDER_STATUSES).toEqual([
+        'PENDING',
+        'SUCCESS',
+        'FAILED',
+        'CANCEL',
+        'IMPORTING',
+      ]);
+    });
+
+    it('provides standard default filter values', () => {
+      const filters = normalizeToolkitOrderFilters({});
+      expect(filters.page).toBe(1);
+      expect(filters.pageSize).toBe(20);
+      expect(filters.status).toBe('');
+      expect(filters.query).toBe('');
+      expect(filters.arrivalStart).toBe('');
+      expect(filters.arrivalEnd).toBe('');
+    });
+
+    it('normalizes status and converts "all" / "ALL" to empty string', () => {
+      expect(normalizeToolkitOrderFilters({ status: 'all' }).status).toBe('');
+      expect(normalizeToolkitOrderFilters({ status: 'ALL' }).status).toBe('');
+      expect(normalizeToolkitOrderFilters({ status: 'pending' }).status).toBe('PENDING');
+      expect(normalizeToolkitOrderFilters({ status: 'SUCCESS' }).status).toBe('SUCCESS');
+    });
+
+    it('throws when status is unsupported', () => {
+      expect(() => normalizeToolkitOrderFilters({ status: 'UNKNOWN_STATUS' })).toThrow(
+        '不支持的订单状态：UNKNOWN_STATUS'
+      );
+    });
+
+    it('validates arrival date formats and rejects invalid dates', () => {
+      expect(() => normalizeToolkitOrderFilters({ arrivalStart: '2026-99-99' })).toThrow(
+        '入住开始日期格式无效。'
+      );
+      expect(() => normalizeToolkitOrderFilters({ arrivalEnd: 'invalid-date' })).toThrow(
+        '入住结束日期格式无效。'
+      );
+    });
+
+    it('rejects inverted arrival date ranges (arrivalStart > arrivalEnd)', () => {
+      expect(() =>
+        normalizeToolkitOrderFilters({
+          arrivalStart: '2026-10-06',
+          arrivalEnd: '2026-10-05',
+        })
+      ).toThrow('入住开始日期不能晚于结束日期。');
+    });
+
+    it('clamps page and pageSize to valid boundaries', () => {
+      const filters1 = normalizeToolkitOrderFilters({ page: 0, pageSize: 200 });
+      expect(filters1.page).toBe(1);
+      expect(filters1.pageSize).toBe(100);
+
+      const filters2 = normalizeToolkitOrderFilters({ page: -10, pageSize: -5 });
+      expect(filters2.page).toBe(1);
+      expect(filters2.pageSize).toBe(1);
+
+      const filters3 = normalizeToolkitOrderFilters({ page: NaN, pageSize: NaN });
+      expect(filters3.page).toBe(1);
+      expect(filters3.pageSize).toBe(20);
+    });
+
+    it('trims query and preserves unitId / otaChannel', () => {
+      const filters = normalizeToolkitOrderFilters({
+        query: '   李四   ',
+        unitId: 'unit_123',
+        otaChannel: 'meituan',
+      });
+      expect(filters.query).toBe('李四');
+      expect(filters.unitId).toBe('unit_123');
+      expect(filters.otaChannel).toBe('MEITUAN');
+    });
+  });
+
   describe('fetchToolkitOrders', () => {
-    it('queries orders with proper query parameters', async () => {
+    it('queries orders with proper query parameters including unitId and otaChannel', async () => {
       mockRequest.mockResolvedValueOnce({
         records: [
           { id: '1', otaOrderId: 'O1', status: 'FAILED' },
@@ -93,6 +173,8 @@ describe('toolkitOrderApi', () => {
         query: '张三',
         arrivalStart: '2026-10-01',
         arrivalEnd: '2026-10-05',
+        unitId: 'unit_100',
+        otaChannel: 'MEITUAN',
       });
 
       expect(mockRequest).toHaveBeenCalledTimes(1);
@@ -103,12 +185,43 @@ describe('toolkitOrderApi', () => {
       expect(urlCalled).toContain('status=FAILED');
       expect(urlCalled).toContain('query=%E5%BC%A0%E4%B8%89');
       expect(urlCalled).toContain('arrivalStart=2026-10-01+00%3A00%3A00');
+      expect(urlCalled).toContain('arrivalEnd=2026-10-05+23%3A59%3A59');
+      expect(urlCalled).toContain('unitId=unit_100');
+      expect(urlCalled).toContain('otaChannel=MEITUAN');
       expect(urlCalled).toContain('showAll=true');
 
       expect(result.total).toBe(2);
       expect(result.records).toHaveLength(2);
       expect(result.records[0].allowedActions).toEqual(['EDIT', 'IMPORT', 'DELETE']);
       expect(result.records[1].allowedActions).toEqual(['CANCEL']);
+    });
+
+    it('correctly handles empty result with total: 0 without reverting to fallback length', async () => {
+      mockRequest.mockResolvedValueOnce({
+        records: [],
+        total: 0,
+        current: 1,
+        size: 20,
+      });
+
+      const result = await fetchToolkitOrders({ page: 1, pageSize: 20 });
+      expect(result.total).toBe(0);
+      expect(result.records).toEqual([]);
+      expect(result.page).toBe(1);
+      expect(result.pageSize).toBe(20);
+    });
+
+    it('parses alternative nested lists like list or rows', async () => {
+      mockRequest.mockResolvedValueOnce({
+        list: [{ id: 'ord_row_1', otaOrderId: 'OT-ROW-1', status: 'PENDING' }],
+        total: 1,
+      });
+
+      const result = await fetchToolkitOrders();
+      expect(result.total).toBe(1);
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0].otaOrderId).toBe('OT-ROW-1');
+      expect(result.records[0].status).toBe('PENDING');
     });
   });
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
+import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,47 +72,21 @@ export function registerCrawlerIpcHandlers(): void {
 /**
  * 注册桌面端原生值守 IPC 监听器
  */
-interface ElectronDutyState {
-  channels: Record<
-    string,
-    {
-      channelCode: string;
-      status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED';
-      lastStartedAt?: number;
-      error?: string;
-    }
-  >;
-  coordinatorStatus:
-    | 'STOPPED'
-    | 'IDLE'
-    | 'CLAIMING'
-    | 'EXECUTING'
-    | 'REPORTING'
-    | 'CLAIM_BACKOFF'
-    | 'DEGRADED';
-}
-
-const electronDutyState: ElectronDutyState = {
-  channels: {},
-  coordinatorStatus: 'STOPPED',
-};
-
-/**
- * 注册桌面端原生值守 IPC 监听器
- */
 export function registerDutyIpcHandlers(): void {
   ipcMain.handle('duty:start', async (_event, channelCode: string) => {
     const code = (channelCode || '').trim().toUpperCase();
     if (!code) {
       return { success: false, message: '渠道编码不能为空' };
     }
-    electronDutyState.channels[code] = {
-      channelCode: code,
-      status: 'RUNNING',
-      lastStartedAt: Date.now(),
-    };
-    electronDutyState.coordinatorStatus = 'CLAIMING';
-    return { success: true, message: `桌面端渠道「${code}」值守已由主进程启动` };
+    try {
+      const res = await dutyOrchestrationEngine.startDuty(code);
+      return res;
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
   });
 
   ipcMain.handle('duty:stop', async (_event, channelCode: string) => {
@@ -119,21 +94,22 @@ export function registerDutyIpcHandlers(): void {
     if (!code) {
       return { success: false, message: '渠道编码不能为空' };
     }
-    if (electronDutyState.channels[code]) {
-      electronDutyState.channels[code] = {
-        channelCode: code,
-        status: 'STOPPED',
+    try {
+      const res = await dutyOrchestrationEngine.stopDuty(code);
+      return res;
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
       };
     }
-    const hasRunning = Object.values(electronDutyState.channels).some((c) => c.status === 'RUNNING');
-    if (!hasRunning) {
-      electronDutyState.coordinatorStatus = 'STOPPED';
-    }
-    return { success: true, message: `桌面端渠道「${code}」值守已停止` };
   });
 
   ipcMain.handle('duty:status', async () => {
-    return electronDutyState;
+    return {
+      channels: dutyOrchestrationEngine.getChannelDutyStatus(),
+      coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
+    };
   });
 }
 

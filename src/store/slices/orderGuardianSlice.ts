@@ -99,14 +99,23 @@ const initialState: OrderGuardianState = {
  */
 export const fetchOrdersThunk = createAsyncThunk(
   'orderGuardian/fetchOrders',
-  async (overrideFilters: Partial<ToolkitOrderFilters> | undefined, { getState, rejectWithValue }) => {
+  async (overrideFilters: Partial<ToolkitOrderFilters> | undefined, { getState, dispatch, rejectWithValue }) => {
     try {
       const state = getState() as { orderGuardian: OrderGuardianState };
       const filters = { ...state.orderGuardian.filters, ...(overrideFilters || {}) };
       const res = await fetchToolkitOrders(filters);
-      return { res, appliedFilters: filters };
+      return {
+        res,
+        appliedFilters: {
+          ...filters,
+          page: res.page,
+          pageSize: res.pageSize,
+        },
+      };
     } catch (error) {
-      return rejectWithValue(error instanceof Error ? error.message : '获取文旅订单失败');
+      const msg = error instanceof Error ? error.message : '获取文旅订单失败';
+      dispatch(showToast({ type: 'error', title: '获取订单列表失败', description: msg }));
+      return rejectWithValue(msg);
     }
   }
 );
@@ -270,6 +279,14 @@ export const orderGuardianSlice = createSlice({
     resetFilters: (state) => {
       state.filters = { ...initialFilters };
     },
+    setFilterUnitId: (state, action: PayloadAction<string | undefined>) => {
+      state.filters.unitId = action.payload;
+      state.filters.page = 1;
+    },
+    setFilterChannel: (state, action: PayloadAction<string | undefined>) => {
+      state.filters.otaChannel = action.payload;
+      state.filters.page = 1;
+    },
     closeEditDrawer: (state) => {
       state.activeEditOrder = null;
       state.drawerError = undefined;
@@ -406,6 +423,8 @@ export const {
   setDateRange,
   setPagination,
   resetFilters,
+  setFilterUnitId,
+  setFilterChannel,
   closeEditDrawer,
 } = orderGuardianSlice.actions;
 

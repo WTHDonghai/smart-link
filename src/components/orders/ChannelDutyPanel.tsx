@@ -1,8 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { toggleChannelDutyThunk } from '../../store/slices/orderGuardianSlice';
 import { ChannelBadge } from '../common/ChannelBadge';
-import { Play, Square, Loader2, AlertCircle, ShieldCheck, Activity } from 'lucide-react';
+import {
+  Play,
+  Square,
+  Loader2,
+  AlertCircle,
+  ShieldCheck,
+  Activity,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import type { DutyCoordinatorStatus } from '../../types';
 
 const CHANNELS_CONFIG = [
@@ -36,6 +45,7 @@ export const ChannelDutyPanel: React.FC = () => {
   const dispatch = useAppDispatch();
   const channelDuty = useAppSelector((state) => state.orderGuardian.channelDuty);
   const coordinatorStatus = useAppSelector((state) => state.orderGuardian.coordinatorStatus);
+  const [collapsed, setCollapsed] = useState(false);
 
   const activeCount = Object.values(channelDuty).filter((c) => c.status === 'RUNNING').length;
   const coordinatorBadge = formatCoordinatorBadge(coordinatorStatus);
@@ -45,16 +55,21 @@ export const ChannelDutyPanel: React.FC = () => {
   };
 
   return (
-    <section className="bg-white border border-[#e2e8f0] rounded-xl p-4 shadow-xs" aria-label="渠道值守控制面板">
+    <section className="bg-white border border-[#e2e8f0] rounded-xl p-3.5 shadow-xs" aria-label="渠道值守控制面板">
       {/* 头部标题与全局协调器徽标 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#f1f5f9]">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-2.5 border-b border-[#f1f5f9]">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-[#eff4ff] flex items-center justify-center text-[#004ac6]">
+          <div className="w-7 h-7 rounded-lg bg-[#eff4ff] flex items-center justify-center text-[#004ac6]">
             <ShieldCheck className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-[#0b1c30]">渠道自动化值守</h3>
-            <p className="text-xs text-[#737686]">按需多渠道 CDP 协同与中台任务长轮询调度</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-[#0b1c30]">渠道自动化值守</h3>
+              <span className="text-[11px] text-[#737686] bg-[#f8f9ff] px-2 py-0.5 border border-[#e2e8f0] rounded-full font-mono">
+                {activeCount} / {CHANNELS_CONFIG.length} 运行中
+              </span>
+            </div>
+            <p className="text-[11px] text-[#737686]">按需多渠道 CDP 协同与中台任务长轮询调度</p>
           </div>
         </div>
 
@@ -66,38 +81,53 @@ export const ChannelDutyPanel: React.FC = () => {
             <Activity className="w-3.5 h-3.5" />
             {coordinatorBadge.label}
           </span>
-          <span className="text-xs text-[#737686] bg-[#f8f9ff] px-2.5 py-1 border border-[#e2e8f0] rounded-full font-mono">
-            {activeCount} 个渠道值守中
-          </span>
+          <button
+            type="button"
+            onClick={() => setCollapsed(!collapsed)}
+            className="p-1 rounded-md text-[#737686] hover:text-[#0b1c30] hover:bg-[#f1f5f9] transition-colors cursor-pointer"
+            title={collapsed ? '展开渠道值守列表' : '收起渠道值守列表'}
+            aria-expanded={!collapsed}
+          >
+            {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+          </button>
         </div>
       </div>
 
-      {/* 渠道值守卡片网格 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
-        {CHANNELS_CONFIG.map(({ code, name, desc }) => {
-          const info = channelDuty[code] || { channelCode: code, status: 'STOPPED' };
-          const isRunning = info.status === 'RUNNING';
-          const isStarting = info.status === 'STARTING';
-          const isDegraded = info.status === 'DEGRADED';
+      {/* 渠道自动化值守列表 */}
+      {!collapsed && (
+        <div className="divide-y divide-[#edf2f9] border border-[#e2e8f0] rounded-lg overflow-hidden mt-2.5 bg-white">
+          {CHANNELS_CONFIG.map(({ code, name, desc }) => {
+            const info = channelDuty[code] || { channelCode: code, status: 'STOPPED' };
+            const isRunning = info.status === 'RUNNING';
+            const isStarting = info.status === 'STARTING';
+            const isDegraded = info.status === 'DEGRADED';
 
-          return (
-            <div
-              key={code}
-              className={`flex flex-col justify-between p-3.5 rounded-lg border transition-all ${
-                isRunning
-                  ? 'border-emerald-200 bg-emerald-50/20'
-                  : isDegraded
-                  ? 'border-rose-200 bg-rose-50/20'
-                  : 'border-[#e2e8f0] bg-white hover:border-[#cbd5e1]'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <ChannelBadge channelCode={code} />
-                    <span className="text-sm font-bold text-[#0b1c30]">{name}</span>
+            return (
+              <div
+                key={code}
+                className={`px-3.5 py-2.5 flex items-center justify-between gap-3 transition-colors hover:bg-[#f8faff] ${
+                  isRunning ? 'bg-emerald-50/15' : isDegraded ? 'bg-rose-50/15' : 'bg-white'
+                }`}
+              >
+                {/* 左侧：渠道 Badge + 名称 + 业务说明 */}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <ChannelBadge channelCode={code} size="sm" />
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-bold text-[#0b1c30] whitespace-nowrap">{name}</span>
+                    <span className="text-xs text-[#737686] truncate max-w-[360px] hidden sm:inline-block">
+                      {desc}
+                    </span>
                   </div>
-                  {/* 状态徽标 */}
+                </div>
+
+                {/* 中间：会话活跃时间与运行状态 */}
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-[11px] text-[#737686] font-mono hidden md:inline-block">
+                    {info.lastStartedAt
+                      ? `启动于 ${new Date(info.lastStartedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+                      : '无活跃会话'}
+                  </span>
+
                   {isRunning && (
                     <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -122,48 +152,42 @@ export const ChannelDutyPanel: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-[#737686] mt-2 line-clamp-1">{desc}</p>
-              </div>
 
-              <div className="mt-4 pt-2.5 border-t border-[#f1f5f9] flex items-center justify-between">
-                <span className="text-[11px] text-[#94a3b8] font-mono">
-                  {info.lastStartedAt
-                    ? `启动于 ${new Date(info.lastStartedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
-                    : '无活跃会话'}
-                </span>
-
-                <button
-                  type="button"
-                  disabled={isStarting}
-                  onClick={() => handleToggle(code)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isRunning
-                      ? 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
-                      : 'bg-[#004ac6] text-white hover:bg-[#003da6]'
-                  }`}
-                >
-                  {isStarting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      启动中
-                    </>
-                  ) : isRunning ? (
-                    <>
-                      <Square className="w-3.5 h-3.5 fill-current" />
-                      停止值守
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      开始值守
-                    </>
-                  )}
-                </button>
+                {/* 右侧：操作按钮 */}
+                <div className="shrink-0">
+                  <button
+                    type="button"
+                    disabled={isStarting}
+                    onClick={() => handleToggle(code)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isRunning
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 active:bg-rose-200'
+                        : 'bg-[#004ac6] text-white hover:bg-[#003da6] active:bg-[#002f80] shadow-2xs'
+                    }`}
+                  >
+                    {isStarting ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>启动中</span>
+                      </>
+                    ) : isRunning ? (
+                      <>
+                        <Square className="w-3 h-3 fill-current" />
+                        <span>停止值守</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3 h-3 fill-current" />
+                        <span>开始值守</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ToolkitOrder } from '../../types';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { StatusBadge } from '../common/StatusBadge';
@@ -6,14 +6,14 @@ import { EmptyState } from '../common/EmptyState';
 import {
   formatCurrency,
   getAllowedOrderActions,
-  getOrderActionDisabledReason,
   getOrderStatusMeta,
 } from '../../utils/orderHelpers';
-import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check } from 'lucide-react';
+import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check, MoreVertical } from 'lucide-react';
 
 export interface OrderTableProps {
   orders: ToolkitOrder[];
   actionLoadingId?: string;
+  initialOpenMenuId?: string;
   onEdit: (order: ToolkitOrder) => void;
   onImport: (order: ToolkitOrder) => void;
   onDelete: (order: ToolkitOrder) => void;
@@ -23,12 +23,40 @@ export interface OrderTableProps {
 export const OrderTable: React.FC<OrderTableProps> = ({
   orders,
   actionLoadingId,
+  initialOpenMenuId,
   onEdit,
   onImport,
   onDelete,
   onCancel,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(initialOpenMenuId || null);
+
+  useEffect(() => {
+    if (initialOpenMenuId !== undefined) {
+      setActiveMenuId(initialOpenMenuId);
+    }
+  }, [initialOpenMenuId]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveMenuId(null);
+      }
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('[data-order-actions-menu]')) {
+        setActiveMenuId(null);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const handleCopy = (text: string) => {
     if (!text) return;
@@ -73,7 +101,7 @@ export const OrderTable: React.FC<OrderTableProps> = ({
             </th>
 
             {/* 固定列: 操作 */}
-            <th className="py-2.5 px-4 font-semibold text-right bg-[#f8faff] whitespace-nowrap sticky top-0 right-0 z-30 w-[160px] min-w-[160px] border-b border-l border-[#e2e8f0] shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]">
+            <th className="py-2.5 px-3 font-semibold text-right bg-[#f8faff] whitespace-nowrap sticky top-0 right-0 z-30 w-[80px] min-w-[80px] border-b border-l border-[#e2e8f0] shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]">
               操作
             </th>
           </tr>
@@ -89,11 +117,12 @@ export const OrderTable: React.FC<OrderTableProps> = ({
               </td>
             </tr>
           ) : (
-            orders.map((ord) => {
+            orders.map((ord, index) => {
               const allowedActions = getAllowedOrderActions(ord.status);
               const statusMeta = getOrderStatusMeta(ord.status);
               const isOperating = actionLoadingId === ord.id;
               const isCopied = copiedId === ord.otaOrderId;
+              const isNearBottom = index >= orders.length - 2 && orders.length > 2;
 
               return (
                 <tr
@@ -222,70 +251,120 @@ export const OrderTable: React.FC<OrderTableProps> = ({
                   </td>
 
                   {/* 列 7: 操作 (Sticky right) */}
-                  <td className="py-3 px-4 align-top text-right sticky right-0 bg-white group-hover:bg-[#f8faff] w-[160px] min-w-[160px] border-b border-l border-[#e2e8f0] shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)] z-10">
+                  <td
+                    className={`py-3 px-3 align-top text-right sticky right-0 bg-white group-hover:bg-[#f8faff] w-[80px] min-w-[80px] border-b border-l border-[#e2e8f0] shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)] ${
+                      activeMenuId === ord.id ? 'z-30' : 'z-10'
+                    }`}
+                  >
                     {isOperating ? (
-                      <div className="flex items-center justify-end gap-1.5 py-1 text-xs text-[#004ac6]">
+                      <div className="flex items-center justify-end gap-1 py-1 text-xs text-[#004ac6]">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>处理中...</span>
+                        <span className="text-[11px]">处理中...</span>
                       </div>
                     ) : allowedActions.length === 0 ? (
-                      <span
-                        className="text-xs text-[#94a3b8] cursor-not-allowed select-none"
-                        title={getOrderActionDisabledReason('EDIT', ord.status)}
-                      >
-                        只读状态
-                      </span>
+                      <div className="flex items-center justify-end">
+                        <button
+                          type="button"
+                          disabled
+                          className="p-1.5 rounded-lg text-[#94a3b8] cursor-not-allowed select-none inline-flex items-center justify-center opacity-40"
+                          title="只读状态"
+                          aria-label="无可用操作"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      </div>
                     ) : (
-                      <div className="flex items-center justify-end gap-1.5">
-                        {/* 编辑 (仅 FAILED) */}
-                        {allowedActions.includes('EDIT') && (
-                          <button
-                            type="button"
-                            onClick={() => onEdit(ord)}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#eff4ff] hover:bg-[#dce9ff] text-[#004ac6] font-medium text-xs transition-colors cursor-pointer"
-                            title="编辑订单绑定参数"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                            <span>编辑</span>
-                          </button>
-                        )}
+                      <div className="relative inline-block text-left" data-order-actions-menu>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setActiveMenuId((prev) => (prev === ord.id ? null : ord.id))
+                          }
+                          className={`p-1.5 rounded-lg text-[#737686] hover:text-[#0b1c30] hover:bg-[#eff4ff] transition-colors cursor-pointer inline-flex items-center justify-center ${
+                            activeMenuId === ord.id ? 'bg-[#eff4ff] text-[#004ac6]' : ''
+                          }`}
+                          title="更多操作"
+                          aria-haspopup="menu"
+                          aria-expanded={activeMenuId === ord.id}
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
 
-                        {/* 导入 (仅 FAILED) */}
-                        {allowedActions.includes('IMPORT') && (
-                          <button
-                            type="button"
-                            onClick={() => onImport(ord)}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#004ac6] hover:bg-[#003da6] text-white font-medium text-xs transition-colors cursor-pointer shadow-2xs"
-                            title="重新提交导入"
+                        {activeMenuId === ord.id && (
+                          <div
+                            className={`absolute right-0 w-32 bg-white rounded-xl border border-[#e2e8f0] shadow-lg py-1 z-50 ${
+                              isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'
+                            }`}
+                            role="menu"
+                            aria-orientation="vertical"
                           >
-                            <Download className="w-3 h-3" />
-                            <span>导入</span>
-                          </button>
-                        )}
+                            {/* 编辑 (仅 FAILED) */}
+                            {allowedActions.includes('EDIT') && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMenuId(null);
+                                  onEdit(ord);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
+                                role="menuitem"
+                              >
+                                <Edit3 className="w-3.5 h-3.5 text-[#004ac6]" />
+                                <span>编辑订单</span>
+                              </button>
+                            )}
 
-                        {/* 删除 (仅 FAILED) */}
-                        {allowedActions.includes('DELETE') && (
-                          <button
-                            type="button"
-                            onClick={() => onDelete(ord)}
-                            className="p-1 rounded text-[#ba1a1a] hover:bg-rose-50 transition-colors cursor-pointer"
-                            title="删除失败订单"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                            {/* 导入 (仅 FAILED) */}
+                            {allowedActions.includes('IMPORT') && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMenuId(null);
+                                  onImport(ord);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
+                                role="menuitem"
+                              >
+                                <Download className="w-3.5 h-3.5 text-[#004ac6]" />
+                                <span>重新导入</span>
+                              </button>
+                            )}
 
-                        {/* 取消 (仅 SUCCESS) */}
-                        {allowedActions.includes('CANCEL') && (
-                          <button
-                            type="button"
-                            onClick={() => onCancel(ord)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-medium text-xs transition-colors cursor-pointer"
-                            title="取消已导入的订单"
-                          >
-                            <Ban className="w-3 h-3" />
-                            <span>取消订单</span>
-                          </button>
+                            {/* 删除 (仅 FAILED) */}
+                            {allowedActions.includes('DELETE') && (
+                              <>
+                                <div className="h-px bg-[#e2e8f0] my-1" />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveMenuId(null);
+                                    onDelete(ord);
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
+                                  role="menuitem"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                  <span>删除订单</span>
+                                </button>
+                              </>
+                            )}
+
+                            {/* 取消 (仅 SUCCESS) */}
+                            {allowedActions.includes('CANCEL') && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMenuId(null);
+                                  onCancel(ord);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
+                                role="menuitem"
+                              >
+                                <Ban className="w-3.5 h-3.5 text-rose-600" />
+                                <span>取消订单</span>
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}

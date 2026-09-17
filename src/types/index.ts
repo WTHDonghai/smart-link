@@ -327,6 +327,8 @@ export interface ToolkitOrderFilters {
   query: string;
   arrivalStart: string;
   arrivalEnd: string;
+  unitId?: string;
+  otaChannel?: string;
 }
 
 /**
@@ -409,6 +411,89 @@ export interface ActualStateReportPayload {
     lastStartedAt: number;
     reportedAt: number;
     otaCollectionTargets: Array<{ otaChannelCode: string }>;
+  }>;
+}
+
+/**
+ * 工位注册请求体 (POST /toolkit/toolbox/station/register)
+ */
+export interface StationRegistration {
+  macAddress: string;
+  hostname: string;
+  ip: string;
+  appId: string;
+  osName?: string;
+  agentVersion?: string;
+}
+
+/**
+ * 工位注册成功回执
+ */
+export interface StationIdentity {
+  stationId: string;
+  appId: string;
+  stationName?: string;
+  macAddress?: string;
+  ip?: string;
+  hostname?: string;
+  registeredAt?: number;
+}
+
+/**
+ * 文旅中台任务消息类型
+ */
+export type DutyTaskMessageType =
+  | 'OTA_COLLECT_ORDER'
+  | 'OTA_IMPORT_ORDER'
+  | 'OTA_CANCEL_ORDER'
+  | 'OTA_CONFIRM_IMPORT'
+  | 'OTA_CONFIRM_CANCEL';
+
+/**
+ * 任务领取长轮询请求体 (POST /toolkit/toolbox/task-claims)
+ */
+export interface DutyTaskClaimRequest {
+  stationId: string;
+  appId: string;
+  direction?: 'FORWARD' | 'BACKWARD';
+}
+
+/**
+ * 领取到的中台任务实体
+ */
+export interface DutyClaimedTask {
+  id: string;
+  businessId: string;
+  businessType: string;
+  msgType: DutyTaskMessageType;
+  stationId: string;
+  leaseToken: string;
+  data: string; // Base64 encoded JSON
+  createdTime?: string;
+}
+
+/**
+ * 任务执行结果提交载荷 (PUT /toolkit/toolbox/tasks/:id/result)
+ */
+export interface DutyTaskResultPayload {
+  taskId: string;
+  status: 'SUCCEEDED' | 'FAILED';
+  result?: Record<string, unknown>;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/**
+ * 批量创建下游任务载荷 (POST /toolkit/toolbox/tasks)
+ */
+export interface DutyTaskCreationBatch {
+  stationId: string;
+  appId: string;
+  items: Array<{
+    msgType: 'OTA_IMPORT_ORDER' | 'OTA_CANCEL_ORDER';
+    businessId: string;
+    unitId?: string;
+    data: unknown;
   }>;
 }
 

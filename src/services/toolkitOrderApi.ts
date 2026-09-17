@@ -2,6 +2,7 @@ import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
 import { getAllowedOrderActions } from '../utils/orderHelpers';
 import type {
   ToolkitOrder,
+  ToolkitOrderStatus,
   ToolkitOrderStatistics,
   ToolkitOrderFilters,
   ToolkitOrderPageResult,
@@ -102,21 +103,100 @@ export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrde
   };
 }
 
+export const ORDER_STATUSES: readonly ToolkitOrderStatus[] = Object.freeze([
+  'PENDING',
+  'SUCCESS',
+  'FAILED',
+  'CANCEL',
+  'IMPORTING',
+]);
+
+function parseValidDate(value: unknown): string {
+  const str = String(value == null ? '' : value).trim();
+  if (!str) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return '';
+  const date = new Date(`${str}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== str ? '' : str;
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/**
+ * 纯函数：校验与归一化文旅中台订单查询筛选条件 (严格遵循 Fail-Fast 原则)
+ */
+export function normalizeToolkitOrderFilters(
+  input: Partial<ToolkitOrderFilters> = {}
+): ToolkitOrderFilters {
+  const rawStatus = String(input.status == null ? '' : input.status).trim().toUpperCase();
+  const status = rawStatus === 'ALL' ? '' : rawStatus;
+  if (status && !ORDER_STATUSES.includes(status as ToolkitOrderStatus)) {
+    throw new Error(`不支持的订单状态：${status}`);
+  }
+
+  const rawArrivalStart = String(input.arrivalStart == null ? '' : input.arrivalStart).trim();
+  const rawArrivalEnd = String(input.arrivalEnd == null ? '' : input.arrivalEnd).trim();
+  const arrivalStart = parseValidDate(rawArrivalStart);
+  const arrivalEnd = parseValidDate(rawArrivalEnd);
+
+  if (rawArrivalStart && !arrivalStart) {
+    throw new Error('入住开始日期格式无效。');
+  }
+  if (rawArrivalEnd && !arrivalEnd) {
+    throw new Error('入住结束日期格式无效。');
+  }
+  if (arrivalStart && arrivalEnd && arrivalStart > arrivalEnd) {
+    throw new Error('入住开始日期不能晚于结束日期。');
+  }
+
+  const query = String(input.query == null ? '' : input.query).trim().slice(0, 200);
+  const unitId = input.unitId ? String(input.unitId).trim() : undefined;
+  const otaChannel = input.otaChannel ? String(input.otaChannel).trim().toUpperCase() : undefined;
+
+  return {
+    page: clampInteger(input.page, 1, 1, 1000000),
+    pageSize: clampInteger(input.pageSize, 20, 1, 100),
+    status,
+    query,
+    arrivalStart,
+    arrivalEnd,
+    ...(unitId ? { unitId } : {}),
+    ...(otaChannel ? { otaChannel } : {}),
+  };
+}
+
 /**
  * 分页查询文旅中台订单列表 (GET /toolkit/orders)
  */
 export async function fetchToolkitOrders(
   filters: Partial<ToolkitOrderFilters> = {}
 ): Promise<ToolkitOrderPageResult> {
+  const normalized = normalizeToolkitOrderFilters(filters);
   const queryParams = new URLSearchParams();
-  if (filters.page) queryParams.set('current', String(filters.page));
-  if (filters.pageSize) queryParams.set('size', String(filters.pageSize));
-  if (filters.status && filters.status !== 'all' && filters.status !== 'ALL') {
-    queryParams.set('status', filters.status.toUpperCase());
+
+  queryParams.set('current', String(normalized.page));
+  queryParams.set('size', String(normalized.pageSize));
+  if (normalized.status) {
+    queryParams.set('status', normalized.status);
   }
-  if (filters.query?.trim()) queryParams.set('query', filters.query.trim());
-  if (filters.arrivalStart) queryParams.set('arrivalStart', `${filters.arrivalStart} 00:00:00`);
-  if (filters.arrivalEnd) queryParams.set('arrivalEnd', `${filters.arrivalEnd} 23:59:59`);
+  if (normalized.query) {
+    queryParams.set('query', normalized.query);
+  }
+  if (normalized.arrivalStart) {
+    queryParams.set('arrivalStart', `${normalized.arrivalStart} 00:00:00`);
+  }
+  if (normalized.arrivalEnd) {
+    queryParams.set('arrivalEnd', `${normalized.arrivalEnd} 23:59:59`);
+  }
+  if (normalized.unitId) {
+    queryParams.set('unitId', normalized.unitId);
+  }
+  if (normalized.otaChannel) {
+    queryParams.set('otaChannel', normalized.otaChannel);
+  }
   queryParams.set('showAll', 'true');
 
   const queryString = queryParams.toString();
@@ -133,12 +213,21 @@ export async function fetchToolkitOrders(
     ? envelope.list
     : Array.isArray(envelope.items)
     ? envelope.items
+    : Array.isArray(envelope.rows)
+    ? envelope.rows
+    : Array.isArray(envelope.data)
+    ? envelope.data
     : [];
 
   const records = rawList.map((item) => normalizeToolkitOrder(item as Record<string, unknown>));
-  const total = Number(envelope.total) || records.length;
-  const page = Number(envelope.current || envelope.page) || filters.page || 1;
-  const pageSize = Number(envelope.size || envelope.pageSize) || filters.pageSize || 20;
+  const total =
+    typeof envelope.total === 'number'
+      ? envelope.total
+      : Number.isFinite(Number(envelope.total)) && Number(envelope.total) >= 0
+      ? Number(envelope.total)
+      : records.length;
+  const page = Number(envelope.current ?? envelope.page) || normalized.page;
+  const pageSize = Number(envelope.size ?? envelope.pageSize) || normalized.pageSize;
 
   return {
     records,

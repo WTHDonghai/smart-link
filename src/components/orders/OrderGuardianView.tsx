@@ -24,6 +24,7 @@ import { EditOrderDrawer } from './EditOrderDrawer';
 import { Pagination } from '../common/Pagination';
 import { Modal } from '../common/Modal';
 import { AlertCircle, RefreshCw } from 'lucide-react';
+import { showToast } from '../../store/slices/appSlice';
 
 interface ConfirmModalState {
   isOpen: boolean;
@@ -82,6 +83,16 @@ export const OrderGuardianView: React.FC = () => {
   };
 
   const handleSearch = () => {
+    if (localArrivalStart && localArrivalEnd && localArrivalStart > localArrivalEnd) {
+      dispatch(
+        showToast({
+          type: 'error',
+          title: '日期区间无效',
+          description: '入住开始日期不能晚于结束日期',
+        })
+      );
+      return;
+    }
     dispatch(setFilterQuery(localQuery));
     dispatch(setDateRange({ startDate: localArrivalStart, endDate: localArrivalEnd }));
     void dispatch(

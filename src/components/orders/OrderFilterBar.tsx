@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Search, RotateCcw, X } from 'lucide-react';
+import { Search, RotateCcw, X } from 'lucide-react';
 
 export interface OrderFilterBarProps {
   status: string;
@@ -95,29 +95,29 @@ export const OrderFilterBar: React.FC<OrderFilterBarProps> = ({
           </div>
 
           {/* 入住开始日期 */}
-          <div className="relative w-36 shrink-0">
+          <div className="w-36 shrink-0">
             <input
               type="date"
               value={arrivalStart}
               onChange={(e) => onArrivalStartChange(e.target.value)}
-              placeholder="入住开始"
-              className="w-full h-8.5 pl-3 pr-8 bg-white border border-[#dce9ff] focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] placeholder-[#94a3b8] outline-hidden transition-colors"
+              onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+              aria-label="入住开始日期"
+              className="w-full h-8.5 px-2.5 bg-white border border-[#dce9ff] focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden transition-colors cursor-pointer"
             />
-            <Calendar className="w-3.5 h-3.5 text-[#737686] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
           <span className="text-xs text-[#737686] shrink-0">至</span>
 
           {/* 入住结束日期 */}
-          <div className="relative w-36 shrink-0">
+          <div className="w-36 shrink-0">
             <input
               type="date"
               value={arrivalEnd}
               onChange={(e) => onArrivalEndChange(e.target.value)}
-              placeholder="入住结束"
-              className="w-full h-8.5 pl-3 pr-8 bg-white border border-[#dce9ff] focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] placeholder-[#94a3b8] outline-hidden transition-colors"
+              onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+              aria-label="入住结束日期"
+              className="w-full h-8.5 px-2.5 bg-white border border-[#dce9ff] focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden transition-colors cursor-pointer"
             />
-            <Calendar className="w-3.5 h-3.5 text-[#737686] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
           {/* 查询订单按钮 */}

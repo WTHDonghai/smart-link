@@ -104,26 +104,42 @@ describe('OrderTable 高密订单表格组件', () => {
     expect(html).toContain('张三 · 13800001111');
   });
 
-  it('遵循操作状态矩阵：FAILED 订单提供编辑、导入与删除按钮', () => {
+  it('操作列统一收起：默认折叠展示更多操作按钮与只读状态', () => {
     const html = renderToStaticMarkup(<OrderTable {...defaultProps} />);
 
-    expect(html).toContain('>编辑</span>');
-    expect(html).toContain('>导入</span>');
-    expect(html).toContain('title="删除失败订单"');
+    expect(html).toContain('title="更多操作"');
+    expect(html).toContain('title="只读状态"');
+  });
+
+  it('遵循操作状态矩阵：FAILED 订单展开菜单提供编辑、导入与删除项', () => {
+    const html = renderToStaticMarkup(
+      <OrderTable {...defaultProps} initialOpenMenuId="ord-failed" />
+    );
+
+    expect(html).toContain('>编辑订单</span>');
+    expect(html).toContain('>重新导入</span>');
+    expect(html).toContain('>删除订单</span>');
+    expect(html).not.toContain('>取消订单</span>');
     expect(html).toContain('文旅房型未绑定映射');
   });
 
-  it('遵循操作状态矩阵：SUCCESS 订单提供取消订单按钮并展示 PMS 单号', () => {
-    const html = renderToStaticMarkup(<OrderTable {...defaultProps} />);
+  it('遵循操作状态矩阵：SUCCESS 订单展开菜单提供取消订单项并展示 PMS 单号', () => {
+    const html = renderToStaticMarkup(
+      <OrderTable {...defaultProps} initialOpenMenuId="ord-success" />
+    );
 
     expect(html).toContain('>取消订单</span>');
+    expect(html).not.toContain('>编辑订单</span>');
+    expect(html).not.toContain('>重新导入</span>');
+    expect(html).not.toContain('>删除订单</span>');
     expect(html).toContain('PMS: PMS-888899');
   });
 
-  it('遵循操作状态矩阵：PENDING 等只读状态展示只读提示', () => {
+  it('遵循操作状态矩阵：PENDING 等只读状态展示禁用只读提示', () => {
     const html = renderToStaticMarkup(<OrderTable {...defaultProps} />);
 
-    expect(html).toContain('只读状态');
+    expect(html).toContain('title="只读状态"');
+    expect(html).toContain('aria-label="无可用操作"');
   });
 
   it('当 actionLoadingId 命中订单时展示加载中动画', () => {

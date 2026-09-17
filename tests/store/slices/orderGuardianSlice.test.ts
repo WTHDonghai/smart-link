@@ -5,6 +5,8 @@ import orderGuardianReducer, {
   setDateRange,
   setPagination,
   resetFilters,
+  setFilterUnitId,
+  setFilterChannel,
   closeEditDrawer,
   fetchOrdersThunk,
   fetchStatisticsThunk,
@@ -80,6 +82,20 @@ describe('orderGuardianSlice reducer', () => {
       expect(state.filters.pageSize).toBe(50);
     });
 
+    it('handles setFilterUnitId and resets page to 1', () => {
+      const state1 = orderGuardianReducer(undefined, setPagination({ page: 4 }));
+      const state2 = orderGuardianReducer(state1, setFilterUnitId('unit_999'));
+      expect(state2.filters.unitId).toBe('unit_999');
+      expect(state2.filters.page).toBe(1);
+    });
+
+    it('handles setFilterChannel and resets page to 1', () => {
+      const state1 = orderGuardianReducer(undefined, setPagination({ page: 3 }));
+      const state2 = orderGuardianReducer(state1, setFilterChannel('CTRIP'));
+      expect(state2.filters.otaChannel).toBe('CTRIP');
+      expect(state2.filters.page).toBe(1);
+    });
+
     it('handles resetFilters', () => {
       let state = orderGuardianReducer(undefined, setFilterStatus('SUCCESS'));
       state = orderGuardianReducer(state, setFilterQuery('订单123'));
@@ -128,6 +144,16 @@ describe('orderGuardianSlice reducer', () => {
       expect(next.orders).toEqual([mockOrder]);
       expect(next.total).toBe(1);
       expect(next.filters.status).toBe('FAILED');
+    });
+
+    it('handles fetchOrdersThunk rejected and captures error', () => {
+      const action = {
+        type: fetchOrdersThunk.rejected.type,
+        payload: '网络连接超时',
+      };
+      const next = orderGuardianReducer(undefined, action);
+      expect(next.loading).toBe(false);
+      expect(next.error).toBe('网络连接超时');
     });
 
     it('handles fetchStatisticsThunk fulfilled', () => {

@@ -1,15 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { ChannelDutyInfo, DutyCoordinatorStatus } from '../types';
-
-interface DutyServerState {
-  channels: Record<string, ChannelDutyInfo>;
-  coordinatorStatus: DutyCoordinatorStatus;
-}
-
-const state: DutyServerState = {
-  channels: {},
-  coordinatorStatus: 'STOPPED',
-};
+import { dutyOrchestrationEngine } from '../crawler/duty/dutyOrchestrationEngine';
 
 async function parseJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -51,17 +41,8 @@ export function createDutyApiMiddleware() {
           return sendJsonResponse(res, 400, { success: false, error: '必须指定 channelCode' });
         }
 
-        state.channels[channelCode] = {
-          channelCode,
-          status: 'RUNNING',
-          lastStartedAt: Date.now(),
-        };
-        state.coordinatorStatus = 'CLAIMING';
-
-        return sendJsonResponse(res, 200, {
-          success: true,
-          message: `渠道「${channelCode}」值守已启动`,
-        });
+        const result = await dutyOrchestrationEngine.startDuty(channelCode);
+        return sendJsonResponse(res, 200, result);
       } catch (error) {
         return sendJsonResponse(res, 500, {
           success: false,
@@ -79,22 +60,8 @@ export function createDutyApiMiddleware() {
           return sendJsonResponse(res, 400, { success: false, error: '必须指定 channelCode' });
         }
 
-        if (state.channels[channelCode]) {
-          state.channels[channelCode] = {
-            channelCode,
-            status: 'STOPPED',
-          };
-        }
-
-        const hasRunning = Object.values(state.channels).some((c) => c.status === 'RUNNING');
-        if (!hasRunning) {
-          state.coordinatorStatus = 'STOPPED';
-        }
-
-        return sendJsonResponse(res, 200, {
-          success: true,
-          message: `渠道「${channelCode}」值守已停止`,
-        });
+        const result = await dutyOrchestrationEngine.stopDuty(channelCode);
+        return sendJsonResponse(res, 200, result);
       } catch (error) {
         return sendJsonResponse(res, 500, {
           success: false,
@@ -105,7 +72,10 @@ export function createDutyApiMiddleware() {
 
     // 3. GET /api/duty/status：查询当前值守状态
     if (req.method === 'GET' && url.startsWith('/api/duty/status')) {
-      return sendJsonResponse(res, 200, state);
+      return sendJsonResponse(res, 200, {
+        channels: dutyOrchestrationEngine.getChannelDutyStatus(),
+        coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
+      });
     }
 
     next();

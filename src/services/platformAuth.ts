@@ -37,6 +37,15 @@ export interface ClassifiedAuthError extends Error {
   oauthError?: string;
 }
 
+interface MetaWithEnv {
+  env?: {
+    DEV?: boolean;
+    PROD?: boolean;
+    MODE?: string;
+    VITE_PLATFORM_BASE_URL?: string;
+  };
+}
+
 export function getEnvironmentMode(): { mode: string; isDev: boolean; isProd: boolean } {
   if (typeof process !== 'undefined' && process.env?.NODE_ENV) {
     const env = process.env.NODE_ENV;
@@ -47,10 +56,11 @@ export function getEnvironmentMode(): { mode: string; isDev: boolean; isProd: bo
     };
   }
 
-  if (typeof import.meta !== 'undefined' && import.meta.env) {
-    const isDev = Boolean(import.meta.env.DEV);
-    const isProd = Boolean(import.meta.env.PROD);
-    const mode = String(import.meta.env.MODE || (isDev ? 'development' : 'production'));
+  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
+  if (meta?.env) {
+    const isDev = Boolean(meta.env.DEV);
+    const isProd = Boolean(meta.env.PROD);
+    const mode = String(meta.env.MODE || (isDev ? 'development' : 'production'));
     return { mode, isDev, isProd };
   }
 
@@ -74,9 +84,10 @@ export function getPlatformBaseUrl(): string {
       ? (window as unknown as { electron?: { env?: { platformBaseUrl?: string } } }).electron?.env?.platformBaseUrl
       : undefined;
 
+  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
   const envUrl =
     (typeof process !== 'undefined' && process.env?.VITE_PLATFORM_BASE_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL) ||
+    meta?.env?.VITE_PLATFORM_BASE_URL ||
     electronUrl;
 
   if (!envUrl || !envUrl.trim()) {
