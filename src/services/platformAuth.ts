@@ -167,8 +167,50 @@ export function classifyAuthError(error: unknown): ClassifiedAuthError {
   return err;
 }
 
+const tokenChangeListeners = new Set<(tokens: PlatformAuthTokens | null) => void>();
+
+export function subscribeTokenChange(
+  listener: (tokens: PlatformAuthTokens | null) => void
+): () => void {
+  tokenChangeListeners.add(listener);
+  return () => {
+    tokenChangeListeners.delete(listener);
+  };
+}
+
+function notifyTokenChange(tokens: PlatformAuthTokens | null): void {
+  // 使用微任务异步派发，彻底避免在 Redux dispatching 执行周期内发生非法重入
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(() => {
+      for (const listener of tokenChangeListeners) {
+        try {
+          listener(tokens);
+        } catch {
+          // 避免单个监听器异常影响其他监听器
+        }
+      }
+    });
+  } else {
+    for (const listener of tokenChangeListeners) {
+      try {
+        listener(tokens);
+      } catch {
+        // 避免单个监听器异常影响其他监听器
+      }
+    }
+  }
+}
+
+const activeSchedulers = new Set<PlatformAuthService>();
+
 export function saveTokensToStorage(tokens: PlatformAuthTokens): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
+  notifyTokenChange(tokens);
+  for (const scheduler of activeSchedulers) {
+    if (scheduler.isSchedulerActive()) {
+      void scheduler.checkAndRefreshImmediately();
+    }
+  }
 }
 
 export function loadTokensFromStorage(): PlatformAuthTokens | null {
@@ -186,10 +228,15 @@ export function loadTokensFromStorage(): PlatformAuthTokens | null {
 }
 
 export function clearTokensFromStorage(): void {
+  let hasTokens = false;
   try {
+    hasTokens = Boolean(localStorage.getItem(STORAGE_KEY));
     localStorage.removeItem(STORAGE_KEY);
   } catch {
     // 忽略异常
+  }
+  if (hasTokens) {
+    notifyTokenChange(null);
   }
 }
 
@@ -322,7 +369,21 @@ export class PlatformAuthService {
         continue;
       }
 
-      const body = (await response.json()) as PlatformOAuthTokenResponse;
+      let body: PlatformOAuthTokenResponse;
+      try {
+        const rawText =
+          typeof response.text === 'function'
+            ? await response.text().catch(() => '')
+            : typeof response.json === 'function'
+              ? JSON.stringify(await response.json().catch(() => ({})))
+              : '';
+        body = (rawText ? JSON.parse(rawText) : {}) as PlatformOAuthTokenResponse;
+      } catch {
+        if (response.status >= 500) {
+          continue;
+        }
+        body = {};
+      }
       const payload = body.data || body;
       if (response.ok && payload.access_token) {
         const now = Date.now();
@@ -382,16 +443,55 @@ export class PlatformAuthService {
       scope: PLATFORM_OAUTH_SCOPE,
     });
 
-    const response = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: form,
-    });
+    let response: Response;
+    try {
+      response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: form,
+      });
+    } catch (networkError) {
+      const classified = classifyAuthError(networkError);
+      logger.track('AUTH_TOKEN_REFRESH', {
+        module: 'AUTH',
+        level: 'WARN',
+        message: `[Auth] 平台访问凭证 (AccessToken) 自动续期网络异常: ${classified.message}`,
+        details: `终端错误: ${classified.terminal} | 可重试: ${classified.retryable}`,
+        meta: { terminal: classified.terminal, retryable: classified.retryable },
+      });
+      throw classified;
+    }
 
-    const body = (await response.json()) as PlatformOAuthTokenResponse;
+    const rawText =
+      typeof response.text === 'function'
+        ? await response.text().catch(() => '')
+        : typeof response.json === 'function'
+          ? JSON.stringify(await response.json().catch(() => ({})))
+          : '';
+
+    let body: PlatformOAuthTokenResponse;
+    try {
+      body = (rawText ? JSON.parse(rawText) : {}) as PlatformOAuthTokenResponse;
+    } catch {
+      const errMsg = `HTTP ${response.status}${rawText ? `: ${rawText.slice(0, 100)}` : ''}`;
+      const parseErr = new Error(`刷新 Token 失败: ${errMsg}`) as ClassifiedAuthError;
+      parseErr.statusCode = response.status;
+      const classified = classifyAuthError(parseErr);
+      if (classified.terminal) {
+        clearTokensFromStorage();
+      }
+      logger.track('AUTH_TOKEN_REFRESH', {
+        module: 'AUTH',
+        level: 'WARN',
+        message: `[Auth] 平台访问凭证 (AccessToken) 响应格式异常: ${errMsg}`,
+        details: `终端错误: ${classified.terminal} | 状态码: ${response.status}`,
+        meta: { terminal: classified.terminal, statusCode: response.status },
+      });
+      throw classified;
+    }
     const payload = body.data || body;
     if (!response.ok || !payload.access_token) {
       const errMsg = body.error_description || body.error || body.msg || `HTTP ${response.status}`;
@@ -477,57 +577,123 @@ export class PlatformAuthService {
     return resultTokens.accessToken;
   }
 
+  isSchedulerActive(): boolean {
+    return this.isSchedulerRunning;
+  }
+
   /**
-   * 启动 Token 后台自动续期调度器
+   * 订阅 Token 变更通知 (无论是由调度器、登录还是业务 401 自动刷新)
    */
-  startRefreshScheduler(
-    onTick: (tokens: PlatformAuthTokens | null, error?: Error) => void
-  ): void {
-    if (this.isSchedulerRunning) {
-      return;
-    }
-    this.isSchedulerRunning = true;
+  onTokenChange(listener: (tokens: PlatformAuthTokens | null) => void): () => void {
+    return subscribeTokenChange(listener);
+  }
 
-    const checkAndSchedule = async () => {
-      if (!this.isSchedulerRunning) return;
+  private schedulerCallback: ((tokens: PlatformAuthTokens | null, error?: ClassifiedAuthError) => void) | null = null;
+  private isChecking = false;
 
+  private async executeRefreshCheck(): Promise<void> {
+    if (!this.isSchedulerRunning || this.isChecking) return;
+    this.isChecking = true;
+
+    try {
       const tokens = loadTokensFromStorage();
       if (!tokens) {
-        onTick(null);
+        this.schedulerCallback?.(null);
+        if (this.isSchedulerRunning) {
+          if (this.schedulerTimer) {
+            clearTimeout(this.schedulerTimer);
+          }
+          this.schedulerTimer = setTimeout(() => {
+            void this.executeRefreshCheck();
+          }, 30000);
+        }
         return;
       }
 
       const state = inspectTokenState(tokens);
+      // 只要进入刷新窗口，或者 AccessToken 已过期但存在 RefreshToken，都必须发起静默续期
+      const needsRefresh = !state.fresh && (state.usable || Boolean(tokens.refreshToken));
+      let nextDelayMs = Math.max(1000, Math.min(60000, state.refreshInMs || 60000));
 
-      if (!state.fresh && state.usable) {
+      if (needsRefresh) {
         try {
           await this.getValidAccessToken({ forceRefresh: false });
           const latestTokens = loadTokensFromStorage();
-          onTick(latestTokens);
-        } catch (error) {
-          onTick(null, error instanceof Error ? error : new Error(String(error)));
+          this.schedulerCallback?.(latestTokens);
+          const updatedState = inspectTokenState(latestTokens);
+          nextDelayMs = Math.max(1000, Math.min(60000, updatedState.refreshInMs || 60000));
+        } catch (rawError) {
+          const classified = classifyAuthError(rawError);
+          if (classified.terminal) {
+            // 终端致命凭据失效（如 invalid_grant），通知上层
+            clearTokensFromStorage();
+            this.schedulerCallback?.(null, classified);
+            return;
+          } else {
+            // 网络抖动、超时等可重试异常：绝不通知踢出用户，设定较短退避时间重试
+            logger.track('AUTH_REFRESH_RETRYABLE_ERROR', {
+              module: 'AUTH',
+              level: 'WARN',
+              message: `[Auth] Token 后台静默续期遭遇可重试网络异常: ${classified.message}`,
+              details: `状态码: ${classified.statusCode ?? 'N/A'}, 5 秒后重试`,
+            });
+            nextDelayMs = 5000;
+          }
         }
       }
 
-      const updatedTokens = loadTokensFromStorage();
-      const updatedState = inspectTokenState(updatedTokens);
-      const nextDelayMs = Math.max(1000, Math.min(60000, updatedState.refreshInMs || 60000));
-
       if (this.isSchedulerRunning) {
-        this.schedulerTimer = setTimeout(checkAndSchedule, nextDelayMs);
+        if (this.schedulerTimer) {
+          clearTimeout(this.schedulerTimer);
+        }
+        this.schedulerTimer = setTimeout(() => {
+          void this.executeRefreshCheck();
+        }, nextDelayMs);
       }
-    };
+    } finally {
+      this.isChecking = false;
+    }
+  }
+
+  /**
+   * 启动 Token 后台自动续期调度器
+   */
+  startRefreshScheduler(
+    onTick: (tokens: PlatformAuthTokens | null, error?: ClassifiedAuthError) => void
+  ): void {
+    this.schedulerCallback = onTick;
+    if (this.isSchedulerRunning) {
+      return;
+    }
+    this.isSchedulerRunning = true;
+    activeSchedulers.add(this);
 
     const initialTokens = loadTokensFromStorage();
     const initialDelay = initialTokens
       ? Math.max(1000, Math.min(60000, inspectTokenState(initialTokens).refreshInMs || 60000))
-      : 60000;
+      : 30000;
 
-    this.schedulerTimer = setTimeout(checkAndSchedule, initialDelay);
+    this.schedulerTimer = setTimeout(() => {
+      void this.executeRefreshCheck();
+    }, initialDelay);
+  }
+
+  /**
+   * 外部即时唤醒与校验（供休眠唤醒、获得焦点、网络恢复时即时响应）
+   */
+  async checkAndRefreshImmediately(): Promise<void> {
+    if (!this.isSchedulerRunning) return;
+    if (this.schedulerTimer) {
+      clearTimeout(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+    await this.executeRefreshCheck();
   }
 
   stopRefreshScheduler(): void {
     this.isSchedulerRunning = false;
+    this.schedulerCallback = null;
+    activeSchedulers.delete(this);
     if (this.schedulerTimer) {
       clearTimeout(this.schedulerTimer);
       this.schedulerTimer = null;
