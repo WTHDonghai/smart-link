@@ -30,6 +30,7 @@ export function unwrapPlatformEnvelope<T = Record<string, unknown>>(body: unknow
     (envelope.code !== undefined &&
       envelope.code !== null &&
       String(envelope.code) !== '0' &&
+      String(envelope.code) !== '0000' &&
       String(envelope.code) !== '200')
   ) {
     const errorMsg =

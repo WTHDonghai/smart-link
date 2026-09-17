@@ -250,6 +250,20 @@ describe('toolkitOrderApi', () => {
       expect(res.records[0].otaOrderId).toBe('OT-99');
     });
 
+    it('correctly unwraps nested { code: "0000", data: ... } enterprise structure', async () => {
+      mockRequest.mockResolvedValueOnce({
+        code: '0000',
+        data: {
+          records: [{ id: '100', otaOrderId: 'OT-100', status: 'SUCCESS' }],
+          total: 1,
+        },
+      });
+
+      const res = await fetchToolkitOrders({ page: 1 });
+      expect(res.total).toBe(1);
+      expect(res.records[0].otaOrderId).toBe('OT-100');
+    });
+
     it('throws when platform returns business error envelope (code !== 200 and code !== 0)', async () => {
       mockRequest.mockResolvedValueOnce({
         code: 500,

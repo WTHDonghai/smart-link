@@ -71,22 +71,69 @@ export function registerCrawlerIpcHandlers(): void {
 /**
  * 注册桌面端原生值守 IPC 监听器
  */
+interface ElectronDutyState {
+  channels: Record<
+    string,
+    {
+      channelCode: string;
+      status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED';
+      lastStartedAt?: number;
+      error?: string;
+    }
+  >;
+  coordinatorStatus:
+    | 'STOPPED'
+    | 'IDLE'
+    | 'CLAIMING'
+    | 'EXECUTING'
+    | 'REPORTING'
+    | 'CLAIM_BACKOFF'
+    | 'DEGRADED';
+}
+
+const electronDutyState: ElectronDutyState = {
+  channels: {},
+  coordinatorStatus: 'STOPPED',
+};
+
+/**
+ * 注册桌面端原生值守 IPC 监听器
+ */
 export function registerDutyIpcHandlers(): void {
   ipcMain.handle('duty:start', async (_event, channelCode: string) => {
     const code = (channelCode || '').trim().toUpperCase();
+    if (!code) {
+      return { success: false, message: '渠道编码不能为空' };
+    }
+    electronDutyState.channels[code] = {
+      channelCode: code,
+      status: 'RUNNING',
+      lastStartedAt: Date.now(),
+    };
+    electronDutyState.coordinatorStatus = 'CLAIMING';
     return { success: true, message: `桌面端渠道「${code}」值守已由主进程启动` };
   });
 
   ipcMain.handle('duty:stop', async (_event, channelCode: string) => {
     const code = (channelCode || '').trim().toUpperCase();
+    if (!code) {
+      return { success: false, message: '渠道编码不能为空' };
+    }
+    if (electronDutyState.channels[code]) {
+      electronDutyState.channels[code] = {
+        channelCode: code,
+        status: 'STOPPED',
+      };
+    }
+    const hasRunning = Object.values(electronDutyState.channels).some((c) => c.status === 'RUNNING');
+    if (!hasRunning) {
+      electronDutyState.coordinatorStatus = 'STOPPED';
+    }
     return { success: true, message: `桌面端渠道「${code}」值守已停止` };
   });
 
   ipcMain.handle('duty:status', async () => {
-    return {
-      channels: {},
-      coordinatorStatus: 'STOPPED',
-    };
+    return electronDutyState;
   });
 }
 
@@ -247,7 +294,6 @@ async function loadWindowContent(window: BrowserWindow): Promise<void> {
 }
 
 /**
->>>>>>> main
  * 创建应用主视窗
  */
 export async function createMainWindow(): Promise<BrowserWindow> {
