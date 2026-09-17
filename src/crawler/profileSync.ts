@@ -4,7 +4,8 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 export interface ProfileSyncOptions {
-  channelId?: string; // 目标渠道标识，如 'meituan'
+  channelCode?: string; // 目标渠道标识（大写），如 'MEITUAN'
+  channelId?: string; // 兼容向后兼容性
   customSourceDir?: string; // 可选的自定义源 Chrome 路径
   customSourceProfile?: string; // 可选的自定义源 Profile 名称 (如 'Profile 7')
 }
@@ -64,9 +65,9 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     throw new Error(`未找到源 Chrome Profile 目录: ${sourceProfileDir}`);
   }
 
-  // 2. 确定目标工作目录 (.chrome-profile/<channelId>)
-  const channelId = options.channelId || 'meituan';
-  const targetRoot = path.resolve(process.cwd(), '.chrome-profile', channelId);
+  // 2. 确定目标工作目录 (.chrome-profile/<channelCode>)
+  const channelCode = (options.channelCode || options.channelId || 'MEITUAN').trim().toUpperCase();
+  const targetRoot = path.resolve(process.cwd(), '.chrome-profile', channelCode.toLowerCase());
   const targetProfileDir = path.join(targetRoot, 'Default');
 
   if (!fs.existsSync(targetProfileDir)) {
@@ -245,6 +246,6 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     sourceDir: sourceProfileDir,
     sourceProfile: sourceProfileName,
     targetDir: targetRoot,
-    message: `成功从系统 Chrome Profile (${sourceProfileName}) 同步登录态至「${channelId}」专用目录`,
+    message: `成功从系统 Chrome Profile (${sourceProfileName}) 同步登录态至「${channelCode}」专用目录`,
   };
 }

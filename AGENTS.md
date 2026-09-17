@@ -22,8 +22,13 @@
   - 集中维护跨模块共享的全局实体契约、接口规范与状态枚举。禁止在组件内部重复或私自定义同名类型。
 - **计算与纯工具函数 (`src/utils/`)**：
   - 承载数据清洗、转换、派生计算与格式化工具函数。全部遵循纯函数原则，保证 100% 独立单测覆盖。
-- **外部集成与自动化引擎 (`src/components/desktop/` 等集成模块)**：
+- **外部集成与自动化引擎 (`src/crawler/` 及集成模块)**：
   - 隔离管理外部进程、后台无感自动化、网络监听及会话生命周期调度。
+- **客户端通信与服务调用层 (`src/services/`)**：
+  - 承载前端对外部网络或本地中转网关的异步请求，面向前端调用的 Client SDK 统一采用 `*Api.ts` 命名（如 `channelApi.ts`、`hotelApi.ts`、`crawlerApi.ts`）。
+  - 跨进程或双模（Electron IPC / Web HTTP）通信抹平网关，统一采用 `*Bridge.ts` 命名（如 `crawlerBridge.ts`）。
+- **本地服务与中间件宿主层 (`src/server/`)**：
+  - 承载 Vite 开发/预览服务器的原生 Node.js 中间件或本地路由，统一采用 `*Middleware.ts` 命名（如 `crawlerMiddleware.ts`），严禁与客户端 Client API 同名混淆。
 - **系统遥测与审计 (`src/components/logs/`)**：
   - 全链路运行日志流收集、级别过滤与异常可视化控制台。
 
@@ -264,6 +269,13 @@
 4. **拒绝无意义的外部依赖 (Dependency Pruning)**：
    - 仅引入真正为系统提供不可替代核心价值的高质量依赖库。
    - 严禁引入项目未实际使用或已有轻量原生方案的重型依赖包（例如能用 Tailwind 原生 transition 实现的桌面微交互，不要额外引入沉重的动画运行时库）。
+5. **文件命名与端层职责隔离规范 (File Naming & Boundary Discipline)**：
+   - **彻底杜绝跨层同名文件 (Zero Cross-Layer Filename Collision)**：严禁在不同分层目录中创建相同文件名的模块（例如：**严禁同时存在 `src/server/crawlerApi.ts` 与 `src/services/crawlerApi.ts`**）。同名文件不仅会在 IDE 全局搜索和文件跳转时带来极大的认知混淆，还会引发关于“代码重复或未清理”的技术怀疑。
+   - **分层命名后缀语义严谨**：
+     - 前端向外发起请求的客户端 SDK 位于 `src/services/`，统一以 `*Api.ts` 结尾（如 `channelApi.ts`、`hotelApi.ts`、`crawlerApi.ts`）；
+     - 抹平运行环境（Electron IPC 与 Web HTTP）的网关位于 `src/services/`，统一以 `*Bridge.ts` 结尾（如 `crawlerBridge.ts`）；
+     - 服务端与原生 Node.js / Vite 宿主中间件位于 `src/server/`，统一以 `*Middleware.ts` 结尾（如 `crawlerMiddleware.ts`）；
+     - 自动化采集器与调度器位于 `src/crawler/`，统一以 `*Collector.ts`、`*Engine.ts` 等领域模型命名。
 
 ---
 
@@ -273,6 +285,7 @@
 
 - [ ] **技术栈与架构基线**：是否严格基于 React 19 + TypeScript + Redux Toolkit + Tailwind CSS v4？是否无未经批准的第三方冗余依赖引入？
 - [ ] **强类型与类型治理**：是否杜绝了所有显式与隐式 `any`？跨模块领域实体是否在 `src/types/` 中集中定义与维护？
+- [ ] **分层架构与无同名冲突**：是否存在跨目录同名文件（如 `server/xxxApi.ts` 与 `services/xxxApi.ts`）？命名后缀是否严格契合分层定位（`*Api.ts` vs `*Middleware.ts` vs `*Bridge.ts`）？
 - [ ] **代码极简与零死代码**：
   - 代码是否直观易读？是否存在为了模式而模式的过度抽象？
   - 是否已彻底清理所有未使用的 import、未使用的变量/常量与废弃导出？是否无遗留注释代码与调试日志？

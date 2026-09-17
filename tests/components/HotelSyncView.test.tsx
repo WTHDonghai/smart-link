@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { createAppStore } from '../../src/store';
+import { HotelSyncView } from '../../src/components/hotels/HotelSyncView';
 import {
-  HotelSyncView,
   resolveChannelMeta,
   KNOWN_CHANNEL_METAS,
-} from '../../src/components/hotels/HotelSyncView';
+} from '../../src/utils/channelMeta';
 import {
   setSelectedCrawlChannel,
   setIsScraping,
@@ -71,7 +70,7 @@ describe('resolveChannelMeta 渠道徽标解析引擎', () => {
     );
     expect(metaFallback.short).toBe('商');
     expect(metaFallback.name).toBe('美团商旅');
-    expect(metaFallback).toEqual(KNOWN_CHANNEL_METAS.meituanbiz);
+    expect(metaFallback).toEqual(KNOWN_CHANNEL_METAS.MEITUAN_BIZ);
   });
 
   it('准确识别抖音、携程、同程等主流渠道徽标', () => {
@@ -105,7 +104,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('选中美团渠道后：采集按钮变为激活状态，文案动态切换为「启动「美团」门店采集」', () => {
     const store = createAppStore();
-    store.dispatch(setSelectedCrawlChannel('meituan'));
+    store.dispatch(setSelectedCrawlChannel('MEITUAN'));
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -123,7 +122,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('选中美团商旅渠道后：文案动态切换为「启动「美团商旅」门店采集」', () => {
     const store = createAppStore();
-    store.dispatch(setSelectedCrawlChannel('meituanbiz'));
+    store.dispatch(setSelectedCrawlChannel('MEITUAN_BIZ'));
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -137,7 +136,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('采集中状态时：按钮禁用并展示转圈 Loading 与「正在采集「美团」门店...」', () => {
     const store = createAppStore();
-    store.dispatch(setSelectedCrawlChannel('meituan'));
+    store.dispatch(setSelectedCrawlChannel('MEITUAN'));
     store.dispatch(setIsScraping(true));
 
     const html = renderToStaticMarkup(
@@ -190,5 +189,30 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
     // 严密断言：不存在 OTA 徽标
     expect(html).not.toContain('>OTA</div>');
+  });
+
+  it('未关联映射ID的门店行不可删除，已关联中台 mappingId 的门店可执行删除', () => {
+    const store = createAppStore();
+    const mockHotels: DiscoveredHotelCandidate[] = [
+      {
+        otaChannelId: 'meituan',
+        otaChannelCode: 'MEITUAN',
+        otaHotelId: 'mt-unmapped',
+        otaHotelName: '未建立映射酒店',
+        source: 'meituan',
+      },
+    ];
+
+    store.dispatch(upsertDiscoveredHotels(mockHotels));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <HotelSyncView />
+      </Provider>
+    );
+
+    // 未关联 mappingId 的行，删除按钮不可用或不提供删除操作
+    expect(html).toContain('未建立映射酒店');
+    expect(html).not.toContain('aria-label="删除 未建立映射酒店 门店映射"');
   });
 });

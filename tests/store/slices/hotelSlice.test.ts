@@ -135,6 +135,7 @@ describe('hotelSlice - 门店管理状态切片', () => {
 
       expect(nextState.hotels.length).toBe(1);
       const inserted = nextState.hotels[0];
+      expect(inserted.id).toBe('hm-meituan-MT-NEW-8888');
       expect(inserted.otaHotelId).toBe('MT-NEW-8888');
       expect(inserted.extUnitCode).toBe('MT-NEW-8888');
       expect(inserted.otaHotelName).toBe('西湖国宾馆美团直营店');
@@ -390,28 +391,30 @@ describe('hotelSlice - 门店管理状态切片', () => {
       const nextState = hotelReducer(runningState, {
         type: 'hotel/crawlHotelsByChannel/fulfilled',
         payload: {
-          channelId: 'meituan',
+          channelCode: 'MEITUAN',
           hotels: [
             {
-              otaChannelId: 'meituan',
+              otaChannelId: 'MEITUAN',
               otaChannelCode: 'MEITUAN',
               otaHotelId: 'MT-DISCOVER-01',
               otaHotelName: '千岛湖洲际度假酒店',
               city: '淳安',
               starRating: '豪华五星',
-              source: 'meituan',
+              source: 'MEITUAN',
             },
           ],
           durationMs: 3400,
+          timestamp: '10:00:00',
         },
       });
 
       expect(nextState.isScraping).toBe(false);
       expect(nextState.crawlStatus).toBe('success');
       expect(nextState.crawlError).toBeNull();
-      expect(nextState.lastCrawlSummary?.channelId).toBe('meituan');
+      expect(nextState.lastCrawlSummary?.channelCode).toBe('MEITUAN');
       expect(nextState.lastCrawlSummary?.discoveredCount).toBe(1);
       expect(nextState.lastCrawlSummary?.durationMs).toBe(3400);
+      expect(nextState.lastCrawlSummary?.timestamp).toBe('10:00:00');
       expect(nextState.hotels[0].otaHotelId).toBe('MT-DISCOVER-01');
       expect(nextState.hotels[0].status).toBe('pending');
     });

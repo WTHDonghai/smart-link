@@ -11,7 +11,6 @@ import {
 import { updateVisualTrackerStatus, visualClickLocator } from '../../visualTracker';
 
 export class MeituanHotelCollector implements ChannelHotelCollector {
-  public readonly channelId = 'meituan';
   public readonly channelCode = 'MEITUAN';
   public readonly defaultTargetUrl = DEFAULT_MEITUAN_CATALOG_URL;
 
@@ -153,7 +152,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
       }
 
       // 7. 规范化与去重
-      const candidates = normalizeMeituanHotelCandidates(extracted, this.channelId, this.channelCode);
+      const candidates = normalizeMeituanHotelCandidates(extracted, this.channelCode);
 
       log({
         level: 'SUCCESS',

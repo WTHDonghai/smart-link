@@ -114,6 +114,51 @@ describe('meituanStoreMapper', () => {
       expect(extracted[0].name).toBe('全季酒店(杭州西湖店)');
     });
 
+    it('extracts independent single store merchants without partnerId', () => {
+      const singleStoreResponse = [
+        {
+          code: 0,
+          msg: 'success',
+          data: {
+            poiInfo: {
+              poiId: '778899',
+              poiName: '青城山后山幽兰静舍客栈',
+              cityName: '都江堰',
+              categoryName: '民宿客栈',
+            },
+          },
+        },
+      ];
+
+      const extracted = extractMeituanStoresFromResponses(singleStoreResponse);
+      expect(extracted).toHaveLength(1);
+      expect(extracted[0].poiId).toBe('778899');
+      expect(extracted[0].partnerId).toBe('');
+      expect(extracted[0].name).toBe('青城山后山幽兰静舍客栈');
+      expect(extracted[0].city).toBe('都江堰');
+      expect(extracted[0].starRating).toBe('民宿客栈');
+    });
+
+    it('deduplicates independent single store merchants without partnerId by poiId', () => {
+      const duplicateSingleStores = [
+        {
+          poiId: '778899',
+          poiName: '青城山后山幽兰静舍客栈',
+          cityName: '都江堰',
+        },
+        {
+          poiId: '778899',
+          poiName: '青城山后山幽兰静舍客栈 - 重复响应',
+          cityName: '都江堰',
+        },
+      ];
+
+      const extracted = extractMeituanStoresFromResponses(duplicateSingleStores);
+      expect(extracted).toHaveLength(1);
+      expect(extracted[0].poiId).toBe('778899');
+      expect(extracted[0].name).toBe('青城山后山幽兰静舍客栈');
+    });
+
     it('ignores invalid or empty records safely', () => {
       const invalid = [null, undefined, '', 123, {}, { poiId: '123' }, { name: '仅有名称无ID' }];
       const extracted = extractMeituanStoresFromResponses(invalid);
@@ -134,10 +179,9 @@ describe('meituanStoreMapper', () => {
         },
       ];
 
-      const candidates = normalizeMeituanHotelCandidates(rawStores, 'meituan', 'MEITUAN');
+      const candidates = normalizeMeituanHotelCandidates(rawStores, 'MEITUAN');
       expect(candidates).toHaveLength(1);
       const c = candidates[0];
-      expect(c.otaChannelId).toBe('meituan');
       expect(c.otaChannelCode).toBe('MEITUAN');
       expect(c.otaHotelId).toBe('20201');
       expect(c.otaHotelName).toBe('三亚亚特兰蒂斯酒店');

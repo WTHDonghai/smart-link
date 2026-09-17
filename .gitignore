@@ -10,6 +10,7 @@ pnpm-debug.log*
 
 # Production & Build Output
 dist/
+dist-electron/
 dist-ssr/
 build/
 *.tsbuildinfo

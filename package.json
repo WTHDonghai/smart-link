@@ -3,11 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev:electron": "npm run build:electron && electron .",
     "build": "vite build",
+    "build:electron": "esbuild electron/main.ts --outfile=dist-electron/main.js --bundle --platform=node --format=esm --packages=external && esbuild electron/preload.ts --outfile=dist-electron/preload.cjs --bundle --platform=node --format=cjs --packages=external",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist dist-electron",
     "lint": "tsc --noEmit",
     "lint:lsp": "node .agents/skills/ts-lsp-diagnostics/scripts/lsp_diagnostics.cjs",
     "crawl:hotels": "vite-node src/crawler/cli.ts",
@@ -29,6 +32,7 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "electron": "^33",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
     "vitest": "^3.2.7"

@@ -25,43 +25,65 @@ export interface ChannelCandidate {
 }
 
 export const KNOWN_CHANNEL_METAS: Record<string, ChannelMeta> = {
-  meituan: {
+  MEITUAN: {
     name: '美团',
     short: '美',
     bgColor: 'bg-[#fff1e0]',
     textColor: 'text-[#ff7d00]',
   },
-  meituanbiz: {
+  MEITUAN_BIZ: {
     name: '美团商旅',
     short: '商',
     bgColor: 'bg-[#eef2ff]',
     textColor: 'text-[#004ac6]',
   },
-  douyin: {
+  DOUYIN: {
     name: '抖音',
     short: '抖',
     bgColor: 'bg-[#0f172a]',
     textColor: 'text-white',
   },
-  ctrip: {
+  CTRIP: {
     name: '携程旅行',
     short: '携',
     bgColor: 'bg-[#2577e3]',
     textColor: 'text-white',
   },
-  tongcheng: {
+  TONGCHENG: {
     name: '同程旅行',
     short: '同',
     bgColor: 'bg-[#0fc26a]',
     textColor: 'text-white',
   },
-  fliggy: {
+  FLIGGY: {
     name: '飞猪旅行',
     short: '猪',
     bgColor: 'bg-[#ffeedd]',
     textColor: 'text-[#ff5000]',
   },
+  QUNAR: {
+    name: '去哪儿旅行',
+    short: '去',
+    bgColor: 'bg-[#e6f4ff]',
+    textColor: 'text-[#0086f6]',
+  },
+  XIAOHONGSHU: {
+    name: '小红书',
+    short: '红',
+    bgColor: 'bg-[#ffeef0]',
+    textColor: 'text-[#ff2442]',
+  },
 };
+
+// 保持小写兼容器，确保向后兼容
+KNOWN_CHANNEL_METAS.meituan = KNOWN_CHANNEL_METAS.MEITUAN;
+KNOWN_CHANNEL_METAS.meituanbiz = KNOWN_CHANNEL_METAS.MEITUAN_BIZ;
+KNOWN_CHANNEL_METAS.douyin = KNOWN_CHANNEL_METAS.DOUYIN;
+KNOWN_CHANNEL_METAS.ctrip = KNOWN_CHANNEL_METAS.CTRIP;
+KNOWN_CHANNEL_METAS.tongcheng = KNOWN_CHANNEL_METAS.TONGCHENG;
+KNOWN_CHANNEL_METAS.fliggy = KNOWN_CHANNEL_METAS.FLIGGY;
+KNOWN_CHANNEL_METAS.qunar = KNOWN_CHANNEL_METAS.QUNAR;
+KNOWN_CHANNEL_METAS.xiaohongshu = KNOWN_CHANNEL_METAS.XIAOHONGSHU;
 
 /**
  * 统一精准解析渠道图徽元数据：
@@ -138,7 +160,13 @@ export function resolveChannelMeta(
     return KNOWN_CHANNEL_METAS.tongcheng;
   }
   if (combined.includes('FLIGGY') || combined.includes('FEIZHU')) {
-    return KNOWN_CHANNEL_METAS.fliggy;
+    return KNOWN_CHANNEL_METAS.FLIGGY;
+  }
+  if (combined.includes('QUNAR') || combined.includes('QU_NAR')) {
+    return KNOWN_CHANNEL_METAS.QUNAR;
+  }
+  if (combined.includes('XIAOHONGSHU') || combined.includes('RED') || combined.includes('XHS')) {
+    return KNOWN_CHANNEL_METAS.XIAOHONGSHU;
   }
 
   return {

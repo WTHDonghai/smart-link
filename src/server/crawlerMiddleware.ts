@@ -43,12 +43,11 @@ export function createCrawlerApiMiddleware() {
 
     // 1. GET /api/crawler/channels：获取支持采集的渠道与默认配置
     if (req.method === 'GET' && url.startsWith('/api/crawler/channels')) {
-      const channelIds = hotelCollectorRegistry.getSupportedChannelIds();
-      const channels = channelIds.map((id) => {
-        const collector = hotelCollectorRegistry.get(id);
+      const channelCodes = hotelCollectorRegistry.getSupportedChannelCodes();
+      const channels = channelCodes.map((code) => {
+        const collector = hotelCollectorRegistry.get(code);
         return {
-          channelId: id,
-          channelCode: collector?.channelCode || id.toUpperCase(),
+          channelCode: code.toUpperCase(),
           defaultTargetUrl: collector?.defaultTargetUrl || '',
         };
       });
@@ -59,17 +58,24 @@ export function createCrawlerApiMiddleware() {
     if (req.method === 'POST' && url.startsWith('/api/crawler/hotels/collect')) {
       try {
         const body = await parseJsonBody<HotelCrawlRequest>(req);
-        if (!body.channelId) {
+        const channelCode = (body.channelCode || '').trim().toUpperCase();
+        if (!channelCode) {
           return sendJsonResponse(res, 400, {
             success: false,
-            error: '必须指定采集渠道 channelId',
+            error: '必须指定采集渠道 channelCode',
           });
         }
 
         const logs: CollectorLogPayload[] = [];
-        const result = await hotelCollectionEngine.collectHotels(body, (log) => {
-          logs.push(log);
-        });
+        const result = await hotelCollectionEngine.collectHotels(
+          {
+            ...body,
+            channelCode,
+          },
+          (log) => {
+            logs.push(log);
+          }
+        );
 
         return sendJsonResponse(res, result.success ? 200 : 500, {
           ...result,
@@ -87,8 +93,8 @@ export function createCrawlerApiMiddleware() {
     // 3. POST /api/crawler/profile/sync：从日常 Chrome 同步登录态
     if (req.method === 'POST' && url.startsWith('/api/crawler/profile/sync')) {
       try {
-        const body = await parseJsonBody<{ channelId?: string }>(req).catch(() => ({ channelId: 'meituan' }));
-        const result = syncChromeProfile({ channelId: body.channelId || 'meituan' });
+        const body = await parseJsonBody<{ channelCode?: string }>(req).catch(() => ({ channelCode: 'MEITUAN' }));
+        const result = syncChromeProfile({ channelCode: (body.channelCode || 'MEITUAN').trim().toUpperCase() });
         return sendJsonResponse(res, 200, { success: true, data: result });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

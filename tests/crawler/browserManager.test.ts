@@ -30,7 +30,7 @@ describe('browserManager', () => {
     vi.mocked(chromium.launchPersistentContext).mockResolvedValue(mockContext as unknown as never);
 
     const session = await createPersistentBrowserSession({
-      channelId: 'meituan',
+      channelCode: 'MEITUAN',
       headless: true,
     });
 

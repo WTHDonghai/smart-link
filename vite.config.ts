@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, type Plugin } from 'vite';
-import { createCrawlerApiMiddleware } from './src/server/crawlerApi';
+import { createCrawlerApiMiddleware } from './src/server/crawlerMiddleware';
 
 function crawlerApiPlugin(): Plugin {
   return {

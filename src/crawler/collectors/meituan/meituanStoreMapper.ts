@@ -42,7 +42,7 @@ function extractPartnerId(record: UnknownRecord): string {
   );
 }
 
-function looksLikeMeituanStore(record: UnknownRecord, inheritedPartnerId = ''): boolean {
+function looksLikeMeituanStore(record: UnknownRecord): boolean {
   const poiId = firstString(
     record.poiId,
     record.poiID,
@@ -51,7 +51,6 @@ function looksLikeMeituanStore(record: UnknownRecord, inheritedPartnerId = ''): 
     record.hotelId,
     record.hotelID
   );
-  const partnerId = extractPartnerId(record) || inheritedPartnerId;
   const name = firstString(
     record.poiName,
     record.hotelName,
@@ -61,7 +60,7 @@ function looksLikeMeituanStore(record: UnknownRecord, inheritedPartnerId = ''): 
     record.poi_name,
     record.hotel_name
   );
-  return !!poiId && !!partnerId && !!name;
+  return !!poiId && !!name;
 }
 
 /**
@@ -87,7 +86,7 @@ function scanStoresFromObject(
 
   const currentPartnerId = extractPartnerId(value) || inheritedPartnerId;
 
-  if (looksLikeMeituanStore(value, currentPartnerId)) {
+  if (looksLikeMeituanStore(value)) {
     const poiId = firstString(
       value.poiId,
       value.poiID,
@@ -108,7 +107,7 @@ function scanStoresFromObject(
     const city = firstString(value.cityName, value.city, value.city_name);
     const starRating = firstString(value.starRating, value.hotelStar, value.categoryName);
 
-    const key = `${currentPartnerId}:${poiId}`;
+    const key = currentPartnerId ? `${currentPartnerId}:${poiId}` : `${poiId}`;
     if (!byKey.has(key)) {
       byKey.set(key, {
         poiId,
@@ -145,10 +144,10 @@ export function extractMeituanStoresFromResponses(responses: unknown[]): RawMeit
  */
 export function normalizeMeituanHotelCandidates(
   items: RawMeituanStoreItem[],
-  channelId = 'meituan',
   channelCode = 'MEITUAN'
 ): DiscoveredHotelCandidate[] {
   const byKey = new Map<string, DiscoveredHotelCandidate>();
+  const code = channelCode.toUpperCase();
 
   for (const item of items) {
     if (!item.poiId || !item.name) continue;
@@ -156,14 +155,14 @@ export function normalizeMeituanHotelCandidates(
     if (byKey.has(key)) continue;
 
     byKey.set(key, {
-      otaChannelId: channelId,
-      otaChannelCode: channelCode,
+      otaChannelId: code,
+      otaChannelCode: code,
       otaHotelId: item.poiId,
       otaHotelName: item.name,
       partnerId: item.partnerId || undefined,
       city: item.city,
       starRating: item.starRating,
-      source: item.source || 'meituan',
+      source: item.source || code,
       raw: item.raw,
     });
   }

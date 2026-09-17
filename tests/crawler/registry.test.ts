@@ -3,23 +3,21 @@ import { hotelCollectorRegistry } from '../../src/crawler/registry';
 import type { ChannelHotelCollector } from '../../src/crawler/collectors/base';
 
 describe('hotelCollectorRegistry', () => {
-  it('registers meituan and meituanbiz by default', () => {
-    const meituan = hotelCollectorRegistry.get('meituan');
+  it('registers MEITUAN and MEITUAN_BIZ by default', () => {
+    const meituan = hotelCollectorRegistry.get('MEITUAN');
     expect(meituan).not.toBeNull();
-    expect(meituan?.channelId).toBe('meituan');
     expect(meituan?.channelCode).toBe('MEITUAN');
     expect(meituan?.defaultTargetUrl).toContain('me.meituan.com');
 
-    const meituanbiz = hotelCollectorRegistry.get('meituanbiz');
+    const meituanbiz = hotelCollectorRegistry.get('MEITUAN_BIZ');
     expect(meituanbiz).not.toBeNull();
-    expect(meituanbiz?.channelId).toBe('meituanbiz');
-    expect(meituanbiz?.channelCode).toBe('MEITUANBIZ');
+    expect(meituanbiz?.channelCode).toBe('MEITUAN_BIZ');
   });
 
   it('is case-insensitive when querying channels', () => {
     const collector = hotelCollectorRegistry.get('MeiTuan');
     expect(collector).not.toBeNull();
-    expect(collector?.channelId).toBe('meituan');
+    expect(collector?.channelCode).toBe('MEITUAN');
   });
 
   it('returns null for unregistered channel', () => {
@@ -29,7 +27,6 @@ describe('hotelCollectorRegistry', () => {
 
   it('allows registering a new channel collector dynamically', () => {
     const mockCollector: ChannelHotelCollector = {
-      channelId: 'mock_channel',
       channelCode: 'MOCK_CHANNEL',
       defaultTargetUrl: 'https://mock.ota.com/hotels',
       resolveTargetUrl: (url) => url || 'https://mock.ota.com/hotels',
@@ -38,15 +35,16 @@ describe('hotelCollectorRegistry', () => {
 
     hotelCollectorRegistry.register(mockCollector);
 
-    const retrieved = hotelCollectorRegistry.get('mock_channel');
+    const retrieved = hotelCollectorRegistry.get('MOCK_CHANNEL');
     expect(retrieved).not.toBeNull();
-    expect(retrieved?.channelId).toBe('mock_channel');
+    expect(retrieved?.channelCode).toBe('MOCK_CHANNEL');
     expect(retrieved?.defaultTargetUrl).toBe('https://mock.ota.com/hotels');
   });
 
-  it('returns supported channel IDs list', () => {
-    const ids = hotelCollectorRegistry.getSupportedChannelIds();
-    expect(ids).toContain('meituan');
-    expect(ids).toContain('meituanbiz');
+  it('returns supported channel codes list dynamically', () => {
+    const codes = hotelCollectorRegistry.getSupportedChannelCodes();
+    expect(codes).toContain('MEITUAN');
+    expect(codes).toContain('MEITUAN_BIZ');
+    expect(codes).toContain('MOCK_CHANNEL');
   });
 });

@@ -3,15 +3,15 @@ import { hotelCollectionEngine } from './engine';
 
 function parseArgs(argv: string[]) {
   const options = {
-    channel: 'meituan',
+    channelCode: 'MEITUAN',
     headless: false,
     waitMs: 3000,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--channel' && argv[i + 1]) {
-      options.channel = argv[++i];
+    if ((arg === '--channel' || arg === '--channel-code') && argv[i + 1]) {
+      options.channelCode = argv[++i].trim().toUpperCase();
     } else if (arg === '--headless') {
       options.headless = true;
     } else if (arg === '--wait-ms' && argv[i + 1]) {
@@ -23,11 +23,11 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  console.log(`[CLI] 启动渠道「${args.channel}」门店采集 (Headless: ${args.headless})...`);
+  console.log(`[CLI] 启动渠道「${args.channelCode}」门店采集 (Headless: ${args.headless})...`);
 
   const result = await hotelCollectionEngine.collectHotels(
     {
-      channelId: args.channel,
+      channelCode: args.channelCode,
       headless: args.headless,
       waitMs: args.waitMs,
     },

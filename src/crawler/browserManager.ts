@@ -5,7 +5,7 @@ import { injectStealthScripts, getStealthLaunchArgs } from './stealth';
 import { installVisualTracker } from './visualTracker';
 
 export interface LaunchBrowserOptions {
-  channelId: string;
+  channelCode: string;
   headless?: boolean;
 }
 
@@ -21,7 +21,11 @@ export interface BrowserSession {
 export async function createPersistentBrowserSession(
   options: LaunchBrowserOptions
 ): Promise<BrowserSession> {
-  const profileDir = path.resolve(process.cwd(), '.chrome-profile', options.channelId);
+  const profileDir = path.resolve(
+    process.cwd(),
+    '.chrome-profile',
+    options.channelCode.trim().toLowerCase()
+  );
 
   // 确保 profile 目录存在
   if (!fs.existsSync(profileDir)) {

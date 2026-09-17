@@ -1,7 +1,7 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import type { HotelMapping, PlatformProperty } from '../../types';
 import type { DiscoveredHotelCandidate } from '../../crawler/types';
-import { executeHotelCrawl } from '../../services/crawlerApi';
+import { collectHotelsByChannel } from '../../services/crawlerBridge';
 import {
   fetchRemoteHotelMappings,
   saveHotelMappingsBatch,
@@ -28,7 +28,8 @@ export interface HotelState {
   searchKeyword: string;
   selectedCrawlChannel: string;
   lastCrawlSummary: {
-    channelId: string;
+    channelCode: string;
+    channelId?: string;
     discoveredCount: number;
     durationMs: number;
     timestamp: string;
@@ -287,29 +288,30 @@ export const fetchPlatformPropertiesThunk = createAsyncThunk<
  */
 export const crawlHotelsByChannel = createAsyncThunk<
   {
-    channelId: string;
+    channelCode: string;
     hotels: DiscoveredHotelCandidate[];
     durationMs: number;
+    timestamp: string;
   },
   {
-    channelId: string;
+    channelCode: string;
     headless?: boolean;
     timeoutMs?: number;
     waitMs?: number;
   },
   { rejectValue: string }
 >('hotel/crawlHotelsByChannel', async (param, { dispatch, rejectWithValue }) => {
+  const code = param.channelCode.trim().toUpperCase();
   try {
     dispatch(
       addLog({
         level: 'PLAYWRIGHT',
-        channelId: param.channelId,
-        message: `[Crawler] 发起渠道「${param.channelId}」门店自动化采集`,
+        channelId: code,
+        message: `[Crawler] 发起渠道「${code}」门店自动化采集`,
       })
     );
 
-    const result = await executeHotelCrawl({
-      channelId: param.channelId,
+    const result = await collectHotelsByChannel(code, {
       headless: param.headless,
       timeoutMs: param.timeoutMs,
       waitMs: param.waitMs,
@@ -320,7 +322,7 @@ export const crawlHotelsByChannel = createAsyncThunk<
         dispatch(
           addLog({
             level: logItem.level,
-            channelId: param.channelId,
+            channelId: code,
             message: logItem.message,
             details: logItem.details,
           })
@@ -330,24 +332,25 @@ export const crawlHotelsByChannel = createAsyncThunk<
 
     dispatch(
       showToast({
-        title: `「${param.channelId}」门店采集完成`,
+        title: `「${code}」门店采集完成`,
         description: `成功发现 ${result.hotels.length} 家门店候选 (耗时: ${(result.diagnostics.durationMs / 1000).toFixed(1)}s)`,
         type: 'success',
       })
     );
 
     return {
-      channelId: param.channelId,
+      channelCode: code,
       hotels: result.hotels,
       durationMs: result.diagnostics.durationMs,
+      timestamp: new Date().toLocaleTimeString(),
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     dispatch(
       addLog({
         level: 'ERROR',
-        channelId: param.channelId,
-        message: `[Crawler] 渠道「${param.channelId}」门店采集失败: ${errorMsg}`,
+        channelId: code,
+        message: `[Crawler] 渠道「${code}」门店采集失败: ${errorMsg}`,
       })
     );
     dispatch(
@@ -414,7 +417,7 @@ export const hotelSlice = createSlice({
           existing.source = candidate.source;
         } else {
           const newHotel: HotelMapping = {
-            id: `hm-${candidate.otaChannelId}-${candidate.otaHotelId}-${Date.now()}`,
+            id: `hm-${candidate.otaChannelId.toLowerCase()}-${candidate.otaHotelId}`,
             otaChannelId: candidate.otaChannelId.toLowerCase(),
             otaChannelCode: candidate.otaChannelCode || candidate.otaChannelId.toUpperCase(),
             otaHotelId: candidate.otaHotelId,
@@ -448,10 +451,11 @@ export const hotelSlice = createSlice({
         state.crawlStatus = 'success';
         state.crawlError = null;
         state.lastCrawlSummary = {
-          channelId: action.payload.channelId,
+          channelCode: action.payload.channelCode,
+          channelId: action.payload.channelCode,
           discoveredCount: action.payload.hotels.length,
           durationMs: action.payload.durationMs,
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: action.payload.timestamp || '',
         };
 
         hotelSlice.caseReducers.upsertDiscoveredHotels(state, {

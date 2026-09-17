@@ -111,11 +111,13 @@ describe('resolveChannelMeta 统一渠道图徽与元数据解析纯函数', () 
     expect(mtBiz).toEqual(KNOWN_CHANNEL_METAS.meituanbiz);
   });
 
-  it('内置规则覆盖抖音、携程、同程、飞猪等主流渠道', () => {
+  it('内置规则覆盖抖音、携程、同程、飞猪、去哪儿、小红书等主流渠道', () => {
     expect(resolveChannelMeta({ otaChannelCode: 'DOUYIN' }).short).toBe('抖');
     expect(resolveChannelMeta({ otaChannelCode: 'CTRIP' }).short).toBe('携');
     expect(resolveChannelMeta({ otaChannelCode: 'TONGCHENG' }).short).toBe('同');
     expect(resolveChannelMeta({ otaChannelCode: 'FLIGGY' }).short).toBe('猪');
+    expect(resolveChannelMeta({ otaChannelCode: 'QUNAR' }).short).toBe('去');
+    expect(resolveChannelMeta({ otaChannelCode: 'XIAOHONGSHU' }).short).toBe('红');
   });
 
   it('完全未知的渠道回退为截取代码前两位，不报错崩溃', () => {

@@ -25,13 +25,6 @@ import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
 import { TableRowActions } from '../common/TableRowActions';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { normalizeAppError } from '../../utils/errorNormalizer';
-import {
-  resolveChannelMeta,
-  KNOWN_CHANNEL_METAS,
-  type ChannelMeta,
-} from '../../utils/channelMeta';
-
-export { resolveChannelMeta, KNOWN_CHANNEL_METAS, type ChannelMeta };
 
 export const HotelSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -54,27 +47,28 @@ export const HotelSyncView: React.FC = () => {
 
   // 页面挂载与筛选渠道切换时，自动从文旅中台拉取真实门店映射与中台酒店列表
   useEffect(() => {
+    setSelectedPmsMap({});
     const channelParam = filterChannel === 'all' ? undefined : filterChannel;
     dispatch(fetchHotelMappingsThunk(channelParam));
     dispatch(fetchPlatformPropertiesThunk());
   }, [dispatch, filterChannel]);
 
-  // 获取当前选中的采集渠道对象（无默认预选，未选中时返回 null）
+  // 获取当前选中的采集渠道对象（无默认预选，以大写 channelCode 匹配）
   const activeChannel = useMemo(() => {
     if (!selectedCrawlChannel) return null;
+    const targetCode = selectedCrawlChannel.trim().toUpperCase();
     return (
       channels.find(
         (c) =>
-          c.id.toLowerCase() === selectedCrawlChannel.toLowerCase() ||
-          (c.code && c.code.toUpperCase() === selectedCrawlChannel.toUpperCase()) ||
-          c.id.replace(/[-_]/g, '').toLowerCase() === selectedCrawlChannel.replace(/[-_]/g, '').toLowerCase()
+          (c.code && c.code.toUpperCase() === targetCode) ||
+          (c.id && c.id.toUpperCase() === targetCode) ||
+          (c.code && c.code.replace(/[-_]/g, '').toUpperCase() === targetCode.replace(/[-_]/g, ''))
       ) || null
     );
   }, [channels, selectedCrawlChannel]);
 
   // 是否禁用采集按钮：未明确选择渠道、找不到渠道或当前正在采集中
   const isStartDisabled = !selectedCrawlChannel || !activeChannel || isScraping;
-
 
   // 渠道选项列表（用于列表筛选）
   const channelOptions = useMemo(() => [
@@ -86,13 +80,16 @@ export const HotelSyncView: React.FC = () => {
     })),
   ], [channels]);
 
-  // 支持采集的渠道选项（当前优先美团/美团商旅，可扩展）
+  // 支持采集的渠道选项（统一以大写 channelCode 作为 value）
   const crawlChannelOptions = useMemo(() => {
-    return channels.map((ch) => ({
-      label: ch.name,
-      value: ch.id,
-      subtext: ch.code,
-    }));
+    return channels.map((ch) => {
+      const code = (ch.code || ch.id).toUpperCase();
+      return {
+        label: ch.name,
+        value: code,
+        subtext: code,
+      };
+    });
   }, [channels]);
 
   // 过滤后的酒店/门店列表（智能兼容渠道 ID 与 CODE 规范化匹配）
@@ -134,12 +131,12 @@ export const HotelSyncView: React.FC = () => {
     const pmsId = selectedPmsMap[hotel.id] ?? hotel.pmsHotelId;
     const options = getHotelOptions(hotel.pmsHotelId, hotel.pmsHotelName);
     const matched = options.find((o) => o.id === pmsId);
-    const pmsName = matched ? matched.name : hotel.pmsHotelName;
+    const pmsName = pmsId ? (matched ? matched.name : hotel.pmsHotelName) : '';
 
     const otaChannelCode = hotel.otaChannelCode || hotel.otaChannelId.toUpperCase();
     const extUnitCode = hotel.extUnitCode || hotel.otaHotelId;
 
-    await dispatch(
+    const result = await dispatch(
       saveHotelMappingThunk({
         id: hotel.id,
         mappingId: hotel.mappingId,
@@ -151,6 +148,16 @@ export const HotelSyncView: React.FC = () => {
         pmsHotelName: pmsName,
       })
     );
+
+    if (saveHotelMappingThunk.fulfilled.match(result)) {
+      setSelectedPmsMap((prev) => {
+        const next = { ...prev };
+        delete next[hotel.id];
+        return next;
+      });
+      const channelParam = filterChannel === 'all' ? undefined : filterChannel;
+      dispatch(fetchHotelMappingsThunk(channelParam));
+    }
   };
 
   const handleDeleteRow = async (hotel: HotelMapping) => {
@@ -166,10 +173,11 @@ export const HotelSyncView: React.FC = () => {
 
   const handleStartCrawl = async () => {
     if (isScraping || !selectedCrawlChannel || !activeChannel) return;
+    const channelCode = (activeChannel.code || activeChannel.id).trim().toUpperCase();
 
     dispatch(
       crawlHotelsByChannel({
-        channelId: activeChannel.id,
+        channelCode,
       })
     );
   };
@@ -180,6 +188,7 @@ export const HotelSyncView: React.FC = () => {
   };
 
   const handleRefreshMappings = () => {
+    setSelectedPmsMap({});
     const channelParam = filterChannel === 'all' ? undefined : filterChannel;
     dispatch(fetchHotelMappingsThunk(channelParam));
     dispatch(fetchPlatformPropertiesThunk());

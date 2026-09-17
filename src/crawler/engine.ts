@@ -3,6 +3,15 @@ import { hotelCollectorRegistry } from './registry';
 import { createPersistentBrowserSession } from './browserManager';
 
 export class HotelCollectionEngine {
+  private activeChannelJobs = new Set<string>();
+
+  /**
+   * 检查指定渠道是否正在执行门店采集流水线
+   */
+  public isChannelActive(channelCode: string): boolean {
+    return this.activeChannelJobs.has(channelCode.trim().toUpperCase());
+  }
+
   /**
    * 执行指定渠道的门店采集总流水线
    */
@@ -13,17 +22,32 @@ export class HotelCollectionEngine {
     const startedAt = Date.now();
     const log = onLog || (() => {});
 
+    const code = (request.channelCode || '').trim().toUpperCase();
+    if (!code) {
+      const emptyMsg = '必须指定采集渠道编码 channelCode';
+      log({ level: 'ERROR', message: `[CrawlerEngine] ${emptyMsg}` });
+      throw new Error(emptyMsg);
+    }
+
+    if (this.activeChannelJobs.has(code)) {
+      const busyMsg = `渠道「${code}」门店采集任务正在执行中，请勿重复发起。`;
+      log({ level: 'ERROR', message: `[CrawlerEngine] ${busyMsg}` });
+      throw new Error(busyMsg);
+    }
+
     log({
       level: 'PLAYWRIGHT',
-      message: `[CrawlerEngine] 收到渠道「${request.channelId}」门店采集任务，启动流水线...`,
+      message: `[CrawlerEngine] 收到渠道「${code}」门店采集任务，启动流水线...`,
     });
 
-    const collector = hotelCollectorRegistry.get(request.channelId);
+    const collector = hotelCollectorRegistry.get(code);
     if (!collector) {
-      const errorMsg = `渠道「${request.channelId}」暂未注册门店自动化采集适配器。`;
+      const errorMsg = `渠道「${code}」暂未注册门店自动化采集适配器。`;
       log({ level: 'ERROR', message: `[CrawlerEngine] ${errorMsg}` });
       throw new Error(errorMsg);
     }
+
+    this.activeChannelJobs.add(code);
 
     const targetUrl = collector.defaultTargetUrl;
     log({
@@ -40,13 +64,12 @@ export class HotelCollectionEngine {
       });
 
       session = await createPersistentBrowserSession({
-        channelId: collector.channelId,
+        channelCode: code,
         headless: request.headless,
       });
 
       const hotels = await collector.collect(session.page, session.context, {
-        channelId: collector.channelId,
-        channelCode: collector.channelCode,
+        channelCode: code,
         targetUrl,
         waitMs: request.waitMs ?? 3000,
         timeoutMs: request.timeoutMs ?? 30000,
@@ -66,17 +89,16 @@ export class HotelCollectionEngine {
 
       log({
         level: 'SUCCESS',
-        message: `[CrawlerEngine] 渠道「${collector.channelId}」门店采集成功，共获取 ${hotels.length} 家有效门店 (耗时: ${(durationMs / 1000).toFixed(1)}s)`,
+        message: `[CrawlerEngine] 渠道「${code}」门店采集成功，共获取 ${hotels.length} 家有效门店 (耗时: ${(durationMs / 1000).toFixed(1)}s)`,
       });
 
       return {
         success: true,
-        channelId: collector.channelId,
-        channelCode: collector.channelCode,
+        channelCode: code,
         hotels,
         diagnostics: {
           targetUrl,
-          source: `${collector.channelId}-crawler`,
+          source: `${code}-crawler`,
           scannedCount: hotels.length,
           discoveredCount: hotels.length,
           verifiedEmpty: hotels.length === 0,
@@ -95,13 +117,12 @@ export class HotelCollectionEngine {
 
       return {
         success: false,
-        channelId: collector.channelId,
-        channelCode: collector.channelCode,
+        channelCode: code,
         hotels: [],
         error: errorMsg,
         diagnostics: {
           targetUrl,
-          source: `${collector.channelId}-crawler`,
+          source: `${code}-crawler`,
           scannedCount: 0,
           discoveredCount: 0,
           verifiedEmpty: false,
@@ -110,6 +131,7 @@ export class HotelCollectionEngine {
         },
       };
     } finally {
+      this.activeChannelJobs.delete(code);
       if (session) {
         log({
           level: 'PLAYWRIGHT',

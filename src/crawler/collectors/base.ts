@@ -3,13 +3,9 @@ import type { DiscoveredHotelCandidate, CollectorOptions } from '../types';
 
 /**
  * 渠道酒店采集器抽象接口 (Channel Hotel Collector Contract)
- * 所有 OTA 渠道（美团、抖音、携程等）的酒店候选采集器均须实现此接口，实现多渠道平滑插拔与横向扩展。
  */
 export interface ChannelHotelCollector {
-  /** 渠道唯一标识符，如 'meituan', 'douyin', 'ctrip' */
-  readonly channelId: string;
-
-  /** 渠道业务编码，如 'MEITUAN', 'DOUYIN', 'CTRIP' */
+  /** 渠道业务唯一编码（全大写），如 'MEITUAN', 'MEITUAN_BIZ', 'DOUYIN', 'CTRIP' */
   readonly channelCode: string;
 
   /** 渠道默认的门店/调价目标 URL */

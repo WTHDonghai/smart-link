@@ -1,6 +1,5 @@
 export interface HotelCrawlRequest {
-  channelId: string;
-  channelCode?: string;
+  channelCode: string; // 必须大写，如 'MEITUAN', 'MEITUAN_BIZ'
   headless?: boolean;
   timeoutMs?: number;
   waitMs?: number;
@@ -31,7 +30,6 @@ export interface HotelCrawlDiagnostics {
 
 export interface HotelCrawlResult {
   success: boolean;
-  channelId: string;
   channelCode: string;
   hotels: DiscoveredHotelCandidate[];
   diagnostics: HotelCrawlDiagnostics;
@@ -45,7 +43,6 @@ export interface CollectorLogPayload {
 }
 
 export interface CollectorOptions {
-  channelId: string;
   channelCode: string;
   targetUrl: string;
   waitMs: number;

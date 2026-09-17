@@ -3,7 +3,6 @@ import { extractDataItems } from './channelApi';
 import type {
   HotelMapping,
   SaveHotelMappingPayloadItem,
-  RemoteHotelMappingRecord,
   PlatformProperty,
 } from '../types';
 

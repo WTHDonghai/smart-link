@@ -9,7 +9,6 @@ export interface CrawlerApiResponse extends HotelCrawlResult {
 }
 
 export interface CrawlerChannelInfo {
-  channelId: string;
   channelCode: string;
   defaultTargetUrl: string;
 }
@@ -25,7 +24,10 @@ export async function executeHotelCrawl(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify({
+      ...request,
+      channelCode: request.channelCode.trim().toUpperCase(),
+    }),
   });
 
   const data = (await response.json()) as CrawlerApiResponse;
@@ -62,14 +64,14 @@ export interface ProfileSyncResponseData {
  * 前端请求从系统 Chrome 自动同步日常登录态到当前渠道的 Profile
  */
 export async function requestSyncChromeProfile(
-  channelId?: string
+  channelCode?: string
 ): Promise<ProfileSyncResponseData> {
   const response = await fetch('/api/crawler/profile/sync', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ channelId: channelId || 'meituan' }),
+    body: JSON.stringify({ channelCode: (channelCode || 'MEITUAN').trim().toUpperCase() }),
   });
 
   const json = (await response.json()) as {
