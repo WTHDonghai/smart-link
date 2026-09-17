@@ -5,7 +5,8 @@ import {
   setFilterModule,
   setFilterSearch, 
   toggleAutoScroll, 
-  clearLogs 
+  clearLogs,
+  clearAllLogs,
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { 
@@ -127,12 +128,24 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     return matchesLevel && matchesModule && matchesSearch;
   });
 
-  // Automatically scroll to bottom when new logs arrive and auto-scroll is active
+  // 当开启自动滚动且新日志到达时，自动保持置顶于最新的日志
   useEffect(() => {
     if (isAutoScroll && scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      scrollContainerRef.current.scrollTop = 0;
     }
   }, [filteredLogs.length, isAutoScroll]);
+
+  const handleClearLogs = async () => {
+    dispatch(clearLogs());
+    await dispatch(clearAllLogs());
+    dispatch(
+      showToast({
+        title: '系统日志已清空',
+        description: '已清除内存与持久化存储',
+        type: 'success',
+      })
+    );
+  };
 
   const handleExport = () => {
     const text = logs
@@ -412,9 +425,9 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-5 max-w-[1400px] mx-auto w-full p-6">
+    <div className="flex-1 flex flex-col h-full overflow-hidden w-full p-4 md:p-6 gap-3 min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#e2e8f0]">
+      <div className="flex items-center justify-between gap-4 pb-2 border-b border-[#e2e8f0] shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-1.5 h-4.5 rounded-full bg-[#004ac6] shrink-0" />
           <h1 className="text-xl font-bold text-[#0b1c30] tracking-tight">
@@ -479,7 +492,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
           <button
             type="button"
-            onClick={() => dispatch(clearLogs())}
+            onClick={handleClearLogs}
             className="h-8.5 px-3 bg-white border border-[#ffdad6] text-[#ba1a1a] hover:bg-rose-50 rounded-lg text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -489,7 +502,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       </div>
 
       {/* Filter Bar */}
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-2.5 shrink-0">
         {/* Module Filter Pills */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -562,9 +575,9 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       </div>
 
       {/* Terminal View Container */}
-      <div className="rounded-xl border border-[#213145] bg-[#0b1c30] text-gray-200 overflow-hidden shadow-lg flex flex-col">
+      <div className="flex-1 min-h-0 rounded-xl border border-[#213145] bg-[#0b1c30] text-gray-200 overflow-hidden shadow-lg flex flex-col">
         {/* Terminal Header */}
-        <div className="px-4 py-2.5 bg-[#071322] border-b border-[#213145] flex items-center justify-between text-xs text-gray-400 select-none">
+        <div className="px-4 py-2.5 bg-[#071322] border-b border-[#213145] flex items-center justify-between text-xs text-gray-400 select-none shrink-0">
           <div className="flex items-center gap-2 font-mono">
             <Terminal className="w-4 h-4 text-emerald-400" />
             <span>duty-task-daemon@smartlink: ~/runtime/logs</span>
@@ -579,7 +592,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
         {/* Log Entries Stream */}
         <div 
           ref={scrollContainerRef}
-          className="p-4 font-mono text-xs overflow-y-auto max-h-[600px] space-y-2.5 select-text"
+          className="flex-1 min-h-0 p-4 font-mono text-xs overflow-y-auto space-y-2.5 select-text"
         >
           {filteredLogs.length === 0 ? (
             <div className="py-12 text-center text-gray-500">

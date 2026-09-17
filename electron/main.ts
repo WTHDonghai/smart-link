@@ -6,6 +6,8 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
+import { closeAllBrowserSessions } from '../src/crawler/browserManager';
+import { logger } from '../src/services/logger';
 import {
   initNodePlatformTokens,
   savePlatformTokenFile,
@@ -191,11 +193,94 @@ export function registerDutyIpcHandlers(): void {
     return { success: true };
   });
 
+  // 3. 一键停止所有渠道值守与后台调度
+  ipcMain.handle('duty:stop-all', async () => {
+    try {
+      return await dutyOrchestrationEngine.stopAllDuty();
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  // 4. 应用级退出与全量资源回收调度
+  ipcMain.handle('app:teardown', async () => {
+    try {
+      await teardownApplicationResources();
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
   dutyOrchestrationEngine.subscribeLogs((entry) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('duty:log-entry', entry);
     }
   });
+}
+
+let isTearingDown = false;
+let teardownPromise: Promise<void> | null = null;
+
+/**
+ * 唯一的应用退出与全量资源回收调度函数
+ * 具备幂等性防护、2.5 秒超时兜底熔断与异常隔离保障，按序关闭值守、清退浏览器子进程并持久化日志
+ */
+export async function teardownApplicationResources(timeoutMs = 2500): Promise<void> {
+  if (isTearingDown && teardownPromise) {
+    return teardownPromise;
+  }
+  isTearingDown = true;
+
+  const teardownAction = async (): Promise<void> => {
+    // 1. 停止所有值守任务、清除心跳并通知中台离线
+    try {
+      await dutyOrchestrationEngine.stopAllDuty();
+    } catch (err) {
+      console.warn('[Smart-Link] 停止值守任务异常:', err);
+    }
+
+    // 2. 并发安全关闭所有未释放的 BrowserContext，清空活跃集合并释放 Profile 物理锁文件
+    try {
+      await closeAllBrowserSessions();
+    } catch (err) {
+      console.warn('[Smart-Link] 关闭浏览器子进程异常:', err);
+    }
+
+    // 3. 立即刷新日志持久化存储缓冲
+    try {
+      await logger.flushStorage();
+    } catch (err) {
+      console.warn('[Smart-Link] 刷新持久化日志缓冲异常:', err);
+    }
+  };
+
+  const timeoutFallback = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[Smart-Link] teardownApplicationResources 超时 ${timeoutMs}ms，执行强制兜底熔断`);
+      resolve();
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  });
+
+  teardownPromise = Promise.race([teardownAction(), timeoutFallback]);
+  await teardownPromise;
+}
+
+/**
+ * 重置资源回收状态标志（仅供单元测试隔离使用）
+ */
+export function resetTeardownStateForTest(): void {
+  isTearingDown = false;
+  teardownPromise = null;
 }
 
 /**
@@ -396,8 +481,35 @@ export async function createMainWindow(): Promise<BrowserWindow> {
   return mainWindow;
 }
 
+let isAppQuitting = false;
+
 // 仅在被 Electron 主进程直接启动时激活生命周期
 if (process.type === 'browser') {
+  // 拦截应用退出，保证后台值守、浏览器子进程与日志资源彻底清理完成后退出
+  app.on('before-quit', (event) => {
+    if (isAppQuitting) {
+      return;
+    }
+    event.preventDefault();
+    isAppQuitting = true;
+    void teardownApplicationResources().finally(() => {
+      app.exit(0);
+    });
+  });
+
+  // 注册操作系统中断信号处理
+  process.on('SIGINT', () => {
+    void teardownApplicationResources().finally(() => {
+      process.exit(0);
+    });
+  });
+
+  process.on('SIGTERM', () => {
+    void teardownApplicationResources().finally(() => {
+      process.exit(0);
+    });
+  });
+
   app.whenReady().then(async () => {
     // 注入应用数据持久化目录，防止在打包后的只读安装目录下引发 EACCES
     process.env.SMARTLINK_USER_DATA_DIR = app.getPath('userData');

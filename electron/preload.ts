@@ -14,6 +14,8 @@ export interface ElectronCrawlerApi {
 export interface ElectronDutyApi {
   startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
   stopDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
+  stopAllDuty?(): Promise<{ success: boolean; message?: string }>;
+  teardownApp?(): Promise<{ success: boolean; message?: string }>;
   getStatus(since?: number): Promise<{
     channels: Record<string, { channelCode: string; status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED'; lastStartedAt?: number; error?: string }>;
     coordinatorStatus: 'STOPPED' | 'IDLE' | 'CLAIMING' | 'EXECUTING' | 'REPORTING' | 'CLAIM_BACKOFF' | 'DEGRADED';
@@ -40,6 +42,12 @@ const dutyApi: ElectronDutyApi = {
   },
   stopDuty: (channelCode: string) => {
     return ipcRenderer.invoke('duty:stop', channelCode);
+  },
+  stopAllDuty: () => {
+    return ipcRenderer.invoke('duty:stop-all');
+  },
+  teardownApp: () => {
+    return ipcRenderer.invoke('app:teardown');
   },
   getStatus: (since?: number) => {
     return ipcRenderer.invoke('duty:status', since);

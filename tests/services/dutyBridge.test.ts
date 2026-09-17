@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   startDutyByChannel,
   stopDutyByChannel,
+  stopAllDuty,
   queryDutyStatus,
   syncDutyTokens,
   clearDutyTokens,
@@ -12,6 +13,7 @@ import type { PlatformAuthTokens } from '../../src/types';
 vi.mock('../../src/services/dutyRuntimeApi', () => ({
   startChannelDutyHttp: vi.fn(),
   stopChannelDutyHttp: vi.fn(),
+  stopAllDutyHttp: vi.fn(),
   fetchDutyStatusHttp: vi.fn(),
   syncDutyTokensHttp: vi.fn(),
   clearDutyTokensHttp: vi.fn(),
@@ -167,6 +169,33 @@ describe('dutyBridge', () => {
       const res = await clearDutyTokens();
       expect(dutyRuntimeApi.clearDutyTokensHttp).toHaveBeenCalled();
       expect(res.success).toBe(true);
+    });
+  });
+
+  describe('stopAllDuty', () => {
+    it('uses Electron IPC when available in desktop context', async () => {
+      const mockStopAll = vi.fn().mockResolvedValue({ success: true, message: 'All Stopped IPC' });
+      (window as unknown as { electron: { duty: { stopAllDuty: typeof mockStopAll } } }).electron = {
+        duty: { stopAllDuty: mockStopAll },
+      };
+
+      const res = await stopAllDuty();
+      expect(mockStopAll).toHaveBeenCalledTimes(1);
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('All Stopped IPC');
+      expect(dutyRuntimeApi.stopAllDutyHttp).not.toHaveBeenCalled();
+    });
+
+    it('falls back to HTTP API in web context', async () => {
+      vi.mocked(dutyRuntimeApi.stopAllDutyHttp).mockResolvedValueOnce({
+        success: true,
+        message: 'All Stopped HTTP',
+      });
+
+      const res = await stopAllDuty();
+      expect(dutyRuntimeApi.stopAllDutyHttp).toHaveBeenCalledTimes(1);
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('All Stopped HTTP');
     });
   });
 });

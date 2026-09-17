@@ -12,6 +12,7 @@ import systemLogReducer, {
   addLogs,
   hydrateLogs,
   clearLogs,
+  clearAllLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import { SystemLogEntry } from '../../../src/types';
 
@@ -302,8 +303,8 @@ describe('systemLogSlice', () => {
     });
   });
 
-  describe('clearLogs', () => {
-    it('clears active logs in state to empty array', () => {
+  describe('clearLogs and clearAllLogs', () => {
+    it('clears active logs and resets storedLogCount to 0 in state', () => {
       const initialState = systemLogReducer(undefined, { type: '@@INIT' });
       const withLog = systemLogReducer(
         initialState,
@@ -313,10 +314,40 @@ describe('systemLogSlice', () => {
         })
       );
       expect(withLog.logs.length).toBe(1);
+      expect(withLog.storedLogCount).toBe(1);
 
       const clearedState = systemLogReducer(withLog, clearLogs());
       expect(clearedState.logs).toEqual([]);
       expect(clearedState.logs.length).toBe(0);
+      expect(clearedState.storedLogCount).toBe(0);
+    });
+
+    it('resets logs and storedLogCount when clearAllLogs is pending or fulfilled', () => {
+      const withLog = {
+        ...systemLogReducer(undefined, { type: '@@INIT' }),
+        logs: [
+          {
+            id: 'log-1',
+            timestamp: '2026-09-17 12:00:00.000',
+            createdAt: 1000,
+            level: 'INFO' as const,
+            message: '测试待清理日志',
+          },
+        ],
+        storedLogCount: 1,
+      };
+
+      const pendingState = systemLogReducer(withLog, {
+        type: clearAllLogs.pending.type,
+      });
+      expect(pendingState.logs).toEqual([]);
+      expect(pendingState.storedLogCount).toBe(0);
+
+      const fulfilledState = systemLogReducer(withLog, {
+        type: clearAllLogs.fulfilled.type,
+      });
+      expect(fulfilledState.logs).toEqual([]);
+      expect(fulfilledState.storedLogCount).toBe(0);
     });
   });
 });

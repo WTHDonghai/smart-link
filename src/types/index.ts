@@ -501,7 +501,7 @@ export type DutyTaskMessageType =
 export interface DutyTaskClaimRequest {
   stationId: string;
   appId: string;
-  direction?: 'FORWARD' | 'BACKWARD';
+  direction?: 'FORWARD' | 'BACKWARD' | 'INBOUND';
 }
 
 /**

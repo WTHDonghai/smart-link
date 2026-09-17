@@ -324,4 +324,77 @@ describe('dutyOrchestrationEngine', () => {
       expect(resultLog?.apiResponse).toEqual({ pmsOrderId: 'PMS-9988' });
     });
   });
+
+  describe('stopAllDuty 一键全局停止与资源清退', () => {
+    it('停止所有激活的渠道 Runner，注销心跳，阻断任务认领，并将中台工位状态置为 STOP', async () => {
+      const runner2 = new MockChannelRunner('SECOND_OTA');
+      engine.registerRunner(runner2);
+
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');
+
+      // 启动两个渠道
+      await engine.startDuty('MOCK_OTA');
+      await engine.startDuty('SECOND_OTA');
+
+      expect(mockRunner.running).toBe(true);
+      expect(runner2.running).toBe(true);
+      expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('RUNNING');
+      expect(engine.getChannelDutyStatus()['SECOND_OTA'].status).toBe('RUNNING');
+
+      // 触发一键停止
+      const stopResult = await engine.stopAllDuty();
+
+      // 1. 断言停止响应
+      expect(stopResult.success).toBe(true);
+      expect(stopResult.message).toContain('已安全停止');
+
+      // 2. 精准断言所有 runner 状态变为 false，调用了 stop()
+      expect(mockRunner.running).toBe(false);
+      expect(mockRunner.stopCalls).toBe(1);
+      expect(runner2.running).toBe(false);
+      expect(runner2.stopCalls).toBe(1);
+
+      // 3. 精准断言所有渠道状态和协调器状态确切为 STOPPED
+      const statusMap = engine.getChannelDutyStatus();
+      expect(statusMap['MOCK_OTA'].status).toBe('STOPPED');
+      expect(statusMap['SECOND_OTA'].status).toBe('STOPPED');
+      expect(engine.getCoordinatorStatus()).toBe('STOPPED');
+
+      // 4. 精准断言中台 reportActualState 上报 payload 确切包含 status: 'STOP' 与 otaCollectionTargets: []
+      expect(reportSpy).toHaveBeenCalled();
+      const lastCallPayload = reportSpy.mock.calls[reportSpy.mock.calls.length - 1][0];
+      expect(lastCallPayload.stationId).toBe('st-unit-test-1');
+      expect(lastCallPayload.apps).toHaveLength(1);
+      expect(lastCallPayload.apps[0].status).toBe('STOP');
+      expect(lastCallPayload.apps[0].otaCollectionTargets).toEqual([]);
+
+      // 5. 断言心跳定时器已被注销：后续不再触发新的 reportActualState 上报
+      const callsAfterStop = reportSpy.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(reportSpy.mock.calls.length).toBe(callsAfterStop);
+
+      // 6. 断言记录了全局停止日志
+      const stopLogs = engine.getRecentDutyLogs().filter((l) => l.event === 'DUTY_STOP_ALL');
+      expect(stopLogs.length).toBeGreaterThanOrEqual(1);
+      expect(stopLogs[0].level).toBe('INFO');
+      expect(stopLogs[0].message).toContain('全局值守已安全终止');
+    });
+
+    it('当个别 Runner stop 抛出异常时，依然确保其他 Runner 停止并置为 STOPPED', async () => {
+      const failingRunner = new MockChannelRunner('FAILING_OTA');
+      failingRunner.stop = vi.fn().mockRejectedValue(new Error('停止执行器超时'));
+      engine.registerRunner(failingRunner);
+
+      await engine.startDuty('MOCK_OTA');
+      await engine.startDuty('FAILING_OTA');
+
+      const stopResult = await engine.stopAllDuty();
+      expect(stopResult.success).toBe(true);
+
+      expect(mockRunner.running).toBe(false);
+      expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('STOPPED');
+      expect(engine.getChannelDutyStatus()['FAILING_OTA'].status).toBe('STOPPED');
+      expect(engine.getCoordinatorStatus()).toBe('STOPPED');
+    });
+  });
 });

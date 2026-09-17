@@ -59,7 +59,20 @@ export function createDutyApiMiddleware() {
       }
     }
 
-    // 2. POST /api/duty/stop：停止某渠道值守
+    // 2. POST /api/duty/stop-all：一键停止所有渠道值守
+    if (req.method === 'POST' && url.startsWith('/api/duty/stop-all')) {
+      try {
+        const result = await dutyOrchestrationEngine.stopAllDuty();
+        return sendJsonResponse(res, 200, result);
+      } catch (error) {
+        return sendJsonResponse(res, 500, {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // 3. POST /api/duty/stop：停止某渠道值守
     if (req.method === 'POST' && url.startsWith('/api/duty/stop')) {
       try {
         const body = await parseJsonBody<{ channelCode?: string }>(req);

@@ -8,6 +8,7 @@ import type {
 import {
   startChannelDutyHttp,
   stopChannelDutyHttp,
+  stopAllDutyHttp,
   fetchDutyStatusHttp,
   syncDutyTokensHttp,
   clearDutyTokensHttp,
@@ -17,6 +18,7 @@ import { loadTokensFromStorage } from './platformAuth';
 export interface ElectronDutyApi {
   startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
   stopDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
+  stopAllDuty?(): Promise<{ success: boolean; message?: string }>;
   getStatus(since?: number): Promise<{
     channels: Record<string, ChannelDutyInfo>;
     coordinatorStatus: DutyCoordinatorStatus;
@@ -116,6 +118,22 @@ export async function stopDutyByChannel(
 
   // 2. 默认走本地 HTTP 服务 / 中间件调度 (严格 Fail-Fast，绝不伪造成功)
   return await stopChannelDutyHttp(code);
+}
+
+/**
+ * 一键停止所有渠道值守与后台调度
+ */
+export async function stopAllDuty(): Promise<{ success: boolean; message?: string }> {
+  // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as WindowWithElectronDuty;
+    if (win.electron?.duty?.stopAllDuty) {
+      return win.electron.duty.stopAllDuty();
+    }
+  }
+
+  // 2. 默认走本地 HTTP 服务 / 中间件调度
+  return await stopAllDutyHttp();
 }
 
 /**

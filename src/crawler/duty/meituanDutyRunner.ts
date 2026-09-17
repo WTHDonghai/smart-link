@@ -207,7 +207,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     this.running = false;
     if (this.session) {
       try {
-        await this.session.context.close();
+        await this.session.close();
       } catch {
         // 忽略关闭异常
       }

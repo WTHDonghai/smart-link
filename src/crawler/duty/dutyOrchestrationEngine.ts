@@ -276,6 +276,74 @@ export class DutyOrchestrationEngine {
     };
   }
 
+  /**
+   * 一键停止所有渠道值守与后台调度引擎，向中台发送工位离线报文，彻底释放所有资源
+   */
+  public async stopAllDuty(): Promise<{ success: boolean; message: string }> {
+    // 1. 设置 stopSignal = true 阻断长轮询任务认领
+    this.stopSignal = true;
+
+    // 2. 清除心跳定时器 heartbeatTimer
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
+    // 3. 安全停止所有当前激活的渠道 Runner
+    const activeRunners = this.getActiveRunners();
+    await Promise.allSettled(
+      activeRunners.map(async (runner) => {
+        const code = runner.channelCode.toUpperCase();
+        try {
+          await runner.stop();
+        } catch (err) {
+          console.warn(`[DutyOrchestrationEngine] 停止渠道「${code}」值守异常:`, err);
+        } finally {
+          this.channelStates.set(code, {
+            channelCode: code,
+            status: 'STOPPED',
+          });
+        }
+      })
+    );
+
+    // 确保所有注册渠道状态均确认为 STOPPED
+    for (const [code] of this.runners) {
+      this.channelStates.set(code, {
+        channelCode: code,
+        status: 'STOPPED',
+      });
+    }
+
+    // 4. 确切将 coordinatorStatus 置为 'STOPPED'
+    this.coordinatorStatus = 'STOPPED';
+
+    // 5. 向中台发送工位离线报文 (status: 'STOP', otaCollectionTargets: [])
+    const station = this.getStationIdentity();
+    if (station?.stationId) {
+      try {
+        await this.reportActualState(station.stationId, true);
+      } catch (reportErr) {
+        console.warn('[DutyOrchestrationEngine] 离线状态上报异常:', reportErr);
+      }
+    }
+
+    // 6. 记录结构化系统停止日志
+    this.appendDutyLog({
+      level: 'INFO',
+      module: 'DUTY_TASK',
+      event: 'DUTY_STOP_ALL',
+      taskActionStage: 'EXECUTE',
+      message: '[值守终止] 全局值守已安全终止，所有渠道自动化监听与心跳均已清退',
+      details: `停止渠道数: ${activeRunners.length} | 工位: ${station?.stationId || '未分配'} | 状态: STOPPED`,
+    });
+
+    return {
+      success: true,
+      message: '所有自动化值守及调度任务已安全停止',
+    };
+  }
+
   private async reportActualState(stationId: string, forceStop = false): Promise<void> {
     const active = this.getActiveRunners();
     const isRunning = !forceStop && active.length > 0;
@@ -340,7 +408,7 @@ export class DutyOrchestrationEngine {
         const task = await claimDutyTask({
           stationId: identity.stationId,
           appId: identity.appId,
-          direction: 'FORWARD',
+          direction: 'INBOUND',
         });
 
         if (!task) {

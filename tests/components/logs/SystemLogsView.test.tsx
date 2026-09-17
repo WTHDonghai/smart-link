@@ -282,4 +282,20 @@ describe('SystemLogsView 系统运行日志与任务调度视图', () => {
     expect(searchHtml).toContain('/toolkit/toolbox/tasks/task-999/result');
     expect(searchHtml).not.toContain('普通订单状态更新');
   });
+
+  it('终端与内容容器采用全屏自适应撑满布局，彻底消除固定 600px 高度上限与宽度受限', () => {
+    const store = createAppStore();
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+
+    // 验证根容器为 flex-1 h-full min-h-0
+    expect(html).toContain('flex-1 flex flex-col h-full overflow-hidden w-full');
+    // 验证不存在 max-h-[600px] 导致的大片空白
+    expect(html).not.toContain('max-h-[600px]');
+    // 验证不存在限制宽度的 max-w-[1400px]
+    expect(html).not.toContain('max-w-[1400px]');
+  });
 });

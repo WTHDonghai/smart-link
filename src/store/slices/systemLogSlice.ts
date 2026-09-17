@@ -1,6 +1,7 @@
 import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import { SystemLogEntry, LogLevel, LogModule } from '../../types';
 import { logStorage, formatLogTimestamp } from '../../services/logStorage';
+import { logger } from '../../services/logger';
 
 export interface SystemLogState {
   logs: SystemLogEntry[];
@@ -53,6 +54,16 @@ export const purgeExpiredLogs = createAsyncThunk(
     const purgedCount = await logStorage.purgeLogsOlderThan7Days();
     const remainingCount = await logStorage.countLogs();
     return { purgedCount, remainingCount };
+  }
+);
+
+/**
+ * 彻底清空所有日志（包括内存日志流、logger 缓冲与 IndexedDB 持久化存储）
+ */
+export const clearAllLogs = createAsyncThunk(
+  'systemLog/clearAllLogs',
+  async () => {
+    await logger.clearAll();
   }
 );
 
@@ -146,6 +157,7 @@ export const systemLogSlice = createSlice({
     },
     clearLogs: (state) => {
       state.logs = [];
+      state.storedLogCount = 0;
     },
   },
   extraReducers: (builder) => {
@@ -163,6 +175,14 @@ export const systemLogSlice = createSlice({
       })
       .addCase(purgeExpiredLogs.fulfilled, (state, action) => {
         state.storedLogCount = action.payload.remainingCount;
+      })
+      .addCase(clearAllLogs.pending, (state) => {
+        state.logs = [];
+        state.storedLogCount = 0;
+      })
+      .addCase(clearAllLogs.fulfilled, (state) => {
+        state.logs = [];
+        state.storedLogCount = 0;
       });
   },
 });
