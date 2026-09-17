@@ -10,7 +10,7 @@ import {
   cancelDeviceLogin,
 } from '../../store/slices/authSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { XiruanLogoMark } from '../common/XiruanLogo';
 import { FriendlyErrorAlert } from '../common/FriendlyErrorAlert';
 import { normalizeAppError } from '../../utils/errorNormalizer';
@@ -36,6 +36,13 @@ export const PlatformLoginView: React.FC = () => {
     abortControllerRef.current = new AbortController();
 
     try {
+      logger.track('AUTH_LOGIN_START', {
+        module: 'AUTH',
+        level: 'INFO',
+        message: '[Auth] 正在向文旅大中台申请设备授权凭证...',
+        details: `请求网关: ${platformBaseUrl}`,
+      });
+
       const resultAction = await dispatch(
         startDeviceLogin({
           baseUrl: platformBaseUrl,
@@ -44,6 +51,14 @@ export const PlatformLoginView: React.FC = () => {
       );
 
       if (startDeviceLogin.fulfilled.match(resultAction)) {
+        logger.track('AUTH_LOGIN_SUCCESS', {
+          module: 'AUTH',
+          level: 'SUCCESS',
+          message: `[Auth] 文旅平台授权成功 (租户: ${resultAction.payload.tenantId})`,
+          details: `已获取有效 AccessToken 并持久化，租户: ${resultAction.payload.tenantId}`,
+          meta: { tenantId: resultAction.payload.tenantId },
+        });
+
         dispatch(
           showToast({
             title: '授权成功',
@@ -53,13 +68,13 @@ export const PlatformLoginView: React.FC = () => {
         );
       } else if (startDeviceLogin.rejected.match(resultAction)) {
         const errorText = resultAction.payload || '授权请求失败';
-        dispatch(
-          addLog({
-            level: 'ERROR',
-            message: `[Auth] 文旅平台授权失败: ${errorText}`,
-            details: errorText,
-          })
-        );
+        logger.track('AUTH_LOGIN_FAILED', {
+          module: 'AUTH',
+          level: 'ERROR',
+          message: `[Auth] 文旅平台授权失败: ${errorText}`,
+          details: errorText,
+          meta: { errorText },
+        });
       }
     } catch {
       // 错误已由 Redux extraReducer 记录并在界面展现

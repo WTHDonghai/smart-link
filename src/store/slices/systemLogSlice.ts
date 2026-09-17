@@ -1,84 +1,84 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { SystemLogEntry } from '../../types';
+import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
+import { SystemLogEntry, LogLevel, LogModule } from '../../types';
+import { logStorage, formatLogTimestamp } from '../../services/logStorage';
 
 export interface SystemLogState {
   logs: SystemLogEntry[];
-  filterLevel: 'ALL' | 'PLAYWRIGHT' | 'INFO' | 'WARN' | 'ERROR';
+  filterLevel: 'ALL' | LogLevel;
+  filterModule: 'ALL' | LogModule;
+  filterEvent: 'ALL' | string;
+  filterChannel: 'ALL' | string;
+  filterTimeRange: 'ALL' | '1D' | '3D' | '7D';
+  onlyErrors: boolean;
   filterSearch: string;
   isAutoScroll: boolean;
+  storedLogCount: number;
+  isLoadingHistory: boolean;
 }
 
-const initialLogs: SystemLogEntry[] = [
-  {
-    id: 'log-01',
-    timestamp: '19:35:58.204',
-    level: 'PLAYWRIGHT',
-    channelId: 'meituan',
-    message: '[Playwright:ChromiumWorker#2] Page context https://eb.meituan.com/order/v2/unconfirmed active. Polling network tab.',
-    details: 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 SLA-Headless'
-  },
-  {
-    id: 'log-02',
-    timestamp: '19:35:58.812',
-    level: 'INFO',
-    channelId: 'meituan',
-    message: '[CrawlerEngine] Intercepted payload XHR: POST /api/order/pull. 0 new orders in queue.',
-    details: 'HTTP 200 OK | size: 1.4KB | latency: 68ms'
-  },
-  {
-    id: 'log-03',
-    timestamp: '19:35:55.109',
-    level: 'PLAYWRIGHT',
-    channelId: 'douyin',
-    message: '[Playwright:DouyinWorker#1] DOM evaluation complete on https://life.douyin.com/pms/orders. Found 1 pending ticket validation.',
-    details: 'Target element: .order-card-row[data-state="paid_need_dispatch"]'
-  },
-  {
-    id: 'log-04',
-    timestamp: '19:35:55.940',
-    level: 'SUCCESS',
-    channelId: 'douyin',
-    message: '[Dispatcher] Order DY-20260914-5502 matched to 文旅大中台 PMS API (Route: douyin_life). Response code 200.',
-    details: 'Payload: {"otaOrderNo":"DY-20260914-5502","pmsHotelId":"PMS-SY-099","pmsRoomCode":"PMS-ATL-K01"}'
-  },
-  {
-    id: 'log-05',
-    timestamp: '19:35:48.330',
-    level: 'PLAYWRIGHT',
-    channelId: 'ctrip',
-    message: '[Playwright:SessionManager] Cookie keep-alive ping for Ctrip EBooking returned status: 200 OK.',
-    details: 'Cookie valid for next 48 hours. Session token refreshed.'
-  },
-  {
-    id: 'log-06',
-    timestamp: '19:35:40.112',
-    level: 'WARN',
-    channelId: 'fliggy',
-    message: '[Playwright:FliggyWorker] Geetest slider captcha detected on session resume. Auto-solver module invoked.',
-    details: 'Triggered OCR edge detection slider resolver. Solved in 420ms (Confidence: 96.4%).'
-  },
-  {
-    id: 'log-07',
-    timestamp: '19:35:32.400',
-    level: 'INFO',
-    message: '[Heartbeat] Electron Main Process CPU 3.4% | Memory: 184MB | Playwright 4 browser contexts active.',
-    details: 'OS: Darwin (macOS 15.1) / x64 | Node: v22.14.0'
-  }
-];
-
 const initialState: SystemLogState = {
-  logs: initialLogs,
+  logs: [],
   filterLevel: 'ALL',
+  filterModule: 'ALL',
+  filterEvent: 'ALL',
+  filterChannel: 'ALL',
+  filterTimeRange: 'ALL',
+  onlyErrors: false,
   filterSearch: '',
-  isAutoScroll: true
+  isAutoScroll: true,
+  storedLogCount: 0,
+  isLoadingHistory: false,
 };
+
+/**
+ * 启动时从浏览器 IndexedDB 异步水合最近 7 天内的真实持久化日志
+ */
+export const hydrateLogsFromStorage = createAsyncThunk(
+  'systemLog/hydrateLogsFromStorage',
+  async () => {
+    const [recentLogs, totalCount] = await Promise.all([
+      logStorage.queryLogs(undefined, { limit: 300 }),
+      logStorage.countLogs(),
+    ]);
+    return { recentLogs, totalCount };
+  }
+);
+
+/**
+ * 清理早于 7 天前的全部历史日志并刷新统计
+ */
+export const purgeExpiredLogs = createAsyncThunk(
+  'systemLog/purgeExpiredLogs',
+  async () => {
+    const purgedCount = await logStorage.purgeLogsOlderThan7Days();
+    const remainingCount = await logStorage.countLogs();
+    return { purgedCount, remainingCount };
+  }
+);
 
 export const systemLogSlice = createSlice({
   name: 'systemLog',
   initialState,
   reducers: {
-    setFilterLevel: (state, action: PayloadAction<'ALL' | 'PLAYWRIGHT' | 'INFO' | 'WARN' | 'ERROR'>) => {
+    setFilterLevel: (state, action: PayloadAction<'ALL' | LogLevel>) => {
       state.filterLevel = action.payload;
+    },
+    setFilterModule: (state, action: PayloadAction<'ALL' | LogModule>) => {
+      state.filterModule = action.payload;
+      // 切换模块时若选中的事件不属于该模块，重置事件过滤
+      state.filterEvent = 'ALL';
+    },
+    setFilterEvent: (state, action: PayloadAction<'ALL' | string>) => {
+      state.filterEvent = action.payload;
+    },
+    setFilterChannel: (state, action: PayloadAction<'ALL' | string>) => {
+      state.filterChannel = action.payload;
+    },
+    setFilterTimeRange: (state, action: PayloadAction<'ALL' | '1D' | '3D' | '7D'>) => {
+      state.filterTimeRange = action.payload;
+    },
+    toggleOnlyErrors: (state) => {
+      state.onlyErrors = !state.onlyErrors;
     },
     setFilterSearch: (state, action: PayloadAction<string>) => {
       state.filterSearch = action.payload;
@@ -86,30 +86,78 @@ export const systemLogSlice = createSlice({
     toggleAutoScroll: (state) => {
       state.isAutoScroll = !state.isAutoScroll;
     },
-    addLog: (state, action: PayloadAction<Omit<SystemLogEntry, 'id' | 'timestamp'>>) => {
-      const d = new Date();
-      const timeStr = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`;
-      state.logs.unshift({
-        id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        timestamp: timeStr,
-        ...action.payload
-      });
-      if (state.logs.length > 300) {
+    setStoredLogCount: (state, action: PayloadAction<number>) => {
+      state.storedLogCount = action.payload;
+    },
+    addLog: (
+      state,
+      action: PayloadAction<
+        Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'> & {
+          id?: string;
+          timestamp?: string;
+          createdAt?: number;
+        }
+      >
+    ) => {
+      const now = new Date();
+      const createdAt = action.payload.createdAt ?? now.getTime();
+      const timestamp = action.payload.timestamp ?? formatLogTimestamp(now);
+      const id = action.payload.id ?? `log-${createdAt}-${Math.random().toString(36).slice(2, 6)}`;
+
+      const entry: SystemLogEntry = {
+        ...action.payload,
+        id,
+        createdAt,
+        timestamp,
+      };
+
+      state.logs.unshift(entry);
+      state.storedLogCount += 1;
+
+      // 实时流内存保留最多 500 条
+      if (state.logs.length > 500) {
         state.logs.pop();
       }
     },
+    hydrateLogs: (state, action: PayloadAction<SystemLogEntry[]>) => {
+      state.logs = action.payload;
+    },
     clearLogs: (state) => {
       state.logs = [];
-    }
-  }
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(hydrateLogsFromStorage.pending, (state) => {
+        state.isLoadingHistory = true;
+      })
+      .addCase(hydrateLogsFromStorage.fulfilled, (state, action) => {
+        state.isLoadingHistory = false;
+        state.logs = action.payload.recentLogs;
+        state.storedLogCount = action.payload.totalCount;
+      })
+      .addCase(hydrateLogsFromStorage.rejected, (state) => {
+        state.isLoadingHistory = false;
+      })
+      .addCase(purgeExpiredLogs.fulfilled, (state, action) => {
+        state.storedLogCount = action.payload.remainingCount;
+      });
+  },
 });
 
 export const {
   setFilterLevel,
+  setFilterModule,
+  setFilterEvent,
+  setFilterChannel,
+  setFilterTimeRange,
+  toggleOnlyErrors,
   setFilterSearch,
   toggleAutoScroll,
+  setStoredLogCount,
   addLog,
-  clearLogs
+  hydrateLogs,
+  clearLogs,
 } = systemLogSlice.actions;
 
 export default systemLogSlice.reducer;

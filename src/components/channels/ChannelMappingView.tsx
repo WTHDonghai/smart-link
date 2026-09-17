@@ -9,7 +9,7 @@ import {
   clearChannelError,
 } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import type { OTAChannel } from '../../types';
 import { AddChannelDropdown } from './AddChannelDropdown';
 import { EmptyState } from '../common/EmptyState';
@@ -139,13 +139,13 @@ export const ChannelMappingView: React.FC = () => {
             type: 'success',
           })
         );
-        dispatch(
-          addLog({
-            level: 'INFO',
-            channelId: channel.id,
-            message: `[ChannelMapping] Saved mapping for ${channel.name} (${channel.code}) -> ${channel.channelName || channel.channelCode}`,
-          })
-        );
+        logger.track('CHANNEL_MAPPING_SAVE', {
+          module: 'CHANNEL',
+          level: 'INFO',
+          channelId: channel.id,
+          message: `[ChannelMapping] 已成功保存渠道映射「${channel.name}」-> ${channel.channelName || channel.channelCode}`,
+          meta: { channelCode: channel.code, targetChannel: channel.channelCode }
+        });
       } else if (saveChannelMapping.rejected.match(result)) {
         const rawError = (result.payload as string) || result.error?.message || '保存渠道映射失败';
         const normalized = normalizeAppError(rawError, 'NET');
@@ -156,14 +156,14 @@ export const ChannelMappingView: React.FC = () => {
             type: 'error',
           })
         );
-        dispatch(
-          addLog({
-            level: 'ERROR',
-            channelId: channel.id,
-            message: `[ChannelMapping] Failed to save mapping for ${channel.name} (${channel.code}): ${rawError}`,
-            details: rawError,
-          })
-        );
+        logger.track('CHANNEL_MAPPING_SAVE', {
+          module: 'CHANNEL',
+          level: 'ERROR',
+          channelId: channel.id,
+          message: `[ChannelMapping] 保存渠道「${channel.name}」(${channel.code}) 映射失败: ${rawError}`,
+          details: rawError,
+          meta: { error: rawError }
+        });
       }
     },
     [dispatch]
@@ -179,13 +179,12 @@ export const ChannelMappingView: React.FC = () => {
           type: 'info',
         })
       );
-      dispatch(
-        addLog({
-          level: 'WARN',
-          channelId: channel.id,
-          message: `[ChannelConfig] Removed channel mapping ${channel.name} (${channel.code})`,
-        })
-      );
+      logger.track('CHANNEL_RESET_DEFAULT', {
+        module: 'CHANNEL',
+        level: 'WARN',
+        channelId: channel.id,
+        message: `[ChannelConfig] 已移除渠道映射「${channel.name}」(${channel.code})`
+      });
     },
     [dispatch]
   );

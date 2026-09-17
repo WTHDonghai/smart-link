@@ -10,7 +10,7 @@ import {
   showToast
 } from '../../store/slices/appSlice';
 import { logout } from '../../store/slices/authSlice';
-import { addLog } from '../../store/slices/systemLogSlice';
+import { logger } from '../../services/logger';
 import { selectGuardianStats } from '../../store/slices/orderGuardianSlice';
 import { NavTab } from '../../types';
 import { 
@@ -112,11 +112,13 @@ export const Sidebar: React.FC = () => {
         clearInterval(timer);
         dispatch(setUpdateProgress(100));
         dispatch(finishAutoUpdate());
-        dispatch(addLog({
+        logger.track('SYS_NETWORK_ONLINE', {
+          module: 'SYSTEM',
           level: 'SUCCESS',
           message: `[AutoUpdater] 客户端自动升级完成，版本由 ${version} 成功更新至最新 ${latestVersion}`,
-          details: `租户: ${tenantId} | 补丁哈希已通过完整性校验并热生效。`
-        }));
+          details: `租户: ${tenantId} | 补丁哈希已通过完整性校验并热生效。`,
+          meta: { oldVersion: version, newVersion: latestVersion, tenantId }
+        });
         dispatch(showToast({
           title: '系统更新成功',
           description: `客户端已顺利升级至最新版本 ${latestVersion}！`,
