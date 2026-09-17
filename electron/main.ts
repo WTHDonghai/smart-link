@@ -14,6 +14,61 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 
 /**
+ * 从本地配置文件安全解析并加载环境变量至当前 Node 进程
+ */
+function parseAndLoadEnvFile(envPath: string, override = false): void {
+  if (!fs.existsSync(envPath)) return;
+  try {
+    const raw = fs.readFileSync(envPath, 'utf-8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (key && (override || process.env[key] === undefined)) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch {
+    // 忽略加载异常
+  }
+}
+
+/**
+ * 初始化 Electron 主进程环境变量（支持 --mode 与单一数据源对齐）
+ */
+export function initProcessEnvironment(): void {
+  const args = process.argv.slice(2);
+  let mode = process.env.MODE || 'development';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--mode' && args[i + 1]) {
+      mode = args[i + 1].trim();
+      break;
+    }
+  }
+
+  const cwd = process.cwd();
+  parseAndLoadEnvFile(path.resolve(cwd, '.env'), false);
+  if (mode && mode !== 'development') {
+    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}`), true);
+  }
+  parseAndLoadEnvFile(path.resolve(cwd, '.env.local'), true);
+  if (mode && mode !== 'development') {
+    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}.local`), true);
+  }
+  process.env.MODE = mode;
+}
+
+initProcessEnvironment();
+
+
+/**
  * 注册桌面端原生 IPC 通信监听器
  */
 export function registerCrawlerIpcHandlers(): void {

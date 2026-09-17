@@ -4,8 +4,13 @@ import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker'
 import type { DutyClaimedTask } from '../../types';
 import type { ChannelDutyRunner, DutyTaskExecutionResult, RawMeituanDutyOrder } from './dutyContracts';
 import { importToolkitOrder } from '../../services/dutyRuntimeApi';
+import { getMeituanOrderUrl } from '../../config/otaUrls';
 
-export const DEFAULT_MEITUAN_ORDER_URL = 'https://eb.meituan.com/ebooking/orders#/unhandled';
+export function getDefaultMeituanOrderUrl(): string {
+  return getMeituanOrderUrl();
+}
+
+
 
 export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDutyOrder[] {
   if (!payload || typeof payload !== 'object') return [];
@@ -89,10 +94,16 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   private session: BrowserSession | null = null;
   private running = false;
   private capturedOrders = new Map<string, RawMeituanDutyOrder>();
-  private targetUrl: string;
+  private explicitTargetUrl?: string;
 
-  constructor(targetUrl = DEFAULT_MEITUAN_ORDER_URL) {
-    this.targetUrl = targetUrl;
+  constructor(targetUrl?: string) {
+    if (targetUrl && targetUrl.trim()) {
+      this.explicitTargetUrl = targetUrl.trim();
+    }
+  }
+
+  public get targetUrl(): string {
+    return this.explicitTargetUrl || getMeituanOrderUrl();
   }
 
   public isRunning(): boolean {
@@ -113,6 +124,14 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
     const page = this.session.page;
 
+    const targetHost = (() => {
+      try {
+        return new URL(this.targetUrl).hostname;
+      } catch {
+        return '';
+      }
+    })();
+
     // 1. 注册美团订单核心网络响应监听
     page.on('response', async (response) => {
       try {
@@ -120,8 +139,20 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         const contentType = response.headers()['content-type'] || '';
         const isJson = contentType.includes('application/json') || url.includes('/ebooking/orders/');
 
-        if (isJson && (url.includes('meituan.com') || url.includes('127.0.0.1'))) {
-          if (url.includes('/orders/task/list') || url.includes('/orders/list') || url.includes('/orders/unhandled')) {
+        const isTargetHost =
+          Boolean(targetHost && url.includes(targetHost)) ||
+          url.includes('meituan.com') ||
+          url.includes('127.0.0.1') ||
+          url.includes('localhost');
+
+        if (isJson && isTargetHost) {
+          if (
+            url.includes('/orders/task/list') ||
+            url.includes('/orders/list') ||
+            url.includes('/orders/unhandled') ||
+            url.includes('/api/mock/orders') ||
+            url.includes('/api/v1/ebooking/orders')
+          ) {
             const text = await response.text();
             if (text && text.trim()) {
               try {

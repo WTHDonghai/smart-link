@@ -120,11 +120,36 @@ describe('meituanDutyRunner', () => {
       runner = new MeituanDutyRunner();
     });
 
-    it('should initialize with correct default state', () => {
+    it('should initialize with correct default state and dynamic targetUrl', () => {
       expect(runner.channelCode).toBe('MEITUAN');
       expect(runner.isRunning()).toBe(false);
       expect(runner.getCapturedOrders()).toEqual([]);
+      expect(runner.targetUrl).toBe('https://eb.meituan.com/ebooking/orders#/unhandled');
     });
+
+    it('should dynamically reflect VITE_OTA_MEITUAN_ORDER_URL environment variable', () => {
+      const original = process.env.VITE_OTA_MEITUAN_ORDER_URL;
+      try {
+        process.env.VITE_OTA_MEITUAN_ORDER_URL =
+          'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
+        const mockRunner = new MeituanDutyRunner();
+        expect(mockRunner.targetUrl).toBe(
+          'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+        );
+      } finally {
+        if (original === undefined) {
+          delete process.env.VITE_OTA_MEITUAN_ORDER_URL;
+        } else {
+          process.env.VITE_OTA_MEITUAN_ORDER_URL = original;
+        }
+      }
+    });
+
+    it('should respect explicitly provided targetUrl in constructor', () => {
+      const customRunner = new MeituanDutyRunner('http://127.0.0.1:9999/custom/orders');
+      expect(customRunner.targetUrl).toBe('http://127.0.0.1:9999/custom/orders');
+    });
+
 
     it('should reject task execution when runner is not running', async () => {
       const task: DutyClaimedTask = {

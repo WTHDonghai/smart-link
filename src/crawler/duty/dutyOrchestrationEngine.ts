@@ -183,7 +183,7 @@ export class DutyOrchestrationEngine {
         channelId: code,
         taskActionStage: 'EXECUTE',
         message: `[值守启动] 渠道「${code}」可视化前台浏览器窗口已唤起，进入订单自动化值守监听`,
-        details: `渠道: ${code} | 状态: RUNNING | 监听地址: eb.meituan.com`,
+        details: `渠道: ${code} | 状态: RUNNING | 监听目标: ${(runner as unknown as { targetUrl?: string })?.targetUrl || code}`,
       });
 
       // 2. 建立中台工位身份并启动心跳

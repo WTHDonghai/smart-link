@@ -30,14 +30,8 @@ function checkHttpReady(urlStr = 'http://localhost:3000', timeoutMs = 400) {
   });
 }
 
-function loadEnvFileIntoProcess(envPath) {
+function loadEnvFileIntoProcess(envPath, override = false) {
   if (!fs.existsSync(envPath)) return;
-  if (typeof process.loadEnvFile === 'function') {
-    try {
-      process.loadEnvFile(envPath);
-      return;
-    } catch {}
-  }
   try {
     const raw = fs.readFileSync(envPath, 'utf-8');
     for (const line of raw.split('\n')) {
@@ -46,9 +40,14 @@ function loadEnvFileIntoProcess(envPath) {
       const eqIdx = trimmed.indexOf('=');
       if (eqIdx !== -1) {
         const key = trimmed.slice(0, eqIdx).trim();
-        const val = trimmed.slice(eqIdx + 1).trim();
-        if (key && process.env[key] === undefined) {
-          process.env[key] = val;
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (key) {
+          if (override || process.env[key] === undefined) {
+            process.env[key] = val;
+          }
         }
       }
     }
@@ -71,9 +70,13 @@ async function main() {
   }
 
   // 加载主环境与目标 mode 环境配置 (如 .env 与 .env.mock)
-  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env'));
+  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env'), false);
   if (mode && mode !== 'development') {
-    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}`));
+    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}`), true);
+  }
+  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env.local'), true);
+  if (mode && mode !== 'development') {
+    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}.local`), true);
   }
   process.env.MODE = mode;
 
