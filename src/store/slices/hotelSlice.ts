@@ -1,98 +1,368 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { HotelMapping } from '../../types';
+import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import type { HotelMapping, PlatformProperty } from '../../types';
+import type { DiscoveredHotelCandidate } from '../../crawler/types';
+import { collectHotelsByChannel } from '../../services/crawlerBridge';
+import {
+  fetchRemoteHotelMappings,
+  saveHotelMappingsBatch,
+  deleteRemoteHotelMappings,
+  fetchPlatformProperties,
+} from '../../services/hotelApi';
+import { addLog } from './systemLogSlice';
+import { showToast } from './appSlice';
+
+export type CrawlStatus = 'idle' | 'running' | 'success' | 'failed';
 
 export interface HotelState {
   hotels: HotelMapping[];
+  pmsProperties: PlatformProperty[];
   isScraping: boolean;
+  isFetching: boolean;
+  isSaving: boolean;
+  savingHotelId: string | null;
+  deletingHotelId: string | null;
+  crawlStatus: CrawlStatus;
+  crawlError: string | null;
+  fetchError: string | null;
   filterChannel: string;
   searchKeyword: string;
+  selectedCrawlChannel: string;
+  lastCrawlSummary: {
+    channelCode: string;
+    channelId?: string;
+    discoveredCount: number;
+    durationMs: number;
+    timestamp: string;
+  } | null;
 }
 
 const initialState: HotelState = {
   isScraping: false,
+  isFetching: false,
+  isSaving: false,
+  savingHotelId: null,
+  deletingHotelId: null,
+  crawlStatus: 'idle',
+  crawlError: null,
+  fetchError: null,
   filterChannel: 'all',
   searchKeyword: '',
-  hotels: [
-    {
-      id: 'hm-00',
-      otaChannelId: 'meituan',
-      otaHotelName: '禅驿度假酒店（自贡方特恐龙王国店）',
-      otaHotelId: 'MT-ZG-52019',
-      pmsHotelName: '自贡禅驿度假酒店-方特店',
-      pmsHotelId: 'PMS-ZG-008',
-      city: '自贡',
-      starRating: '高档度假型',
-      status: 'mapped',
-      lastScraped: '刚刚 (Playwright)',
-      roomCount: 8
-    },
-    {
-      id: 'hm-01',
-      otaChannelId: 'meituan',
-      otaHotelName: '全季酒店(杭州西湖湖滨步行街店)',
-      otaHotelId: 'MT-HZ-88192',
-      pmsHotelName: '华住全季-杭州湖滨店',
-      pmsHotelId: 'PMS-HZ-001',
-      city: '杭州',
-      starRating: '四星/高档型',
-      status: 'mapped',
-      lastScraped: '2分钟前 (Playwright)',
-      roomCount: 14
-    },
-    {
-      id: 'hm-02',
-      otaChannelId: 'douyin',
-      otaHotelName: '三亚亚特兰蒂斯度假酒店',
-      otaHotelId: 'DY-SY-10492',
-      pmsHotelName: '复星旅文-亚特兰蒂斯(海棠湾)',
-      pmsHotelId: 'PMS-SY-099',
-      city: '三亚',
-      starRating: '豪华五星型',
-      status: 'mapped',
-      lastScraped: '5分钟前 (Playwright)',
-      roomCount: 28
-    },
-    {
-      id: 'hm-03',
-      otaChannelId: 'meituanbiz',
-      otaHotelName: '北京国贸大酒店(CBD店)',
-      otaHotelId: 'MTB-BJ-4401',
-      pmsHotelName: '国贸商务酒店-北京总店',
-      pmsHotelId: 'PMS-BJ-012',
-      city: '北京',
-      starRating: '超高端商旅',
-      status: 'mapped',
-      lastScraped: '10分钟前 (Playwright)',
-      roomCount: 18
-    },
-    {
-      id: 'hm-04',
-      otaChannelId: 'meituan',
-      otaHotelName: '成都宽窄巷子花间堂精品客栈',
-      otaHotelId: 'MT-CD-7729',
-      pmsHotelName: '花间堂-成都宽窄店',
-      pmsHotelId: 'PMS-CD-034',
-      city: '成都',
-      starRating: '精品文化度假',
-      status: 'pending',
-      lastScraped: '15分钟前 (Playwright)',
-      roomCount: 8
-    },
-    {
-      id: 'hm-05',
-      otaChannelId: 'douyin',
-      otaHotelName: '上海静安瑞吉酒店',
-      otaHotelId: 'DY-SH-5512',
-      pmsHotelName: '万豪瑞吉-上海静安',
-      pmsHotelId: 'PMS-SH-102',
-      city: '上海',
-      starRating: '奢华五星',
-      status: 'mapped',
-      lastScraped: '8分钟前 (Playwright)',
-      roomCount: 22
-    }
-  ]
+  selectedCrawlChannel: '',
+  lastCrawlSummary: null,
+  hotels: [],
+  pmsProperties: [],
 };
+
+export interface SaveHotelMappingParams {
+  id: string;
+  mappingId?: string;
+  otaChannelCode: string;
+  extUnitCode: string;
+  otaHotelName: string;
+  unitId?: string | number;
+  unitType?: string;
+  pmsHotelName?: string;
+}
+
+export interface DeleteHotelMappingParams {
+  mappingId: string | number;
+  localId: string;
+  otaHotelName?: string;
+}
+
+/**
+ * 异步 Thunk：从文旅中台拉取真实 OTA 酒店/门店映射列表 (GET /toolkit/hotel-mappings)
+ * 对应 Apifox 接口ID: 475704117
+ */
+export const fetchHotelMappingsThunk = createAsyncThunk<
+  HotelMapping[],
+  string | undefined,
+  { rejectValue: string }
+>('hotel/fetchHotelMappings', async (channelCode, { dispatch, rejectWithValue }) => {
+  try {
+    const otaChannelCode = channelCode && channelCode !== 'all' ? channelCode : undefined;
+    dispatch(
+      addLog({
+        level: 'INFO',
+        message: `[HotelMapping] 正在从文旅中台查询门店映射列表${otaChannelCode ? ` (渠道代码: ${otaChannelCode})` : ''}...`,
+      })
+    );
+
+    const mappings = await fetchRemoteHotelMappings({ otaChannelCode });
+
+    dispatch(
+      addLog({
+        level: 'SUCCESS',
+        message: `[HotelMapping] 成功从文旅中台拉取 ${mappings.length} 条门店映射数据`,
+      })
+    );
+
+    return mappings;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'ERROR',
+        message: `[HotelMapping] 获取门店映射列表失败: ${errorMsg}`,
+      })
+    );
+    dispatch(
+      showToast({
+        title: '获取门店映射失败',
+        description: errorMsg,
+        type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
+/**
+ * 异步 Thunk：向文旅中台保存/更新 OTA 酒店/门店映射 (POST /toolkit/hotel-mappings/batch)
+ * 对应 Apifox 接口ID: 475704116
+ */
+export const saveHotelMappingThunk = createAsyncThunk<
+  SaveHotelMappingParams,
+  SaveHotelMappingParams,
+  { rejectValue: string }
+>('hotel/saveHotelMapping', async (params, { dispatch, rejectWithValue }) => {
+  try {
+    const otaChannelCode = String(params.otaChannelCode || '').trim().toUpperCase();
+    const extUnitCode = String(params.extUnitCode || '').trim();
+    const otaHotelName = String(params.otaHotelName || '').trim();
+
+    if (!otaChannelCode) {
+      throw new Error('缺少渠道代码 (otaChannelCode)');
+    }
+    if (!extUnitCode) {
+      throw new Error('缺少 OTA 门店编码 (extUnitCode)');
+    }
+    if (!otaHotelName) {
+      throw new Error('缺少 OTA 门店名称 (otaHotelName)');
+    }
+
+    const payloadItem = {
+      otaChannelCode,
+      extUnitCode,
+      otaHotelName,
+      unitId: params.unitId,
+      unitType: params.unitType || 'Property',
+    };
+
+    dispatch(
+      addLog({
+        level: 'INFO',
+        message: `[HotelMapping] 正在保存门店映射: ${otaHotelName} (${extUnitCode}) -> 中台单位: ${params.unitId || '未指定'}`,
+      })
+    );
+
+    await saveHotelMappingsBatch([payloadItem]);
+
+    dispatch(
+      addLog({
+        level: 'SUCCESS',
+        message: `[HotelMapping] 成功保存门店「${otaHotelName}」映射`,
+      })
+    );
+
+    dispatch(
+      showToast({
+        title: `已保存「${otaHotelName}」映射`,
+        description: params.unitId
+          ? `成功关联至中台酒店 (ID: ${params.unitId})`
+          : '门店信息已同步至中台',
+        type: 'success',
+      })
+    );
+
+    return {
+      ...params,
+      otaChannelCode,
+      extUnitCode,
+      otaHotelName,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'ERROR',
+        message: `[HotelMapping] 保存门店映射失败: ${errorMsg}`,
+      })
+    );
+    dispatch(
+      showToast({
+        title: '保存门店映射失败',
+        description: errorMsg,
+        type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
+/**
+ * 异步 Thunk：从文旅中台删除 OTA 酒店/门店映射记录 (DELETE /toolkit/hotel-mappings)
+ * 对应 Apifox 接口ID: 475704118
+ */
+export const deleteHotelMappingThunk = createAsyncThunk<
+  DeleteHotelMappingParams,
+  DeleteHotelMappingParams,
+  { rejectValue: string }
+>('hotel/deleteHotelMapping', async (params, { dispatch, rejectWithValue }) => {
+  try {
+    if (!params.mappingId) {
+      throw new Error('缺少要删除的映射记录 ID (mappingId)');
+    }
+
+    dispatch(
+      addLog({
+        level: 'INFO',
+        message: `[HotelMapping] 正在删除门店映射记录 (ID: ${params.mappingId})...`,
+      })
+    );
+
+    await deleteRemoteHotelMappings([params.mappingId]);
+
+    dispatch(
+      addLog({
+        level: 'SUCCESS',
+        message: `[HotelMapping] 成功删除门店映射记录 (ID: ${params.mappingId})`,
+      })
+    );
+
+    dispatch(
+      showToast({
+        title: '已删除门店映射',
+        description: params.otaHotelName
+          ? `已移除「${params.otaHotelName}」的映射记录`
+          : `映射记录 (ID: ${params.mappingId}) 已删除`,
+        type: 'success',
+      })
+    );
+
+    return params;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'ERROR',
+        message: `[HotelMapping] 删除门店映射失败: ${errorMsg}`,
+      })
+    );
+    dispatch(
+      showToast({
+        title: '删除门店映射失败',
+        description: errorMsg,
+        type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
+/**
+ * 异步 Thunk：从文旅中台拉取真实组织单位/酒店列表 (GET /configuration/structure-management/properties)
+ */
+export const fetchPlatformPropertiesThunk = createAsyncThunk<
+  PlatformProperty[],
+  void,
+  { rejectValue: string }
+>('hotel/fetchPlatformProperties', async (_, { dispatch, rejectWithValue }) => {
+  try {
+    const properties = await fetchPlatformProperties();
+    return properties;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'WARN',
+        message: `[HotelMapping] 获取中台酒店列表失败: ${errorMsg}`,
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
+
+/**
+ * 异步 Thunk：触发指定渠道的 Playwright 门店自动化采集
+ */
+export const crawlHotelsByChannel = createAsyncThunk<
+  {
+    channelCode: string;
+    hotels: DiscoveredHotelCandidate[];
+    durationMs: number;
+    timestamp: string;
+  },
+  {
+    channelCode: string;
+    headless?: boolean;
+    timeoutMs?: number;
+    waitMs?: number;
+  },
+  { rejectValue: string }
+>('hotel/crawlHotelsByChannel', async (param, { dispatch, rejectWithValue }) => {
+  const code = param.channelCode.trim().toUpperCase();
+  try {
+    dispatch(
+      addLog({
+        level: 'PLAYWRIGHT',
+        channelId: code,
+        message: `[Crawler] 发起渠道「${code}」门店自动化采集`,
+      })
+    );
+
+    const result = await collectHotelsByChannel(code, {
+      headless: param.headless,
+      timeoutMs: param.timeoutMs,
+      waitMs: param.waitMs,
+    });
+
+    if (result.logs && Array.isArray(result.logs)) {
+      for (const logItem of result.logs) {
+        dispatch(
+          addLog({
+            level: logItem.level,
+            channelId: code,
+            message: logItem.message,
+            details: logItem.details,
+          })
+        );
+      }
+    }
+
+    dispatch(
+      showToast({
+        title: `「${code}」门店采集完成`,
+        description: `成功发现 ${result.hotels.length} 家门店候选 (耗时: ${(result.diagnostics.durationMs / 1000).toFixed(1)}s)`,
+        type: 'success',
+      })
+    );
+
+    return {
+      channelCode: code,
+      hotels: result.hotels,
+      durationMs: result.diagnostics.durationMs,
+      timestamp: new Date().toLocaleTimeString(),
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    dispatch(
+      addLog({
+        level: 'ERROR',
+        channelId: code,
+        message: `[Crawler] 渠道「${code}」门店采集失败: ${errorMsg}`,
+      })
+    );
+    dispatch(
+      showToast({
+        title: `门店采集失败`,
+        description: errorMsg,
+        type: 'error',
+      })
+    );
+    return rejectWithValue(errorMsg);
+  }
+});
 
 export const hotelSlice = createSlice({
   name: 'hotel',
@@ -104,29 +374,180 @@ export const hotelSlice = createSlice({
     setSearchKeyword: (state, action: PayloadAction<string>) => {
       state.searchKeyword = action.payload;
     },
+    setSelectedCrawlChannel: (state, action: PayloadAction<string>) => {
+      state.selectedCrawlChannel = action.payload;
+    },
     setIsScraping: (state, action: PayloadAction<boolean>) => {
       state.isScraping = action.payload;
     },
-    updateHotelMapping: (state, action: PayloadAction<{ id: string; pmsHotelId: string; pmsHotelName: string }>) => {
-      const h = state.hotels.find(x => x.id === action.payload.id);
+    clearCrawlError: (state) => {
+      state.crawlError = null;
+    },
+    updateHotelMapping: (
+      state,
+      action: PayloadAction<{ id: string; pmsHotelId: string; pmsHotelName: string }>
+    ) => {
+      const h = state.hotels.find((x) => x.id === action.payload.id);
       if (h) {
         h.pmsHotelId = action.payload.pmsHotelId;
         h.pmsHotelName = action.payload.pmsHotelName;
-        h.status = 'mapped';
+        h.status = action.payload.pmsHotelId ? 'mapped' : 'pending';
       }
     },
     addDiscoveredHotel: (state, action: PayloadAction<HotelMapping>) => {
       state.hotels.unshift(action.payload);
-    }
-  }
+    },
+    upsertDiscoveredHotels: (
+      state,
+      action: PayloadAction<DiscoveredHotelCandidate[]>
+    ) => {
+      const candidates = action.payload;
+      for (const candidate of candidates) {
+        const existing = state.hotels.find(
+          (h) =>
+            h.otaChannelId.toLowerCase() === candidate.otaChannelId.toLowerCase() &&
+            (h.otaHotelId === candidate.otaHotelId || h.extUnitCode === candidate.otaHotelId)
+        );
+
+        if (existing) {
+          existing.otaHotelName = candidate.otaHotelName;
+          if (candidate.city) existing.city = candidate.city;
+          if (candidate.starRating) existing.starRating = candidate.starRating;
+          if (candidate.partnerId) existing.partnerId = candidate.partnerId;
+          existing.source = candidate.source;
+        } else {
+          const newHotel: HotelMapping = {
+            id: `hm-${candidate.otaChannelId.toLowerCase()}-${candidate.otaHotelId}`,
+            otaChannelId: candidate.otaChannelId.toLowerCase(),
+            otaChannelCode: candidate.otaChannelCode || candidate.otaChannelId.toUpperCase(),
+            otaHotelId: candidate.otaHotelId,
+            extUnitCode: candidate.otaHotelId,
+            otaHotelName: candidate.otaHotelName,
+            pmsHotelId: '',
+            pmsHotelName: '待关联中台酒店',
+            unitType: 'Property',
+            city: candidate.city || '',
+            starRating: candidate.starRating || '',
+            status: 'pending',
+            roomCount: candidate.roomCount ?? 0,
+            partnerId: candidate.partnerId,
+            source: candidate.source,
+          };
+          state.hotels.unshift(newHotel);
+        }
+      }
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      // 门店采集 Thunk
+      .addCase(crawlHotelsByChannel.pending, (state) => {
+        state.isScraping = true;
+        state.crawlStatus = 'running';
+        state.crawlError = null;
+      })
+      .addCase(crawlHotelsByChannel.fulfilled, (state, action) => {
+        state.isScraping = false;
+        state.crawlStatus = 'success';
+        state.crawlError = null;
+        state.lastCrawlSummary = {
+          channelCode: action.payload.channelCode,
+          channelId: action.payload.channelCode,
+          discoveredCount: action.payload.hotels.length,
+          durationMs: action.payload.durationMs,
+          timestamp: action.payload.timestamp || '',
+        };
+
+        hotelSlice.caseReducers.upsertDiscoveredHotels(state, {
+          type: 'hotel/upsertDiscoveredHotels',
+          payload: action.payload.hotels,
+        });
+      })
+      .addCase(crawlHotelsByChannel.rejected, (state, action) => {
+        state.isScraping = false;
+        state.crawlStatus = 'failed';
+        state.crawlError = action.payload || action.error.message || '门店采集失败';
+      })
+      // 查询门店映射列表 Thunk
+      .addCase(fetchHotelMappingsThunk.pending, (state) => {
+        state.isFetching = true;
+        state.fetchError = null;
+      })
+      .addCase(fetchHotelMappingsThunk.fulfilled, (state, action) => {
+        state.isFetching = false;
+        state.hotels = action.payload;
+        state.fetchError = null;
+      })
+      .addCase(fetchHotelMappingsThunk.rejected, (state, action) => {
+        state.isFetching = false;
+        state.fetchError = action.payload || '获取门店映射列表失败';
+      })
+      // 保存门店映射 Thunk
+      .addCase(saveHotelMappingThunk.pending, (state, action) => {
+        state.isSaving = true;
+        state.savingHotelId = action.meta.arg.id;
+      })
+      .addCase(saveHotelMappingThunk.fulfilled, (state, action) => {
+        state.isSaving = false;
+        state.savingHotelId = null;
+        const target = state.hotels.find(
+          (h) =>
+            h.id === action.payload.id ||
+            (h.otaChannelId.toLowerCase() === action.payload.otaChannelCode.toLowerCase() &&
+              (h.otaHotelId === action.payload.extUnitCode || h.extUnitCode === action.payload.extUnitCode))
+        );
+        if (target) {
+          const unitIdStr =
+            action.payload.unitId !== undefined && action.payload.unitId !== null
+              ? String(action.payload.unitId)
+              : '';
+          target.pmsHotelId = unitIdStr;
+          if (action.payload.pmsHotelName) {
+            target.pmsHotelName = action.payload.pmsHotelName;
+          }
+          target.status = unitIdStr ? 'mapped' : 'pending';
+          target.extUnitCode = action.payload.extUnitCode;
+          target.otaChannelCode = action.payload.otaChannelCode;
+          if (action.payload.unitType) {
+            target.unitType = action.payload.unitType;
+          }
+        }
+      })
+      .addCase(saveHotelMappingThunk.rejected, (state) => {
+        state.isSaving = false;
+        state.savingHotelId = null;
+      })
+      // 删除门店映射 Thunk
+      .addCase(deleteHotelMappingThunk.pending, (state, action) => {
+        state.deletingHotelId = action.meta.arg.localId;
+      })
+      .addCase(deleteHotelMappingThunk.fulfilled, (state, action) => {
+        state.deletingHotelId = null;
+        state.hotels = state.hotels.filter(
+          (h) =>
+            h.id !== action.payload.localId &&
+            (!h.mappingId || String(h.mappingId) !== String(action.payload.mappingId))
+        );
+      })
+      .addCase(deleteHotelMappingThunk.rejected, (state) => {
+        state.deletingHotelId = null;
+      })
+      // 获取中台酒店列表 Thunk
+      .addCase(fetchPlatformPropertiesThunk.fulfilled, (state, action) => {
+        state.pmsProperties = action.payload;
+      });
+  },
 });
 
 export const {
   setFilterChannel,
   setSearchKeyword,
+  setSelectedCrawlChannel,
   setIsScraping,
+  clearCrawlError,
   updateHotelMapping,
-  addDiscoveredHotel
+  addDiscoveredHotel,
+  upsertDiscoveredHotels,
 } = hotelSlice.actions;
 
 export default hotelSlice.reducer;

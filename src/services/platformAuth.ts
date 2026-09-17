@@ -68,9 +68,15 @@ export function getPlatformBaseUrl(): string {
     if (url) return url;
   }
 
+  const electronUrl =
+    typeof window !== 'undefined'
+      ? (window as unknown as { electron?: { env?: { platformBaseUrl?: string } } }).electron?.env?.platformBaseUrl
+      : undefined;
+
   const envUrl =
     (typeof process !== 'undefined' && process.env?.VITE_PLATFORM_BASE_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL);
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PLATFORM_BASE_URL) ||
+    electronUrl;
 
   if (!envUrl || !envUrl.trim()) {
     throw new Error('未配置平台接口基础地址，请在环境变量中配置 VITE_PLATFORM_BASE_URL');

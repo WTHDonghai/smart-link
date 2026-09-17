@@ -15,6 +15,7 @@ export type AppErrorCode =
   // 自动化会话域 (CRAWLER_*)
   | 'CRAWLER_SESS_EXPIRED'
   | 'CRAWLER_CAPTCHA_BLOCKED'
+  | 'CRAWLER_CHROME_NOT_FOUND'
   // 系统与通用网络域 (NET_* / SYS_*)
   | 'NET_OFFLINE'
   | 'NET_REQUEST_TIMEOUT'

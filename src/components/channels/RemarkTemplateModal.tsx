@@ -8,6 +8,7 @@ import {
 import { showToast } from '../../store/slices/appSlice';
 import { Check, Eye, SlidersHorizontal, TriangleAlert, Lightbulb, Loader2 } from 'lucide-react';
 import { Modal } from '../common/Modal';
+import { ChannelBadge } from '../common/ChannelBadge';
 import { TemplateVariablePicker } from './TemplateVariablePicker';
 import { ProtocolFieldManagerModal } from './ProtocolFieldManagerModal';
 import {
@@ -340,13 +341,7 @@ export const RemarkTemplateModal: React.FC = () => {
         isOpen={Boolean(selectedChannelId && currentChannel)}
         onClose={handleClose}
         title={`配置订单备注模板 - ${currentChannel.name} (${currentChannel.code})`}
-        icon={
-          <div
-            className={`w-6 h-6 rounded-md ${currentChannel.bgColor} ${currentChannel.textColor} flex items-center justify-center font-bold text-xs`}
-          >
-            {currentChannel.short}
-          </div>
-        }
+        icon={<ChannelBadge channel={currentChannel} size="xs" showTooltip={false} />}
         maxWidth="3xl"
         headerExtra={headerExtraContent}
         footer={footerContent}

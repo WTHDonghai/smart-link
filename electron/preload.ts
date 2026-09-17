@@ -1,0 +1,28 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../src/crawler/types';
+
+/**
+ * 桌面端预加载 API 契约
+ * 与 src/services/crawlerBridge.ts 中的 ElectronCrawlerApi 保持 1:1 严格对齐
+ */
+export interface ElectronCrawlerApi {
+  collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
+  syncProfile?(channelCode?: string): Promise<ProfileSyncResult>;
+}
+
+const crawlerApi: ElectronCrawlerApi = {
+  collectHotels: (request: HotelCrawlRequest): Promise<HotelCrawlResult> => {
+    return ipcRenderer.invoke('crawler:collect-hotels', request);
+  },
+  syncProfile: (channelCode?: string) => {
+    return ipcRenderer.invoke('crawler:sync-profile', channelCode);
+  },
+};
+
+// 安全隔离注入至渲染进程主世界
+contextBridge.exposeInMainWorld('electron', {
+  crawler: crawlerApi,
+  env: {
+    platformBaseUrl: process.env.VITE_PLATFORM_BASE_URL || '',
+  },
+});

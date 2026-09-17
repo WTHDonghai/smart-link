@@ -55,20 +55,69 @@ export interface OTAChannel {
   mappingId?: string;
   isMapped?: boolean;
   protocolSchema?: ChannelProtocolSchema;
+  storeCrawlUrl?: string;
+}
+
+export interface ChannelMeta {
+  name: string;
+  short: string;
+  bgColor: string;
+  textColor: string;
 }
 
 export interface HotelMapping {
   id: string;
+  mappingId?: string;
   otaChannelId: string;
+  otaChannelCode?: string;
   otaHotelName: string;
   otaHotelId: string;
+  extUnitCode?: string;
   pmsHotelName: string;
   pmsHotelId: string;
-  city: string;
-  starRating: string;
+  unitCode?: string;
+  unitType?: string;
+  city?: string;
+  starRating?: string;
   status: 'mapped' | 'pending' | 'error';
-  lastScraped: string;
-  roomCount: number;
+  lastScraped?: string;
+  roomCount?: number;
+  partnerId?: string;
+  source?: string;
+  failureReason?: string;
+}
+
+export interface SaveHotelMappingPayloadItem {
+  otaChannelCode: string;
+  extUnitCode: string;
+  otaHotelName: string;
+  unitId?: string | number;
+  unitType?: string;
+}
+
+export interface RemoteHotelMappingRecord {
+  id?: string | number;
+  mappingId?: string | number;
+  otaHotelMappingId?: string | number;
+  otaChannelCode: string;
+  extUnitCode?: string;
+  otaHotelCode?: string;
+  otaHotelName: string;
+  unitId?: string | number;
+  unitCode?: string;
+  unitName?: string;
+  unitType?: string;
+  status?: string;
+  partnerId?: string;
+  city?: string;
+  starRating?: string;
+}
+
+export interface PlatformProperty {
+  id: string;
+  name: string;
+  code?: string;
+  type?: string;
 }
 
 export interface ProductMapping {
