@@ -7,11 +7,12 @@ import authReducer, {
   tokenRefreshed,
   authFailed,
   logout,
+  updateTokenState,
   AuthState,
   startDeviceLogin,
 } from '../../../src/store/slices/authSlice';
 import { PlatformAuthTokens, PlatformDeviceCodeInfo } from '../../../src/types';
-import { clearTokensFromStorage } from '../../../src/services/platformAuth';
+import { clearTokensFromStorage, saveTokensToStorage } from '../../../src/services/platformAuth';
 
 describe('authSlice - 同步 Reducers 状态机流转', () => {
   let initialState: AuthState;
@@ -165,6 +166,111 @@ describe('authSlice - 同步 Reducers 状态机流转', () => {
     expect(nextState.tokens).toBeNull();
     expect(nextState.tokenState).toBeNull();
     expect(nextState.tenantId).toBe('');
+  });
+
+  it('updateTokenState 在 AccessToken 过期但持有有效 RefreshToken 时维持 authorized 态，杜绝误判踢出', () => {
+    const expiredWithRefresh: AuthState = {
+      ...initialState,
+      status: 'authorized',
+      tokens: {
+        accessToken: 'expired-access-token',
+        refreshToken: 'valid-refresh-token',
+        expiresAt: Date.now() - 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms-api.xiruan.com',
+        tenantId: 'XR-89201',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    const nextState = authReducer(expiredWithRefresh, updateTokenState());
+    expect(nextState.status).toBe('authorized');
+    expect(nextState.tokenState?.usable).toBe(false);
+  });
+
+  it('updateTokenState 在 AccessToken 过期且缺少 RefreshToken 时流转为 login-required', () => {
+    const expiredWithoutRefresh: AuthState = {
+      ...initialState,
+      status: 'authorized',
+      tokens: {
+        accessToken: 'expired-access-token',
+        refreshToken: '',
+        expiresAt: Date.now() - 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms-api.xiruan.com',
+        tenantId: 'XR-89201',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    const nextState = authReducer(expiredWithoutRefresh, updateTokenState());
+    expect(nextState.status).toBe('login-required');
+    expect(nextState.tokenState?.usable).toBe(false);
+  });
+
+  it('updateTokenState 作为纯函数仅基于当前内存 state 派发倒计时诊断，杜绝读取 localStorage 产生非纯 I/O 副作用', () => {
+    // 即使外部 localStorage 写入了新 Token，纯函数 updateTokenState 也绝不产生侧漏读取
+    const externalStorageTokens: PlatformAuthTokens = {
+      accessToken: 'external-storage-token',
+      refreshToken: 'external-refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms-api.xiruan.com',
+      tenantId: 'XR-NEW-TENANT',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveTokensToStorage(externalStorageTokens);
+
+    const currentState: AuthState = {
+      ...initialState,
+      status: 'authorized',
+      tenantId: 'XR-MEMORY-TENANT',
+      tokens: {
+        accessToken: 'memory-valid-token',
+        refreshToken: 'memory-refresh-token',
+        expiresAt: Date.now() + 1800 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms-api.xiruan.com',
+        tenantId: 'XR-MEMORY-TENANT',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    const nextState = authReducer(currentState, updateTokenState());
+    expect(nextState.status).toBe('authorized');
+    // 严密断言：内存中的 Token 保持单向数据流纯洁性，未被 localStorage 外部副作用污染
+    expect(nextState.tokens?.accessToken).toBe('memory-valid-token');
+    expect(nextState.tenantId).toBe('XR-MEMORY-TENANT');
+    expect(nextState.tokenState?.usable).toBe(true);
+    expect(nextState.tokenState?.fresh).toBe(true);
+  });
+
+  it('updateTokenState 在 status 为 authorizing 时直接保持状态，严禁意外覆盖为 login-required', () => {
+    const authorizingState: AuthState = {
+      ...initialState,
+      status: 'authorizing',
+      isAuthorizing: true,
+      tokens: null,
+      tokenState: null,
+      deviceCodeInfo: {
+        deviceCode: 'dev-code-polling',
+        userCode: 'UC-999',
+        verificationUri: 'https://verify.url',
+        expiresIn: 600,
+        interval: 5,
+        expiresAt: Date.now() + 600000,
+      },
+    };
+
+    const nextState = authReducer(authorizingState, updateTokenState());
+    expect(nextState.status).toBe('authorizing');
+    expect(nextState.isAuthorizing).toBe(true);
+    expect(nextState.deviceCodeInfo).not.toBeNull();
+    expect(nextState.deviceCodeInfo?.deviceCode).toBe('dev-code-polling');
   });
 });
 

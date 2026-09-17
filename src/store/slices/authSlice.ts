@@ -32,7 +32,9 @@ export interface AuthState {
 const initialTokens = loadTokensFromStorage();
 const initialTokenState = initialTokens ? inspectTokenState(initialTokens) : null;
 const initialStatus: PlatformAuthStatus =
-  initialTokenState && initialTokenState.usable ? 'authorized' : 'login-required';
+  initialTokens && (initialTokenState?.usable || Boolean(initialTokens.refreshToken))
+    ? 'authorized'
+    : 'login-required';
 
 function resolveInitialBaseUrl(): string {
   try {
@@ -111,12 +113,21 @@ export const authSlice = createSlice({
     cancelDeviceLogin: (state) => {
       state.isAuthorizing = false;
       state.deviceCodeInfo = null;
-      state.status = state.tokens && state.tokenState?.usable ? 'authorized' : 'login-required';
+      state.status =
+        state.tokens && (state.tokenState?.usable || Boolean(state.tokens.refreshToken))
+          ? 'authorized'
+          : 'login-required';
     },
     updateTokenState: (state) => {
+      // 防护 authorizing 状态：设备授权码轮询中严禁意外篡改为 login-required
+      if (state.status === 'authorizing') {
+        return;
+      }
+
       if (state.tokens) {
         state.tokenState = inspectTokenState(state.tokens);
-        if (!state.tokenState.usable) {
+        // 关键防护：仅在 AccessToken 已失效且无任何可用 RefreshToken 时，才判定为会话彻底失效
+        if (!state.tokenState.usable && !state.tokens.refreshToken) {
           state.status = 'login-required';
         }
       } else {
@@ -143,7 +154,6 @@ export const authSlice = createSlice({
       state.status = 'authorized';
       state.failureReason = null;
       state.failureError = null;
-      saveTokensToStorage(action.payload);
     },
     authFailed: (state, action: PayloadAction<string>) => {
       state.status = 'login-required';
