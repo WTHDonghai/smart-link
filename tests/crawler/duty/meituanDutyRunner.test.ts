@@ -5,7 +5,11 @@ import {
   extractMeituanSensitiveDataFromPayload,
   fmtDate,
   isMeituanDetailUrl,
+  isMeituanListUrl,
   isMeituanSensitiveUrl,
+  isMeituanRiskControlText,
+  checkMeituanPageRisk,
+  humanDelay,
   MeituanDutyRunner,
 } from '../../../src/crawler/duty/meituanDutyRunner';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
@@ -299,6 +303,19 @@ describe('meituanDutyRunner', () => {
         )
       ).toBe(true);
     });
+
+    it('isMeituanListUrl should match task list, mock orders, and unhandled list URLs', () => {
+      expect(isMeituanListUrl('https://eb.meituan.com/api/v1/ebooking/orders/task/list?scenario=0')).toBe(true);
+      expect(isMeituanListUrl('https://eb.meituan.com/api/v1/ebooking/orders/list')).toBe(true);
+      expect(isMeituanListUrl('http://localhost:3000/api/mock/orders')).toBe(true);
+      expect(isMeituanListUrl('/orders/unhandled')).toBe(true);
+    });
+
+    it('isMeituanListUrl should not match sensitive data or single order detail URLs', () => {
+      expect(isMeituanListUrl('https://eb.meituan.com/api/v1/ebooking/orders/sensitiveData/12345')).toBe(false);
+      expect(isMeituanListUrl('https://eb.meituan.com/api/v1/ebooking/resale/12345/confirmPhone')).toBe(false);
+      expect(isMeituanListUrl('https://eb.meituan.com/api/v1/ebooking/orders/20260917092248573000')).toBe(false);
+    });
   });
 
   describe('extractMeituanSensitiveDataFromPayload', () => {
@@ -360,6 +377,61 @@ describe('meituanDutyRunner', () => {
 
       const result = extractMeituanSensitiveDataFromPayload(payload);
       expect(result?.guestMobile).toBe('13788889999');
+    });
+  });
+
+  describe('isMeituanRiskControlText, checkMeituanPageRisk and humanDelay', () => {
+    it('isMeituanRiskControlText should accurately detect risk keywords and ignore normal text', () => {
+      expect(isMeituanRiskControlText('')).toBe(false);
+      expect(isMeituanRiskControlText('订单列表正常加载')).toBe(false);
+      expect(isMeituanRiskControlText('高级大床房 2晚')).toBe(false);
+
+      expect(isMeituanRiskControlText('请完成安全验证')).toBe(true);
+      expect(isMeituanRiskControlText('拖动滑块完成拼图')).toBe(true);
+      expect(isMeituanRiskControlText('系统检测到人机异常')).toBe(true);
+      expect(isMeituanRiskControlText('您的访问过于频繁，请稍后再试')).toBe(true);
+      expect(isMeituanRiskControlText('操作频繁，请重试')).toBe(true);
+      expect(isMeituanRiskControlText('yoda-verify-popup')).toBe(true);
+      expect(isMeituanRiskControlText('captcha_token_missing')).toBe(true);
+    });
+
+    it('checkMeituanPageRisk should return true when page evaluate returns true', async () => {
+      const mockPageTrue = {
+        evaluate: vi.fn().mockResolvedValue(true),
+      };
+      const resultTrue = await checkMeituanPageRisk(mockPageTrue as unknown as Parameters<typeof checkMeituanPageRisk>[0]);
+      expect(resultTrue).toBe(true);
+
+      const mockPageFalse = {
+        evaluate: vi.fn().mockResolvedValue(false),
+      };
+      const resultFalse = await checkMeituanPageRisk(mockPageFalse as unknown as Parameters<typeof checkMeituanPageRisk>[0]);
+      expect(resultFalse).toBe(false);
+
+      // 异常或非布尔值时稳健返回 false
+      const mockPageError = {
+        evaluate: vi.fn().mockRejectedValue(new Error('detached frame')),
+      };
+      const resultError = await checkMeituanPageRisk(mockPageError as unknown as Parameters<typeof checkMeituanPageRisk>[0]);
+      expect(resultError).toBe(false);
+
+      // 验证检测到 cross-origin captcha iframe 或验证码元素时返回 true
+      const mockPageIframe = {
+        evaluate: vi.fn().mockResolvedValue(true),
+      };
+      const resultIframe = await checkMeituanPageRisk(mockPageIframe as unknown as Parameters<typeof checkMeituanPageRisk>[0]);
+      expect(resultIframe).toBe(true);
+    });
+
+    it('humanDelay should wait within the specified delay range', async () => {
+      const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+      const mockPage = { waitForTimeout };
+
+      await humanDelay(mockPage as unknown as Parameters<typeof humanDelay>[0], 100, 200);
+      expect(waitForTimeout).toHaveBeenCalledTimes(1);
+      const calledDelay = waitForTimeout.mock.calls[0][0] as number;
+      expect(calledDelay).toBeGreaterThanOrEqual(100);
+      expect(calledDelay).toBeLessThanOrEqual(200);
     });
   });
 
@@ -473,6 +545,82 @@ describe('meituanDutyRunner', () => {
       expect(summaries).toHaveLength(1);
       expect(summaries[0].orderId).toBe('MT-DOM-888');
       expect(summaries[0].hotelName).toBe('DOM解析酒店');
+    });
+
+    it('refreshOrderList should prioritize clicking 待确认订单 tab without reloading page', async () => {
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+
+      const tabLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+      };
+
+      const mockPage = {
+        locator: (selector: string) => ({
+          first: () => {
+            if (selector.includes('待确认')) return tabLocator;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+        reload: reloadSpy,
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await runner.refreshOrderList(mockPage as unknown as import('playwright').Page);
+
+      expect(clickSpy).toHaveBeenCalled();
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
+
+    it('refreshOrderList should fallback to query/search/refresh button if no 待确认 tab is visible', async () => {
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+
+      const queryLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+      };
+
+      const mockPage = {
+        locator: (selector: string) => ({
+          first: () => {
+            if (selector.includes('查询') || selector.includes('搜索') || selector.includes('刷新')) {
+              return queryLocator;
+            }
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+        reload: reloadSpy,
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await runner.refreshOrderList(mockPage as unknown as import('playwright').Page);
+
+      expect(clickSpy).toHaveBeenCalled();
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
+
+    it('refreshOrderList should fallback to reload if neither tab nor buttons are visible', async () => {
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+
+      const mockPage = {
+        locator: () => ({
+          first: () => ({
+            isVisible: vi.fn().mockResolvedValue(false),
+          }),
+        }),
+        reload: reloadSpy,
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await runner.refreshOrderList(mockPage as unknown as import('playwright').Page);
+
+      expect(reloadSpy).toHaveBeenCalled();
     });
 
     it('inspectOrderDetail should throw when runner is not running', async () => {
@@ -703,6 +851,57 @@ describe('meituanDutyRunner', () => {
       expect(detail.totalPrice).toBe(298);
 
       expect(offSpy).toHaveBeenCalledWith('response', expect.any(Function));
+    });
+
+    it('collectUnhandledOrders should throw RISK_VERIFICATION_REQUIRED when page is in risk state', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          evaluate: vi.fn().mockResolvedValue(true),
+        },
+      };
+
+      await expect(runner.collectUnhandledOrders()).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
+    });
+
+    it('refreshOrderList should debounce successive calls within 3000ms window', async () => {
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+      const tabLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+      };
+
+      const mockPage = {
+        locator: (selector: string) => ({
+          first: () => {
+            if (selector.includes('待确认')) return tabLocator;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+        reload: vi.fn().mockResolvedValue(undefined),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // 第一次刷新
+      await runner.refreshOrderList(mockPage as unknown as import('playwright').Page);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+
+      // 立即执行第二次刷新（默认未 force），应当被防抖拦截，不重复点击 Tab
+      await runner.refreshOrderList(mockPage as unknown as import('playwright').Page);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('inspectOrderDetail should throw RISK_VERIFICATION_REQUIRED when page is in risk state', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          evaluate: vi.fn().mockResolvedValue(true),
+        },
+      };
+
+      await expect(runner.inspectOrderDetail('MT-RISK-001')).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
     });
 
     it('confirmImport and confirmCancel should operate page locators safely', async () => {

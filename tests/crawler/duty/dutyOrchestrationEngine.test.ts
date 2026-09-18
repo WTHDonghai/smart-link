@@ -593,6 +593,49 @@ describe('dutyOrchestrationEngine', () => {
       );
     });
 
+    it('当执行遇到风控拦截 (RISK_VERIFICATION_REQUIRED) 时，向中台提交 retryable=false 并记录 DUTY_TASK_RISK_CONTROL_INTERCEPTED 日志', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-risk-interception',
+        businessId: 'ORD-RISK-999',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-risk',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      mockRunner.executeTask = vi.fn().mockResolvedValue({
+        status: 'FAILED',
+        errorCode: 'RISK_VERIFICATION_REQUIRED',
+        errorMessage: '美团后台提示安全验证或操作频繁，需要人工在浏览器中完成验证',
+      });
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executeTask).toHaveBeenCalledTimes(1);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-risk-interception',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('安全验证'),
+        })
+      );
+
+      const logs = engine.getRecentDutyLogs();
+      const riskLog = logs.find((l) => l.event === 'DUTY_TASK_RISK_CONTROL_INTERCEPTED');
+      expect(riskLog).toBeDefined();
+      expect(riskLog?.level).toBe('WARN');
+      expect(riskLog?.message).toContain('风控拦截熔断');
+    });
+
     it('当目标渠道未注册或未在运行状态时，提交 TASK_ROUTE_UNAVAILABLE，导入任务 retryable=true，采集任务 retryable=false', async () => {
       // 1. 针对未注册/未运行渠道的导入任务：retryable 应为 true
       const importTask: DutyClaimedTask = {

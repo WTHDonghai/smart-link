@@ -758,6 +758,7 @@ export class DutyOrchestrationEngine {
 
         // 3. 任务执行完成与结果日志 (RESULT)
         const isSuccess = execRes.status === 'SUCCEEDED';
+        const isRiskIntercepted = execRes.errorCode === 'RISK_VERIFICATION_REQUIRED';
         const wireStatus: DutyTaskWireStatus = isSuccess ? 'SUCCESS' : 'FAIL';
         const confirmationNo =
           isSuccess && execRes.result
@@ -775,8 +776,22 @@ export class DutyOrchestrationEngine {
           result: execRes.result,
           errorCode: execRes.errorCode || (isSuccess ? undefined : 'TASK_EXECUTION_FAILED'),
           errorMessage: execRes.errorMessage,
-          retryable: isSuccess ? undefined : true,
+          retryable: isSuccess ? undefined : (isRiskIntercepted ? false : true),
         });
+
+        if (isRiskIntercepted) {
+          this.appendDutyLog({
+            level: 'WARN',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
+            taskActionStage: 'EXECUTE',
+            msgType: task.msgType,
+            taskId: task.id,
+            channelId: targetChannel,
+            message: `[风控拦截熔断] 页面遭遇美团安全验证/滑块/人机拦截，已自动熔断阻断机器重试`,
+            details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
+          });
+        }
 
         this.appendDutyLog({
           level: isSuccess ? 'SUCCESS' : 'ERROR',

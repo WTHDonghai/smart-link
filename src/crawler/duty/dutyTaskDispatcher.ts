@@ -50,10 +50,12 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRisk = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha|RISK_VERIFICATION_REQUIRED/i.test(errMsg);
         return {
           status: 'FAILED',
-          errorCode: 'COLLECT_FAILED',
-          errorMessage: err instanceof Error ? err.message : String(err),
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'COLLECT_FAILED',
+          errorMessage: errMsg,
         };
       }
     }
@@ -77,10 +79,12 @@ export async function dispatchDutyTask(
       try {
         detail = await runner.inspectOrderDetail(otaOrderId);
       } catch (inspectErr) {
+        const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
+        const isRisk = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha|RISK_VERIFICATION_REQUIRED/i.test(errMsg);
         return {
           status: 'FAILED',
-          errorCode: 'ORDER_DETAIL_FETCH_FAILED',
-          errorMessage: inspectErr instanceof Error ? inspectErr.message : String(inspectErr),
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'ORDER_DETAIL_FETCH_FAILED',
+          errorMessage: errMsg,
         };
       }
 

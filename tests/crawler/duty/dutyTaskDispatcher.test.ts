@@ -224,6 +224,28 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.errorMessage).toContain('未在页面找到订单元素');
     });
 
+    it('should map to RISK_VERIFICATION_REQUIRED when runner.inspectOrderDetail detects risk/captcha', async () => {
+      runner.inspectOrderDetail = vi.fn().mockRejectedValue(
+        new Error('美团后台提示安全验证或操作频繁，需要人工在浏览器中完成验证 (RISK_VERIFICATION_REQUIRED)')
+      );
+
+      const taskPayload = { otaOrderId: 'OTA-RISK-1' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-risk-err',
+        businessId: 'OTA-RISK-1',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('RISK_VERIFICATION_REQUIRED');
+      expect(result.errorMessage).toContain('RISK_VERIFICATION_REQUIRED');
+    });
+
     it('should fail fast with ORDER_DETAIL_INVALID when required fields are missing', async () => {
       runner.detailResult = {
         otaOrderId: 'ORD-INVALID',

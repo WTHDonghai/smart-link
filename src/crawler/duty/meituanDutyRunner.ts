@@ -78,6 +78,24 @@ export function fmtDate(value: unknown): string {
 }
 
 /**
+ * 判断 URL 是否属于美团待处理订单列表接口（如 /orders/task/list, /orders/list 等）
+ */
+export function isMeituanListUrl(url: string): boolean {
+  const norm = String(url || '');
+  if (norm.includes('/orders/sensitiveData') || norm.includes('/confirmPhone')) {
+    return false;
+  }
+  return (
+    norm.includes('/orders/task/list') ||
+    norm.includes('/orders/list') ||
+    norm.includes('/orders/unhandled') ||
+    norm.includes('/api/mock/orders') ||
+    (norm.includes('/api/v1/ebooking/orders') &&
+      (norm.includes('/task/list') || norm.includes('/list') || norm.includes('scenario=')))
+  );
+}
+
+/**
  * 判断 URL 是否属于美团订单详情接口
  */
 export function isMeituanDetailUrl(url: string, targetOrderId?: string): boolean {
@@ -104,6 +122,55 @@ export function isMeituanDetailUrl(url: string, targetOrderId?: string): boolean
 export function isMeituanSensitiveUrl(url: string): boolean {
   const norm = String(url || '');
   return norm.includes('/sensitiveData') || norm.includes('/confirmPhone');
+}
+
+/**
+ * 检测文本是否命中美团安全验证/滑块/人机风控特征（纯纯函数）
+ */
+export function isMeituanRiskControlText(text: string): boolean {
+  if (!text) return false;
+  return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha/i.test(text);
+}
+
+/**
+ * 快速嗅探当前页面是否处于美团安全验证/滑块拦截态
+ */
+export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
+  if (!page || typeof page.evaluate !== 'function') return false;
+  try {
+    const risk = await page.evaluate(() => {
+      // 1. 检查 DOM 中是否挂载了人机/滑块/安全验证跨域 iframe 或容器（双保险）
+      const hasCaptchaEl = Boolean(
+        document.querySelector(
+          'iframe[src*="captcha"], iframe[src*="verify"], iframe[src*="yoda"], #yodaBox, .yoda-captcha, [data-test="captcha"]'
+        )
+      );
+      if (hasCaptchaEl) return true;
+
+      // 2. 嗅探页面主体、标题与 URL 文本是否包含风控关键词
+      const norm = (str: string | null | undefined) => String(str || '').replace(/\s+/g, ' ').trim();
+      const bodyText = norm(document.body ? document.body.innerText || document.body.textContent : '');
+      const title = norm(document.title);
+      const url = String(window.location.href || '');
+      const combined = `${title}\n${url}\n${bodyText.slice(0, 2000)}`;
+      return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha/i.test(combined);
+    });
+    return risk === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 拟真人随机微延迟函数，打破机械等长时钟
+ */
+export async function humanDelay(page: Page, minMs = 500, maxMs = 900): Promise<void> {
+  const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  if (page && typeof page.waitForTimeout === 'function') {
+    await page.waitForTimeout(delay);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 /**
@@ -472,6 +539,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   private session: BrowserSession | null = null;
   private running = false;
   private explicitTargetUrl?: string;
+  private lastListRefreshTime = 0;
 
   constructor(targetUrl?: string) {
     if (targetUrl && targetUrl.trim()) {
@@ -539,20 +607,65 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     }
   }
 
-  public async refreshOrderList(page: Page): Promise<void> {
+  /**
+   * 触发美团待处理订单列表刷新（具备 3 秒防抖保护，避免连续高频切 Tab 触发接口限流）
+   * 核心逻辑：优先定位并点击「待确认订单」Tab 触发列表接口调用；若未发现 Tab，寻找「查询」/「搜索」/「刷新」按钮
+   */
+  public async refreshOrderList(page: Page, force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.lastListRefreshTime < 3000) {
+      // 防抖：距离上次刷新不足 3 秒，复用当前列表并给予拟真停顿，避免触发频控
+      await humanDelay(page, 400, 700);
+      return;
+    }
+    this.lastListRefreshTime = now;
+
     try {
-      const refreshBtn = page.locator('button:has-text("刷新"), .refresh-btn, [data-test="refresh"]').first();
-      if (await refreshBtn.isVisible({ timeout: 2000 })) {
-        await visualClickLocator(page, refreshBtn, '刷新美团待处理订单');
-        await page.waitForTimeout(1500);
+      // 1. 优先定位并点击「待确认订单」/「待确认」Tab 按钮或菜单项
+      const pendingTabSelectors = [
+        '[role="tab"]:has-text("待确认订单")',
+        '[role="tab"]:has-text("待确认")',
+        '.mtd-tabs-item:has-text("待确认订单")',
+        '.mtd-tabs-item:has-text("待确认")',
+        'li.tab-item:has-text("待确认订单")',
+        'li.tab-item:has-text("待确认")',
+        'li:has-text("待确认订单")',
+        'li:has-text("待确认")',
+        'div.tab-item:has-text("待确认订单")',
+        'div.tab-item:has-text("待确认")',
+        'button:has-text("待确认订单")',
+        'button:has-text("待确认")',
+        'span:has-text("待确认订单")',
+        'span:has-text("待确认")',
+        'div:has-text("待确认订单")',
+        'div:has-text("待确认")',
+      ];
+
+      for (const selector of pendingTabSelectors) {
+        const tabLocator = page.locator(selector).first();
+        if (await tabLocator.isVisible({ timeout: 500 }).catch(() => false)) {
+          await visualClickLocator(page, tabLocator, '点击「待确认订单」Tab');
+          await humanDelay(page, 600, 1000);
+          return;
+        }
+      }
+
+      // 2. 次选：点击「查询」/「搜索」/「刷新」控制按钮
+      const queryBtn = page
+        .locator('button:has-text("查询"), button:has-text("搜索"), button:has-text("刷新"), .refresh-btn, [data-test="refresh"]')
+        .first();
+      if (await queryBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await visualClickLocator(page, queryBtn, '点击查询/刷新待处理订单');
+        await humanDelay(page, 600, 1000);
         return;
       }
-    } catch {
-      // 若无局部刷新按钮，执行页面轻量重载
+    } catch (err) {
+      console.warn('[MeituanDutyRunner] 交互点击待确认订单/刷新失败，回退重载:', err);
     }
 
+    // 3. 兜底容错：页面轻量重载
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1500);
+    await humanDelay(page, 1000, 1500);
   }
 
   /**
@@ -564,24 +677,21 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     }
 
     const page = this.session.page;
-    await updateVisualTrackerStatus(page, '📥 正在执行订单采集任务，刷新待处理列表...', 'action');
+
+    // 前置风控特征嗅探
+    if (await checkMeituanPageRisk(page)) {
+      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+      throw new Error('美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证 (RISK_VERIFICATION_REQUIRED)');
+    }
+
+    await updateVisualTrackerStatus(page, '📥 正在执行订单采集任务，点击「待确认订单」Tab 刷新列表...', 'action');
 
     // 在单次触发刷新动作时，挂载本次专属的订单列表响应监听
     const listResponsePromise = typeof page.waitForResponse === 'function'
       ? page
           .waitForResponse(
-            (res) => {
-              const url = res.url();
-              return (
-                (url.includes('/orders/task/list') ||
-                  url.includes('/orders/list') ||
-                  url.includes('/orders/unhandled') ||
-                  url.includes('/api/mock/orders') ||
-                  url.includes('/api/v1/ebooking/orders')) &&
-                res.status() === 200
-              );
-            },
-            { timeout: 3000 }
+            (res) => isMeituanListUrl(res.url()) && res.status() === 200,
+            { timeout: 5000 }
           )
           .then(async (res) => {
             try {
@@ -601,7 +711,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           .catch(() => [] as DutyUnhandledOrderSummary[])
       : Promise.resolve([] as DutyUnhandledOrderSummary[]);
 
-    // 触发刷新
+    // 触发刷新：执行「待确认订单」Tab 点击
     await this.refreshOrderList(page);
 
     // 优先读取本次刷新对应的网络响应
@@ -665,24 +775,14 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     }
 
     const page = this.session.page;
-    await updateVisualTrackerStatus(page, `🔍 正在查看美团订单「${otaOrderId}」详情...`, 'action');
 
-    // 1. 优先使用搜索框定位目标订单
-    try {
-      const searchInput = page.locator(
-        'input[placeholder*="订单"], input[placeholder*="单号"], input.order-search-input, [data-test="order-search"]'
-      ).first();
-      if (await searchInput.isVisible({ timeout: 1000 })) {
-        await searchInput.fill(otaOrderId);
-        const searchBtn = page.locator('button:has-text("查询"), button:has-text("搜索")').first();
-        if (await searchBtn.isVisible({ timeout: 1000 })) {
-          await visualClickLocator(page, searchBtn, '查询订单');
-          await page.waitForTimeout(800);
-        }
-      }
-    } catch {
-      // 容错搜索交互
+    // 1. 前置风控特征嗅探：若页面已弹出安全验证/滑块，立即熔断阻断
+    if (await checkMeituanPageRisk(page)) {
+      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+      throw new Error(`美团后台提示安全验证或操作频繁，需要人工在浏览器中完成验证 (RISK_VERIFICATION_REQUIRED)`);
     }
+
+    await updateVisualTrackerStatus(page, `🔍 正在查看美团订单「${otaOrderId}」详情...`, 'action');
 
     // 2. 挂载本次查看详情动作专属的单次/流式网络响应监听（随用随销，绝无内存泄露）
     const capturedRef: {
@@ -755,18 +855,22 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       : Promise.resolve(null);
 
     try {
-      // 3. 定位包含订单号的列表行并点击“详情 / 查看”按钮
+      // 3. 拟真直达：直接定位订单列表项（Item / Row）并点击，杜绝机器搜索框输入特征
       let clicked = false;
       try {
         const orderRow = page.locator(
-          `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"]`
+          `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"], .list-item-wrap:has-text("${otaOrderId}"), .order-card:has-text("${otaOrderId}")`
         ).first();
         if (await orderRow.isVisible({ timeout: 1500 })) {
           const detailBtn = orderRow.locator(
             'button:has-text("详情"), a:has-text("详情"), button:has-text("查看"), a:has-text("查看"), .detail-btn, [data-test="order-detail"]'
           ).first();
-          if (await detailBtn.isVisible({ timeout: 1200 })) {
+          if (await detailBtn.isVisible({ timeout: 1000 })) {
             await visualClickLocator(page, detailBtn, `点击订单「${otaOrderId}」详情`);
+            clicked = true;
+          } else {
+            // 直接点击订单卡片行自身触发展开详情
+            await visualClickLocator(page, orderRow, `点击订单「${otaOrderId}」卡片`);
             clicked = true;
           }
         }
@@ -777,7 +881,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       if (!clicked) {
         try {
           const directBtn = page.locator(
-            `[data-order-id="${otaOrderId}"] .detail-btn, button[data-order-id="${otaOrderId}"]`
+            `[data-order-id="${otaOrderId}"] .detail-btn, button[data-order-id="${otaOrderId}"], [data-order-id="${otaOrderId}"]`
           ).first();
           if (await directBtn.isVisible({ timeout: 1000 })) {
             await visualClickLocator(page, directBtn, `点击订单「${otaOrderId}」详情`);
@@ -788,13 +892,19 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         }
       }
 
-      // 4. 等待详情弹窗 / 抽屉可见
-      await page.waitForTimeout(600);
+      // 4. 等待详情弹窗 / 抽屉可见并加入拟真人微延迟
+      await humanDelay(page, 500, 800);
       const detailModal = page.locator(
         '.order-detail-modal, .ant-modal, .el-dialog, [role="dialog"], .order-detail-drawer, .order-detail-container, .modal-content'
       ).first();
 
       await detailModal.isVisible({ timeout: 2000 }).catch(() => false);
+
+      // 二次风控特征检测
+      if (await checkMeituanPageRisk(page)) {
+        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+        throw new Error(`美团后台提示安全验证或操作频繁，需要人工在浏览器中完成验证 (RISK_VERIFICATION_REQUIRED)`);
+      }
 
       // 5. 尝试触发姓名脱敏解除（“查看姓名”/“获取姓名”）
       try {
@@ -807,7 +917,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
         if (await revealNameBtn.isVisible({ timeout: 1200 })) {
           await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
-          await page.waitForTimeout(400);
+          await humanDelay(page, 400, 700);
 
           // 检查并点击二次确认弹窗（如“我已知晓”、“确认”、“确定”、“继续查看”）
           const confirmDialogBtn = page.locator(
@@ -819,39 +929,47 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
           if (await confirmDialogBtn.isVisible({ timeout: 1000 })) {
             await visualClickLocator(page, confirmDialogBtn, '确认查看客人信息');
-            await page.waitForTimeout(600);
+            await humanDelay(page, 500, 800);
           }
         }
       } catch {
         // 容错脱敏解除交互
       }
 
-      // 尝试触发电话脱敏解除（“查看电话”/“获取电话”）
-      try {
-        const revealPhoneBtn = page.locator(
-          'button:has-text("查看电话"), a:has-text("查看电话"), ' +
-          'button:has-text("获取电话"), a:has-text("获取电话"), ' +
-          'button:has-text("查看手机"), a:has-text("查看手机"), ' +
-          'button:has-text("查看完整号码"), a:has-text("查看完整号码")'
-        ).first();
+      // 6. 智能电话脱敏控制 (Smart Skip Phone Privacy)：
+      // 美团在查看姓名解密时通常已同时返回真实手机号；若已从接口或当前敏感数据中获取到真实手机号，严禁再次点击「查看电话」二次弹窗，彻底规避 1 秒内连续发起双重敏感解密的极高危风控探针！
+      const resolvedPhone = Boolean(
+        (capturedRef.sensitive?.guestMobile && !capturedRef.sensitive.guestMobile.includes('*')) ||
+        (capturedRef.detail?.guestMobile && !capturedRef.detail.guestMobile.includes('*'))
+      );
 
-        if (await revealPhoneBtn.isVisible({ timeout: 1000 })) {
-          await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
-          await page.waitForTimeout(400);
-
-          const confirmPhoneDialogBtn = page.locator(
-            '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
-            '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
-            '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定")'
+      if (!resolvedPhone) {
+        try {
+          const revealPhoneBtn = page.locator(
+            'button:has-text("查看电话"), a:has-text("查看电话"), ' +
+            'button:has-text("获取电话"), a:has-text("获取电话"), ' +
+            'button:has-text("查看手机"), a:has-text("查看手机"), ' +
+            'button:has-text("查看完整号码"), a:has-text("查看完整号码")'
           ).first();
 
-          if (await confirmPhoneDialogBtn.isVisible({ timeout: 800 })) {
-            await visualClickLocator(page, confirmPhoneDialogBtn, '确认查看电话');
-            await page.waitForTimeout(400);
+          if (await revealPhoneBtn.isVisible({ timeout: 800 })) {
+            await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
+            await humanDelay(page, 400, 700);
+
+            const confirmPhoneDialogBtn = page.locator(
+              '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
+              '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
+              '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定")'
+            ).first();
+
+            if (await confirmPhoneDialogBtn.isVisible({ timeout: 800 })) {
+              await visualClickLocator(page, confirmPhoneDialogBtn, '确认查看电话');
+              await humanDelay(page, 400, 600);
+            }
           }
+        } catch {
+          // 容错电话脱敏解除交互
         }
-      } catch {
-        // 容错电话脱敏解除交互
       }
 
       // 6. 从页面 DOM 元素中提取真实字段（支持主 Frame 与子 Frame 提取）
