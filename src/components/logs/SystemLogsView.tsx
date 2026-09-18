@@ -9,6 +9,7 @@ import {
   clearAllLogs,
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
+import { syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
 import { 
   Terminal, 
   Search, 
@@ -127,6 +128,17 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       (log.apiResponse !== undefined && JSON.stringify(log.apiResponse).toLowerCase().includes(filterSearch.toLowerCase()));
     return matchesLevel && matchesModule && matchesSearch;
   });
+
+  // 挂载时立即拉取后台与主进程的最新值守/调度运行日志，并在视图激活期间保持每 2.5 秒轻量同步
+  useEffect(() => {
+    void dispatch(syncDutyStatusThunk());
+
+    const timer = setInterval(() => {
+      void dispatch(syncDutyStatusThunk());
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [dispatch]);
 
   // 当开启自动滚动且新日志到达时，自动保持置顶于最新的日志
   useEffect(() => {

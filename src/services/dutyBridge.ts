@@ -27,6 +27,7 @@ export interface ElectronDutyApi {
   }>;
   syncTokens?(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }>;
   clearTokens?(): Promise<{ success: boolean; message?: string }>;
+  onLog?(callback: (entry: SystemLogEntry) => void): () => void;
 }
 
 interface WindowWithElectronDuty {
@@ -156,3 +157,17 @@ export async function queryDutyStatus(since?: number): Promise<{
   // 2. 默认走本地 HTTP 服务
   return await fetchDutyStatusHttp(since);
 }
+
+/**
+ * 订阅后台全链路值守与调度日志流 (抹平 Electron IPC 与 Web 宿主差异)
+ */
+export function subscribeDutyLogs(callback: (entry: SystemLogEntry) => void): () => void {
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as WindowWithElectronDuty;
+    if (typeof win.electron?.duty?.onLog === 'function') {
+      return win.electron.duty.onLog(callback);
+    }
+  }
+  return () => {};
+}
+

@@ -17,6 +17,164 @@ export function getDefaultMeituanOrderUrl(): string {
 }
 
 /**
+ * 高鲁棒性日期格式化函数（纯函数，支持各种日期字符串、短日期与时间戳毫秒数）
+ */
+export function fmtDate(value: unknown): string {
+  if (value == null || value === '') return '';
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    // 1. 标准年月日：2026-09-17, 2026/09/17, 2026.09.17, 2026年09月17日
+    const fullMatch = trimmed.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
+    if (fullMatch) {
+      const y = fullMatch[1];
+      const m = fullMatch[2].padStart(2, '0');
+      const d = fullMatch[3].padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    // 2. 紧凑年月日：20260917
+    const compactMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compactMatch) {
+      return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+    }
+
+    // 3. 无年份短日期：09-17, 09/17, 09.17, 09月17日 -> 自动补充当前年份
+    const shortMatch = trimmed.match(/^(\d{1,2})[-/.月](\d{1,2})(?:日)?/);
+    if (shortMatch) {
+      const currentYear = new Date().getFullYear();
+      const m = shortMatch[1].padStart(2, '0');
+      const d = shortMatch[2].padStart(2, '0');
+      return `${currentYear}-${m}-${d}`;
+    }
+
+    // 4. 若为纯数字字符串，按时间戳解析
+    if (/^\d{10,13}$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      const date = new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
+      if (!Number.isNaN(date.getTime())) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    }
+  }
+
+  // 5. 数值时间戳（秒或毫秒）
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    const date = new Date(value < 10000000000 ? value * 1000 : value);
+    if (!Number.isNaN(date.getTime())) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  return '';
+}
+
+/**
+ * 判断 URL 是否属于美团订单详情接口
+ */
+export function isMeituanDetailUrl(url: string, targetOrderId?: string): boolean {
+  const norm = String(url || '');
+  if (norm.includes('/task/list') || norm.includes('/sensitiveData') || norm.includes('/confirmPhone')) {
+    return false;
+  }
+  if (targetOrderId && (norm.includes(`/orders/${targetOrderId}`) || norm.includes(`orderId=${targetOrderId}`))) {
+    return true;
+  }
+  return (
+    norm.includes('/api/v1/ebooking/orders/') ||
+    norm.includes('/orders/detail') ||
+    norm.includes('/ebooking/orders/') ||
+    norm.includes('/ebooking/order/') ||
+    norm.includes('/detail') ||
+    norm.includes('/api/mock/orders')
+  );
+}
+
+/**
+ * 判断 URL 是否属于美团敏感数据解密接口（如查看姓名、电话）
+ */
+export function isMeituanSensitiveUrl(url: string): boolean {
+  const norm = String(url || '');
+  return norm.includes('/sensitiveData') || norm.includes('/confirmPhone');
+}
+
+/**
+ * 从美团敏感数据解密接口（/sensitiveData/ 或 /confirmPhone）响应报文中解析真实客人姓名与手机号
+ */
+export function extractMeituanSensitiveDataFromPayload(
+  payload: unknown
+): { guestName?: string; guestMobile?: string } | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const root = payload as Record<string, unknown>;
+  const data = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
+
+  let guestName = '';
+  let guestMobile = '';
+
+  const isPlainName = (name: string): boolean => {
+    const t = name.trim();
+    if (!t || t.includes('*')) return false;
+    return !/^(查看姓名|获取姓名|显示姓名|解密|未知|无|暂无|点击查看|联系客人|平台保护|隐私保护)$/.test(t);
+  };
+
+  const isPlainPhone = (phone: string): boolean => {
+    const t = phone.trim();
+    if (!t || t.includes('*')) return false;
+    return /^1[3-9]\d{9}(#\d{1,8})?$/.test(t);
+  };
+
+  // 1. 尝试从 sensitiveDataList 中提取
+  const rawLists: unknown[] = [];
+  if (Array.isArray(data.sensitiveDataList)) rawLists.push(...data.sensitiveDataList);
+  if (data.data && typeof data.data === 'object') {
+    const nestedData = data.data as Record<string, unknown>;
+    if (Array.isArray(nestedData.sensitiveDataList)) rawLists.push(...nestedData.sensitiveDataList);
+  }
+  if (Array.isArray(root.sensitiveDataList)) rawLists.push(...root.sensitiveDataList);
+
+  for (const item of rawLists) {
+    if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>;
+      const infos = Array.isArray(rec.guestInfos) ? rec.guestInfos : [];
+      for (const info of infos) {
+        if (info && typeof info === 'object') {
+          const g = info as Record<string, unknown>;
+          const n = String(g.name || '').trim();
+          const p = String(g.phone || g.mobile || '').trim();
+          if (n && isPlainName(n) && !guestName) guestName = n;
+          if (p && isPlainPhone(p) && !guestMobile) guestMobile = p;
+        }
+      }
+    }
+  }
+
+  // 2. 尝试从 confirmPhone 或顶层直接属性提取
+  const directPhone = String(data.phone || data.mobile || root.phone || root.mobile || '').trim();
+  if (directPhone && isPlainPhone(directPhone) && !guestMobile) {
+    guestMobile = directPhone;
+  }
+
+  const directName = String(data.name || data.guestName || root.name || root.guestName || '').trim();
+  if (directName && isPlainName(directName) && !guestName) {
+    guestName = directName;
+  }
+
+  if (!guestName && !guestMobile) return null;
+  return {
+    guestName: guestName || undefined,
+    guestMobile: guestMobile || undefined,
+  };
+}
+
+/**
  * 从美团订单列表 API 报文中解析出待处理订单概要列表（纯纯函数，绝无假数据兜底）
  */
 export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDutyOrder[] {
@@ -43,8 +201,8 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
     const orderId = String(rec.orderId || rec.orderID || rec.otaOrderId || rec.orderNo || '').trim();
     if (!orderId) continue;
 
-    const checkInDate = String(rec.checkInDateString || rec.checkInDate || rec.arrival || '').slice(0, 10);
-    const checkOutDate = String(rec.checkOutDateString || rec.checkOutDate || rec.departure || '').slice(0, 10);
+    const checkInDate = fmtDate(rec.checkInDateString || rec.checkInDate || rec.arrival);
+    const checkOutDate = fmtDate(rec.checkOutDateString || rec.checkOutDate || rec.departure);
 
     let nights = Number(rec.nights || rec.nightCount || 0);
     if (!nights && checkInDate && checkOutDate) {
@@ -98,6 +256,7 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
 
 /**
  * 从美团订单详情响应报文中解析出高精度结构化字段（绝不兜底假数据）
+ * 兼容多层嵌套结构（如 data.orderDetail、data.order、data）、时间戳日期与间夜价格明细
  */
 export function extractMeituanOrderDetailFromPayload(
   payload: unknown,
@@ -107,46 +266,188 @@ export function extractMeituanOrderDetailFromPayload(
   const root = payload as Record<string, unknown>;
   const data = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
 
+  // 解构核心详情对象（可能位于 data.orderDetail 或 data.order 或顶层 data）
+  const orderObj = (
+    (data.orderDetail && typeof data.orderDetail === 'object' ? data.orderDetail : null) ||
+    (data.order && typeof data.order === 'object' ? data.order : null) ||
+    (root.orderDetail && typeof root.orderDetail === 'object' ? root.orderDetail : null) ||
+    data
+  ) as Record<string, unknown>;
+
   const orderId = String(
-    data.orderId || data.orderID || data.otaOrderId || data.orderNo || root.orderId || ''
+    orderObj.orderId ||
+      orderObj.orderID ||
+      orderObj.otaOrderId ||
+      orderObj.orderNo ||
+      data.orderId ||
+      data.orderID ||
+      data.otaOrderId ||
+      root.orderId ||
+      ''
   ).trim();
 
   if (targetOrderId && orderId && orderId !== targetOrderId) {
     return null;
   }
 
-  const checkInDate = String(data.checkInDateString || data.checkInDate || data.arrival || '').slice(0, 10);
-  const checkOutDate = String(data.checkOutDateString || data.checkOutDate || data.departure || '').slice(0, 10);
+  // 解析入住与离店日期（优先取入离日期字段，再取时间戳或通用别名，最后从 roomNightPriceModels 提取）
+  let checkInDate = fmtDate(
+    orderObj.checkInDateString ||
+      orderObj.checkInDate ||
+      orderObj.arrival ||
+      orderObj.inDate ||
+      orderObj.startDate ||
+      orderObj.bizDay ||
+      data.checkInDateString ||
+      data.checkInDate ||
+      data.arrival
+  );
 
-  let nights = Number(data.nights || data.nightCount || 0);
+  let checkOutDate = fmtDate(
+    orderObj.checkOutDateString ||
+      orderObj.checkOutDate ||
+      orderObj.departure ||
+      orderObj.outDate ||
+      orderObj.endDate ||
+      data.checkOutDateString ||
+      data.checkOutDate ||
+      data.departure
+  );
+
+  // 若顶层未直接提供入住/离店日期，尝试从间夜价格明细中推导
+  if (!checkInDate || !checkOutDate) {
+    const priceList = Array.isArray(orderObj.roomNightPriceModels)
+      ? orderObj.roomNightPriceModels
+      : Array.isArray(orderObj.priceInfoConstitute)
+      ? orderObj.priceInfoConstitute
+      : Array.isArray(orderObj.priceInfo)
+      ? orderObj.priceInfo
+      : Array.isArray(data.roomNightPriceModels)
+      ? data.roomNightPriceModels
+      : [];
+
+    if (priceList.length > 0) {
+      const dates: string[] = [];
+      for (const item of priceList) {
+        if (item && typeof item === 'object') {
+          const itemRec = item as Record<string, unknown>;
+          const d = fmtDate(itemRec.dateStr || itemRec.dateString || itemRec.bizDay || itemRec.date);
+          if (d && !dates.includes(d)) dates.push(d);
+        }
+      }
+      dates.sort();
+      if (dates.length > 0) {
+        if (!checkInDate) checkInDate = dates[0];
+        if (!checkOutDate) {
+          const lastDate = new Date(dates[dates.length - 1]);
+          if (!Number.isNaN(lastDate.getTime())) {
+            lastDate.setDate(lastDate.getDate() + 1);
+            const y = lastDate.getFullYear();
+            const m = String(lastDate.getMonth() + 1).padStart(2, '0');
+            const d = String(lastDate.getDate()).padStart(2, '0');
+            checkOutDate = `${y}-${m}-${d}`;
+          }
+        }
+      }
+    }
+  }
+
+  let nights = Number(
+    orderObj.nights || orderObj.nightCount || orderObj.liveDays || data.nights || data.nightCount || 0
+  );
   if (!nights && checkInDate && checkOutDate) {
     const diff = Math.round((Date.parse(checkOutDate) - Date.parse(checkInDate)) / 86400000);
     nights = diff > 0 ? diff : 1;
   }
+  if (!nights) nights = 1;
 
-  const rawTotal = Number(data.totalFee ?? data.price ?? data.totalPrice ?? 0);
-  const totalPrice = data.totalFee != null || rawTotal > 1000 ? rawTotal / 100 : rawTotal;
+  const rawTotal = Number(
+    orderObj.totalFee ??
+      orderObj.price ??
+      orderObj.totalPrice ??
+      data.totalFee ??
+      data.price ??
+      data.totalPrice ??
+      0
+  );
+  const totalPrice =
+    orderObj.totalFee != null || data.totalFee != null || rawTotal > 1000
+      ? rawTotal / 100
+      : rawTotal;
 
   let guestName = '';
   let guestMobile = '';
-  const rawContacts = Array.isArray(data.contacts) ? data.contacts : Array.isArray(data.guests) ? data.guests : [];
-  if (rawContacts.length > 0 && rawContacts[0] && typeof rawContacts[0] === 'object') {
-    const c = rawContacts[0] as Record<string, unknown>;
-    guestName = String(c.name || '').trim();
-    guestMobile = String(c.phone || c.mobile || '').trim();
+  const rawContacts = Array.isArray(orderObj.contacts)
+    ? orderObj.contacts
+    : Array.isArray(orderObj.guests)
+    ? orderObj.guests
+    : Array.isArray(data.contacts)
+    ? data.contacts
+    : Array.isArray(data.guests)
+    ? data.guests
+    : [];
+
+  for (const c of rawContacts) {
+    if (c && typeof c === 'object') {
+      const cRec = c as Record<string, unknown>;
+      const n = String(cRec.name || '').trim();
+      const p = String(cRec.phone || cRec.mobile || '').trim();
+      if (n && !guestName) guestName = n;
+      if (p && !guestMobile) guestMobile = p;
+    }
   }
-  if (!guestName && (data.guestName || data.customerName || data.contactName)) {
-    guestName = String(data.guestName || data.customerName || data.contactName || '').trim();
+  if (!guestName) {
+    guestName = String(
+      orderObj.guestName ||
+        orderObj.customerName ||
+        orderObj.contactName ||
+        data.guestName ||
+        data.customerName ||
+        data.contactName ||
+        ''
+    ).trim();
   }
-  if (!guestMobile && (data.guestMobile || data.customerMobile || data.contactPhone)) {
-    guestMobile = String(data.guestMobile || data.customerMobile || data.contactPhone || '').trim();
+  if (!guestMobile) {
+    guestMobile = String(
+      orderObj.guestMobile ||
+        orderObj.customerMobile ||
+        orderObj.contactPhone ||
+        data.guestMobile ||
+        data.customerMobile ||
+        data.contactPhone ||
+        ''
+    ).trim();
   }
 
-  const roomTypeName = String(data.roomName || data.roomTypeName || data.roomTitle || '').trim();
-  const ratePlanName = String(data.ratePlanName || data.rateCode || data.productName || '').trim();
-  const quantity = Number(data.roomCount || data.quantity || 1);
-  const unitId = String(data.poiId || data.hotelId || '').trim() || undefined;
-  const unitName = String(data.poiName || data.hotelName || '').trim() || undefined;
+  const roomTypeName = String(
+    orderObj.roomName ||
+      orderObj.roomTypeName ||
+      orderObj.roomTitle ||
+      data.roomName ||
+      data.roomTypeName ||
+      data.roomTitle ||
+      ''
+  ).trim();
+
+  const ratePlanName = String(
+    orderObj.ratePlanName ||
+      orderObj.rateCode ||
+      orderObj.productName ||
+      data.ratePlanName ||
+      data.rateCode ||
+      data.productName ||
+      ''
+  ).trim();
+
+  const quantity = Number(
+    orderObj.roomCount || orderObj.quantity || data.roomCount || data.quantity || 1
+  );
+  const unitId =
+    String(orderObj.poiId || orderObj.hotelId || data.poiId || data.hotelId || '').trim() ||
+    undefined;
+  const unitName =
+    String(orderObj.poiName || orderObj.hotelName || data.poiName || data.hotelName || '').trim() ||
+    undefined;
 
   return {
     otaOrderId: orderId || targetOrderId,
@@ -162,7 +463,7 @@ export function extractMeituanOrderDetailFromPayload(
     nights,
     quantity,
     totalPrice,
-    raw: data,
+    raw: (orderObj || data) as Record<string, unknown>,
   };
 }
 
@@ -383,18 +684,63 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       // 容错搜索交互
     }
 
-    // 2. 挂载本次点击详情动作专属的单次网络响应监听
+    // 2. 挂载本次查看详情动作专属的单次/流式网络响应监听（随用随销，绝无内存泄露）
+    const capturedRef: {
+      detail: Partial<ExtractedOrderDetail> | null;
+      sensitive: { guestName?: string; guestMobile?: string } | null;
+    } = {
+      detail: null,
+      sensitive: null,
+    };
+
+    const onResponse = async (res: { url: () => string; status: () => number; text: () => Promise<string> }) => {
+      try {
+        const url = res.url();
+        if (res.status() === 200) {
+          if (isMeituanDetailUrl(url, otaOrderId)) {
+            const text = await res.text().catch(() => '');
+            if (text) {
+              const parsed = JSON.parse(text);
+              const parsedDetail = extractMeituanOrderDetailFromPayload(parsed, otaOrderId);
+              if (parsedDetail) {
+                capturedRef.detail = parsedDetail;
+              }
+            }
+          } else if (isMeituanSensitiveUrl(url)) {
+            const text = await res.text().catch(() => '');
+            if (text) {
+              const parsed = JSON.parse(text);
+              const sensitive = extractMeituanSensitiveDataFromPayload(parsed);
+              if (sensitive) {
+                capturedRef.sensitive = {
+                  guestName: sensitive.guestName || capturedRef.sensitive?.guestName,
+                  guestMobile: sensitive.guestMobile || capturedRef.sensitive?.guestMobile,
+                };
+              }
+            }
+          }
+        }
+      } catch {
+        // 容错网络响应解析异常
+      }
+    };
+
+    const onFn = (page as { on?: (event: string, handler: typeof onResponse) => void }).on;
+    const offFn = (page as { off?: (event: string, handler: typeof onResponse) => void }).off;
+    const removeListenerFn = (
+      page as { removeListener?: (event: string, handler: typeof onResponse) => void }
+    ).removeListener;
+
+    if (typeof onFn === 'function') {
+      onFn.call(page, 'response', onResponse);
+    }
+
+    // 兼容 waitForResponse
     const detailResponsePromise = typeof page.waitForResponse === 'function'
       ? page
           .waitForResponse(
-            (res) => {
-              const url = res.url();
-              return (
-                (url.includes('/detail') || url.includes('/orders/detail') || url.includes('/ebooking/order/')) &&
-                res.status() === 200
-              );
-            },
-            { timeout: 3000 }
+            (res) => isMeituanDetailUrl(res.url(), otaOrderId) && res.status() === 200,
+            { timeout: 8000 }
           )
           .then(async (res) => {
             try {
@@ -408,238 +754,390 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           .catch(() => null)
       : Promise.resolve(null);
 
-    // 3. 定位包含订单号的列表行并点击“详情 / 查看”按钮
-    let clicked = false;
     try {
-      const orderRow = page.locator(
-        `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"]`
-      ).first();
-      if (await orderRow.isVisible({ timeout: 1500 })) {
-        const detailBtn = orderRow.locator(
-          'button:has-text("详情"), a:has-text("详情"), button:has-text("查看"), a:has-text("查看"), .detail-btn, [data-test="order-detail"]'
-        ).first();
-        if (await detailBtn.isVisible({ timeout: 1200 })) {
-          await visualClickLocator(page, detailBtn, `点击订单「${otaOrderId}」详情`);
-          clicked = true;
-        }
-      }
-    } catch {
-      // 容错定位
-    }
-
-    if (!clicked) {
+      // 3. 定位包含订单号的列表行并点击“详情 / 查看”按钮
+      let clicked = false;
       try {
-        const directBtn = page.locator(`[data-order-id="${otaOrderId}"] .detail-btn, button[data-order-id="${otaOrderId}"]`).first();
-        if (await directBtn.isVisible({ timeout: 1000 })) {
-          await visualClickLocator(page, directBtn, `点击订单「${otaOrderId}」详情`);
-          clicked = true;
+        const orderRow = page.locator(
+          `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"]`
+        ).first();
+        if (await orderRow.isVisible({ timeout: 1500 })) {
+          const detailBtn = orderRow.locator(
+            'button:has-text("详情"), a:has-text("详情"), button:has-text("查看"), a:has-text("查看"), .detail-btn, [data-test="order-detail"]'
+          ).first();
+          if (await detailBtn.isVisible({ timeout: 1200 })) {
+            await visualClickLocator(page, detailBtn, `点击订单「${otaOrderId}」详情`);
+            clicked = true;
+          }
         }
       } catch {
-        // 容错
+        // 容错定位
       }
-    }
 
-    // 4. 等待详情弹窗 / 抽屉可见并从中解析提取字段
-    await page.waitForTimeout(600);
-    const detailModal = page.locator(
-      '.order-detail-modal, .ant-modal, .el-dialog, [role="dialog"], .order-detail-drawer, .order-detail-container, .modal-content'
-    ).first();
-
-    await detailModal.isVisible({ timeout: 2000 }).catch(() => false);
-
-    // 从页面 DOM 元素中提取真实字段
-    const domExtracted = await page.evaluate(() => {
-      const modalEl = document.querySelector(
-        '.order-detail-modal, .ant-modal, .el-dialog, [role="dialog"], .order-detail-drawer, .order-detail-container, .modal-content'
-      );
-      const rootEl = modalEl || document.body;
-
-      const findTextAfterLabel = (keywords: string[]): string => {
-        const allTextNodes: string[] = [];
-        const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
-        let node: Node | null;
-        while ((node = walker.nextNode())) {
-          const val = node.nodeValue?.trim();
-          if (val) allTextNodes.push(val);
+      if (!clicked) {
+        try {
+          const directBtn = page.locator(
+            `[data-order-id="${otaOrderId}"] .detail-btn, button[data-order-id="${otaOrderId}"]`
+          ).first();
+          if (await directBtn.isVisible({ timeout: 1000 })) {
+            await visualClickLocator(page, directBtn, `点击订单「${otaOrderId}」详情`);
+            clicked = true;
+          }
+        } catch {
+          // 容错
         }
+      }
 
-        for (let i = 0; i < allTextNodes.length; i++) {
-          const t = allTextNodes[i];
-          for (const kw of keywords) {
-            if (t.includes(kw)) {
-              const colonIdx = t.indexOf('：') !== -1 ? t.indexOf('：') : t.indexOf(':');
-              if (colonIdx !== -1 && colonIdx < t.length - 1) {
-                const sub = t.slice(colonIdx + 1).trim();
-                if (sub) return sub;
-              }
-              if (i + 1 < allTextNodes.length) {
-                const nextVal = allTextNodes[i + 1].trim();
-                if (nextVal && !keywords.some((k) => nextVal.includes(k))) {
-                  return nextVal;
+      // 4. 等待详情弹窗 / 抽屉可见
+      await page.waitForTimeout(600);
+      const detailModal = page.locator(
+        '.order-detail-modal, .ant-modal, .el-dialog, [role="dialog"], .order-detail-drawer, .order-detail-container, .modal-content'
+      ).first();
+
+      await detailModal.isVisible({ timeout: 2000 }).catch(() => false);
+
+      // 5. 尝试触发姓名脱敏解除（“查看姓名”/“获取姓名”）
+      try {
+        const revealNameBtn = page.locator(
+          'button:has-text("查看姓名"), a:has-text("查看姓名"), ' +
+          'button:has-text("获取姓名"), a:has-text("获取姓名"), ' +
+          'button:has-text("显示姓名"), a:has-text("显示姓名"), ' +
+          '[data-test="reveal-guest-name"], .reveal-name-btn'
+        ).first();
+
+        if (await revealNameBtn.isVisible({ timeout: 1200 })) {
+          await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
+          await page.waitForTimeout(400);
+
+          // 检查并点击二次确认弹窗（如“我已知晓”、“确认”、“确定”、“继续查看”）
+          const confirmDialogBtn = page.locator(
+            '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), .ant-modal button:has-text("确认"), ' +
+            '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), .el-dialog button:has-text("确认"), ' +
+            '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), [role="dialog"] button:has-text("确认"), ' +
+            'button:has-text("我知道了"), button:has-text("继续查看")'
+          ).first();
+
+          if (await confirmDialogBtn.isVisible({ timeout: 1000 })) {
+            await visualClickLocator(page, confirmDialogBtn, '确认查看客人信息');
+            await page.waitForTimeout(600);
+          }
+        }
+      } catch {
+        // 容错脱敏解除交互
+      }
+
+      // 尝试触发电话脱敏解除（“查看电话”/“获取电话”）
+      try {
+        const revealPhoneBtn = page.locator(
+          'button:has-text("查看电话"), a:has-text("查看电话"), ' +
+          'button:has-text("获取电话"), a:has-text("获取电话"), ' +
+          'button:has-text("查看手机"), a:has-text("查看手机"), ' +
+          'button:has-text("查看完整号码"), a:has-text("查看完整号码")'
+        ).first();
+
+        if (await revealPhoneBtn.isVisible({ timeout: 1000 })) {
+          await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
+          await page.waitForTimeout(400);
+
+          const confirmPhoneDialogBtn = page.locator(
+            '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
+            '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
+            '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定")'
+          ).first();
+
+          if (await confirmPhoneDialogBtn.isVisible({ timeout: 800 })) {
+            await visualClickLocator(page, confirmPhoneDialogBtn, '确认查看电话');
+            await page.waitForTimeout(400);
+          }
+        }
+      } catch {
+        // 容错电话脱敏解除交互
+      }
+
+      // 6. 从页面 DOM 元素中提取真实字段（支持主 Frame 与子 Frame 提取）
+      const extractFromContext = () => {
+        const modalEl = document.querySelector(
+          '.order-detail-modal, .ant-modal, .el-dialog, [role="dialog"], .order-detail-drawer, .order-detail-container, .modal-content'
+        );
+        const rootEl = modalEl || document.body;
+
+        const findTextAfterLabel = (keywords: string[]): string => {
+          const allTextNodes: string[] = [];
+          const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            const val = node.nodeValue?.trim();
+            if (val) allTextNodes.push(val);
+          }
+
+          for (let i = 0; i < allTextNodes.length; i++) {
+            const t = allTextNodes[i];
+            for (const kw of keywords) {
+              if (t.includes(kw)) {
+                const colonIdx = t.indexOf('：') !== -1 ? t.indexOf('：') : t.indexOf(':');
+                if (colonIdx !== -1 && colonIdx < t.length - 1) {
+                  const sub = t.slice(colonIdx + 1).trim();
+                  if (sub) return sub;
+                }
+                if (i + 1 < allTextNodes.length) {
+                  const nextVal = allTextNodes[i + 1].trim();
+                  if (nextVal && !keywords.some((k) => nextVal.includes(k))) {
+                    return nextVal;
+                  }
                 }
               }
             }
           }
+          return '';
+        };
+
+        // 提取入住人
+        let guestName = '';
+        const guestEl = rootEl.querySelector('[data-field="guestName"], .guest-name, .contact-name, .customer-name');
+        if (guestEl && guestEl.textContent?.trim()) {
+          guestName = guestEl.textContent.trim();
+        } else {
+          guestName = findTextAfterLabel(['入住人', '客人姓名', '顾客姓名', '联系人']);
         }
-        return '';
+        if (/^(查看姓名|获取姓名|显示姓名|点击查看|解密|未知|暂无)$/.test(guestName)) {
+          guestName = '';
+        }
+
+        // 提取手机号
+        let guestMobile = '';
+        const mobileEl = rootEl.querySelector('[data-field="guestMobile"], .guest-phone, .contact-phone, .customer-mobile');
+        if (mobileEl && mobileEl.textContent?.trim()) {
+          guestMobile = mobileEl.textContent.trim();
+        } else {
+          const rawMobile = findTextAfterLabel(['手机号', '联系电话', '客人电话']);
+          const match = rawMobile.match(/1[3-9]\d{9}/);
+          if (match) guestMobile = match[0];
+        }
+
+        // 提取房型
+        let roomTypeName = '';
+        const roomEl = rootEl.querySelector('[data-field="roomTypeName"], .room-type-name, .room-name');
+        if (roomEl && roomEl.textContent?.trim()) {
+          roomTypeName = roomEl.textContent.trim();
+        } else {
+          roomTypeName = findTextAfterLabel(['预订房型', '房型名称', '房型']);
+        }
+
+        // 提取产品名称
+        let ratePlanName = '';
+        const rateEl = rootEl.querySelector('[data-field="ratePlanName"], .rate-plan-name, .product-name');
+        if (rateEl && rateEl.textContent?.trim()) {
+          ratePlanName = rateEl.textContent.trim();
+        } else {
+          ratePlanName = findTextAfterLabel(['产品名称', '价格政策', '价格方案']);
+        }
+
+        // 提取入离日期并格式化
+        const normalizeDate = (raw: string): string => {
+          const trimmed = raw.trim();
+          const full = trimmed.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
+          if (full) {
+            return `${full[1]}-${full[2].padStart(2, '0')}-${full[3].padStart(2, '0')}`;
+          }
+          const compact = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
+          if (compact) {
+            return `${compact[1]}-${compact[2]}-${compact[3]}`;
+          }
+          const short = trimmed.match(/^(\d{1,2})[-/.月](\d{1,2})(?:日)?/);
+          if (short) {
+            const cy = new Date().getFullYear();
+            return `${cy}-${short[1].padStart(2, '0')}-${short[2].padStart(2, '0')}`;
+          }
+          return '';
+        };
+
+        let arrival = '';
+        let departure = '';
+        const arrivalEl = rootEl.querySelector('[data-field="arrival"], .check-in-date, .arrival-date');
+        const departureEl = rootEl.querySelector('[data-field="departure"], .check-out-date, .departure-date');
+        if (arrivalEl && arrivalEl.textContent?.trim()) {
+          arrival = normalizeDate(arrivalEl.textContent.trim());
+        }
+        if (departureEl && departureEl.textContent?.trim()) {
+          departure = normalizeDate(departureEl.textContent.trim());
+        }
+        if (!arrival || !departure) {
+          const dateText = findTextAfterLabel(['入离日期', '入住离店', '入住日期', '预订日期', '住离日期']);
+          const dateMatches = dateText.match(/(?:\d{4}[-/.]|\d{4}年)?\d{1,2}[-/.]\d{1,2}(?:日)?/g);
+          if (dateMatches && dateMatches.length >= 2) {
+            arrival = normalizeDate(dateMatches[0]);
+            departure = normalizeDate(dateMatches[1]);
+          }
+        }
+
+        // 提取金额
+        let totalPrice = 0;
+        const priceEl = rootEl.querySelector('[data-field="totalPrice"], .total-price, .total-amount, .order-price');
+        if (priceEl && priceEl.textContent?.trim()) {
+          const num = parseFloat(priceEl.textContent.replace(/[^0-9.]/g, ''));
+          if (!isNaN(num)) totalPrice = num;
+        } else {
+          const priceText = findTextAfterLabel(['总金额', '订单总价', '结算金额', '总价']);
+          const num = parseFloat(priceText.replace(/[^0-9.]/g, ''));
+          if (!isNaN(num)) totalPrice = num;
+        }
+
+        // 提取间数
+        let quantity = 1;
+        const qtyEl = rootEl.querySelector('[data-field="quantity"], .room-count, .room-quantity');
+        if (qtyEl && qtyEl.textContent?.trim()) {
+          const q = parseInt(qtyEl.textContent.replace(/\D/g, ''), 10);
+          if (q > 0) quantity = q;
+        }
+
+        const hotelEl = rootEl.querySelector('[data-field="hotelName"], .hotel-name, .poi-name');
+        const hotelName = hotelEl?.textContent?.trim() || '';
+
+        return {
+          guestName,
+          guestMobile,
+          roomTypeName,
+          ratePlanName,
+          arrival,
+          departure,
+          totalPrice,
+          quantity,
+          hotelName,
+        };
       };
 
-      // 提取入住人
-      let guestName = '';
-      const guestEl = rootEl.querySelector('[data-field="guestName"], .guest-name, .contact-name, .customer-name');
-      if (guestEl && guestEl.textContent?.trim()) {
-        guestName = guestEl.textContent.trim();
-      } else {
-        guestName = findTextAfterLabel(['入住人', '客人姓名', '顾客姓名', '联系人']);
-      }
+      let domExtracted = await page.evaluate(extractFromContext).catch(() => null);
 
-      // 提取手机号
-      let guestMobile = '';
-      const mobileEl = rootEl.querySelector('[data-field="guestMobile"], .guest-phone, .contact-phone, .customer-mobile');
-      if (mobileEl && mobileEl.textContent?.trim()) {
-        guestMobile = mobileEl.textContent.trim();
-      } else {
-        const rawMobile = findTextAfterLabel(['手机号', '联系电话', '客人电话']);
-        const match = rawMobile.match(/1[3-9]\d{9}/);
-        if (match) guestMobile = match[0];
-      }
-
-      // 提取房型
-      let roomTypeName = '';
-      const roomEl = rootEl.querySelector('[data-field="roomTypeName"], .room-type-name, .room-name');
-      if (roomEl && roomEl.textContent?.trim()) {
-        roomTypeName = roomEl.textContent.trim();
-      } else {
-        roomTypeName = findTextAfterLabel(['预订房型', '房型名称', '房型']);
-      }
-
-      // 提取产品名称
-      let ratePlanName = '';
-      const rateEl = rootEl.querySelector('[data-field="ratePlanName"], .rate-plan-name, .product-name');
-      if (rateEl && rateEl.textContent?.trim()) {
-        ratePlanName = rateEl.textContent.trim();
-      } else {
-        ratePlanName = findTextAfterLabel(['产品名称', '价格政策', '价格方案']);
-      }
-
-      // 提取入离日期并格式化补零
-      const normalizeDateString = (raw: string): string => {
-        const cleaned = raw.replace(/[年月]/g, '-').replace(/日/g, '').trim();
-        const parts = cleaned.split('-');
-        if (parts.length === 3) {
-          const y = parts[0];
-          const m = parts[1].padStart(2, '0');
-          const d = parts[2].padStart(2, '0');
-          return `${y}-${m}-${d}`;
-        }
-        return cleaned.slice(0, 10);
-      };
-
-      let arrival = '';
-      let departure = '';
-      const arrivalEl = rootEl.querySelector('[data-field="arrival"], .check-in-date, .arrival-date');
-      const departureEl = rootEl.querySelector('[data-field="departure"], .check-out-date, .departure-date');
-      if (arrivalEl && arrivalEl.textContent?.trim()) {
-        arrival = normalizeDateString(arrivalEl.textContent.trim());
-      }
-      if (departureEl && departureEl.textContent?.trim()) {
-        departure = normalizeDateString(departureEl.textContent.trim());
-      }
-      if (!arrival || !departure) {
-        const dateText = findTextAfterLabel(['入离日期', '入住离店', '入住日期', '预订日期']);
-        const dateMatches = dateText.match(/\d{4}[-/年]\d{1,2}[-/月]\d{1,2}/g);
-        if (dateMatches && dateMatches.length >= 2) {
-          arrival = normalizeDateString(dateMatches[0]);
-          departure = normalizeDateString(dateMatches[1]);
+      // 若主 Frame 未解析到完整入离日期，尝试跨 Frame 查找
+      if ((!domExtracted?.arrival || !domExtracted?.departure) && typeof page.frames === 'function') {
+        try {
+          const frames = page.frames();
+          for (const frame of frames) {
+            if (typeof page.mainFrame === 'function' && frame === page.mainFrame()) continue;
+            const frameExtracted = await frame.evaluate(extractFromContext).catch(() => null);
+            if (frameExtracted && (frameExtracted.arrival || frameExtracted.guestName)) {
+              domExtracted = {
+                guestName: domExtracted?.guestName || frameExtracted.guestName,
+                guestMobile: domExtracted?.guestMobile || frameExtracted.guestMobile,
+                roomTypeName: domExtracted?.roomTypeName || frameExtracted.roomTypeName,
+                ratePlanName: domExtracted?.ratePlanName || frameExtracted.ratePlanName,
+                arrival: domExtracted?.arrival || frameExtracted.arrival,
+                departure: domExtracted?.departure || frameExtracted.departure,
+                totalPrice: domExtracted?.totalPrice || frameExtracted.totalPrice,
+                quantity: domExtracted?.quantity || frameExtracted.quantity,
+                hotelName: domExtracted?.hotelName || frameExtracted.hotelName,
+              };
+              if (domExtracted.arrival && domExtracted.departure) break;
+            }
+          }
+        } catch {
+          // 容错跨 Frame 扫描
         }
       }
 
-      // 提取金额
-      let totalPrice = 0;
-      const priceEl = rootEl.querySelector('[data-field="totalPrice"], .total-price, .total-amount, .order-price');
-      if (priceEl && priceEl.textContent?.trim()) {
-        const num = parseFloat(priceEl.textContent.replace(/[^0-9.]/g, ''));
-        if (!isNaN(num)) totalPrice = num;
-      } else {
-        const priceText = findTextAfterLabel(['总金额', '订单总价', '结算金额', '总价']);
-        const num = parseFloat(priceText.replace(/[^0-9.]/g, ''));
-        if (!isNaN(num)) totalPrice = num;
-      }
+      // 7. 等待并多路融合本次点击操作拦截到的真实详情网络报文与敏感数据响应
+      const networkDetail = (await detailResponsePromise) || capturedRef.detail;
+      const sensitiveData = capturedRef.sensitive;
 
-      // 提取间数
-      let quantity = 1;
-      const qtyEl = rootEl.querySelector('[data-field="quantity"], .room-count, .room-quantity');
-      if (qtyEl && qtyEl.textContent?.trim()) {
-        const q = parseInt(qtyEl.textContent.replace(/\D/g, ''), 10);
-        if (q > 0) quantity = q;
-      }
+      // 优先采用敏感数据解密接口获取的真实姓名与手机号（绝无星号脱敏）
+      const plainSensitiveName =
+        sensitiveData?.guestName && !sensitiveData.guestName.includes('*')
+          ? sensitiveData.guestName
+          : '';
+      const plainSensitivePhone =
+        sensitiveData?.guestMobile && !sensitiveData.guestMobile.includes('*')
+          ? sensitiveData.guestMobile
+          : '';
 
-      const hotelEl = rootEl.querySelector('[data-field="hotelName"], .hotel-name, .poi-name');
-      const hotelName = hotelEl?.textContent?.trim() || '';
+      const plainNetworkName =
+        networkDetail?.guestName && !networkDetail.guestName.includes('*')
+          ? networkDetail.guestName
+          : '';
+      const plainNetworkPhone =
+        networkDetail?.guestMobile && !networkDetail.guestMobile.includes('*')
+          ? networkDetail.guestMobile
+          : '';
+
+      const plainDomName =
+        domExtracted?.guestName && !domExtracted.guestName.includes('*')
+          ? domExtracted.guestName
+          : '';
+      const plainDomPhone =
+        domExtracted?.guestMobile && !domExtracted.guestMobile.includes('*')
+          ? domExtracted.guestMobile
+          : '';
+
+      const guestName = (
+        plainSensitiveName ||
+        plainNetworkName ||
+        plainDomName ||
+        networkDetail?.guestName ||
+        domExtracted?.guestName ||
+        ''
+      ).trim();
+
+      const guestMobile = (
+        plainSensitivePhone ||
+        plainNetworkPhone ||
+        plainDomPhone ||
+        networkDetail?.guestMobile ||
+        domExtracted?.guestMobile ||
+        ''
+      ).trim();
+
+      const roomTypeName = (networkDetail?.roomTypeName || domExtracted?.roomTypeName || '').trim();
+      const ratePlanName = (networkDetail?.ratePlanName || domExtracted?.ratePlanName || '').trim();
+      const arrival = fmtDate(networkDetail?.arrival || domExtracted?.arrival);
+      const departure = fmtDate(networkDetail?.departure || domExtracted?.departure);
+      const quantity = networkDetail?.quantity || domExtracted?.quantity || 1;
+      const totalPrice = networkDetail?.totalPrice ?? domExtracted?.totalPrice ?? 0;
+      const unitId = networkDetail?.unitId;
+      const unitName = (networkDetail?.unitName || domExtracted?.hotelName || '').trim() || undefined;
+
+      let nights = networkDetail?.nights || 0;
+      if (!nights && arrival && departure) {
+        const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
+        nights = diff > 0 ? diff : 1;
+      }
+      if (!nights) nights = 1;
+
+      // 8. Fail-Fast 严格校验：确保关键字段非空，绝不兜底任何假数据
+      const missingFields: string[] = [];
+      if (!guestName) missingFields.push('guestName(入住人)');
+      if (!roomTypeName) missingFields.push('roomTypeName(房型)');
+      if (!arrival) missingFields.push('arrival(入住日期)');
+      if (!departure) missingFields.push('departure(离店日期)');
+
+      if (missingFields.length > 0) {
+        throw new Error(
+          `美团订单「${otaOrderId}」详情提取失败：页面及接口均未获取到关键字段 (${missingFields.join(', ')})`
+        );
+      }
 
       return {
+        otaOrderId,
+        otaChannel: this.channelCode,
+        unitId,
+        unitName,
         guestName,
         guestMobile,
         roomTypeName,
         ratePlanName,
         arrival,
         departure,
-        totalPrice,
+        nights,
         quantity,
-        hotelName,
+        totalPrice,
+        raw: (networkDetail?.raw as Record<string, unknown>) || undefined,
       };
-    }).catch(() => null);
-
-    // 5. 等待并融合本次点击操作拦截到的真实详情网络报文
-    const networkDetail = await detailResponsePromise;
-
-    const guestName = (networkDetail?.guestName || domExtracted?.guestName || '').trim();
-    const guestMobile = (networkDetail?.guestMobile || domExtracted?.guestMobile || '').trim();
-    const roomTypeName = (networkDetail?.roomTypeName || domExtracted?.roomTypeName || '').trim();
-    const ratePlanName = (networkDetail?.ratePlanName || domExtracted?.ratePlanName || '').trim();
-    const arrival = (networkDetail?.arrival || domExtracted?.arrival || '').trim();
-    const departure = (networkDetail?.departure || domExtracted?.departure || '').trim();
-    const quantity = networkDetail?.quantity || domExtracted?.quantity || 1;
-    const totalPrice = networkDetail?.totalPrice ?? domExtracted?.totalPrice ?? 0;
-    const unitId = networkDetail?.unitId;
-    const unitName = (networkDetail?.unitName || domExtracted?.hotelName || '').trim() || undefined;
-
-    let nights = networkDetail?.nights || 0;
-    if (!nights && arrival && departure) {
-      const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
-      nights = diff > 0 ? diff : 1;
+    } finally {
+      // 保证监听器随用随销，彻底杜绝长效驻留泄露
+      if (typeof offFn === 'function') {
+        offFn.call(page, 'response', onResponse);
+      } else if (typeof removeListenerFn === 'function') {
+        removeListenerFn.call(page, 'response', onResponse);
+      }
     }
-    if (!nights) nights = 1;
-
-    // 6. Fail-Fast 严格校验：确保关键字段非空，绝不兜底任何假数据
-    const missingFields: string[] = [];
-    if (!guestName) missingFields.push('guestName(入住人)');
-    if (!roomTypeName) missingFields.push('roomTypeName(房型)');
-    if (!arrival) missingFields.push('arrival(入住日期)');
-    if (!departure) missingFields.push('departure(离店日期)');
-
-    if (missingFields.length > 0) {
-      throw new Error(
-        `美团订单「${otaOrderId}」详情提取失败：页面及接口均未获取到关键字段 (${missingFields.join(', ')})`
-      );
-    }
-
-    return {
-      otaOrderId,
-      otaChannel: this.channelCode,
-      unitId,
-      unitName,
-      guestName,
-      guestMobile,
-      roomTypeName,
-      ratePlanName,
-      arrival,
-      departure,
-      nights,
-      quantity,
-      totalPrice,
-      raw: (networkDetail?.raw as Record<string, unknown>) || undefined,
-    };
   }
 
   /**

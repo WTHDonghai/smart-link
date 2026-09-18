@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { DutyOrchestrationEngine } from '../../../src/crawler/duty/dutyOrchestrationEngine';
+import {
+  DutyOrchestrationEngine,
+  buildTaskResultPayload,
+} from '../../../src/crawler/duty/dutyOrchestrationEngine';
 import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
@@ -194,7 +197,7 @@ describe('dutyOrchestrationEngine', () => {
       const mockTask: DutyClaimedTask = {
         id: 'task-test-claim-1',
         businessId: 'MT-CLAIM-1',
-        businessType: 'ORDER',
+        businessType: 'OTA_MIGRATION',
         msgType: 'OTA_IMPORT_ORDER',
         stationId: 'st-unit-test-1',
         leaseToken: 'lease-tok-1',
@@ -242,7 +245,7 @@ describe('dutyOrchestrationEngine', () => {
       const collectTask: DutyClaimedTask = {
         id: 'task-collect-99',
         businessId: 'MT-COLL-99',
-        businessType: 'ORDER',
+        businessType: 'OTA_MIGRATION',
         msgType: 'OTA_COLLECT_ORDER',
         stationId: 'st-unit-test-1',
         leaseToken: 'lease-tok-99',
@@ -294,7 +297,7 @@ describe('dutyOrchestrationEngine', () => {
       const task: DutyClaimedTask = {
         id: 'task-log-test-1',
         businessId: 'MT-BIZ-101',
-        businessType: 'ORDER',
+        businessType: 'OTA_MIGRATION',
         msgType: 'OTA_IMPORT_ORDER',
         stationId: 'st-unit-test-1',
         leaseToken: 'lease-tok-log-1',
@@ -353,21 +356,307 @@ describe('dutyOrchestrationEngine', () => {
         scope: 'INTERFACE',
         status: 'SUCCESS',
         msgType: 'OTA_IMPORT_ORDER',
-        unitId: undefined,
-        unitType: undefined,
-        direction: undefined,
-        createdTime: undefined,
-        delaySendTime: undefined,
         details: [
           {
             confirmNo: '',
             businessId: 'MT-BIZ-101',
             status: 'SUCCESS',
-            ackData: Buffer.from(JSON.stringify({ pmsOrderId: 'PMS-9988' }), 'utf-8').toString('base64'),
+            ackData: Buffer.from(JSON.stringify({ result: { pmsOrderId: 'PMS-9988' } }), 'utf-8').toString('base64'),
           },
         ],
       });
       expect(resultLog?.apiResponse).toEqual({ pmsOrderId: 'PMS-9988' });
+    });
+
+    it('当 submitDutyTaskResult 提交失败时，应记录 DUTY_TASK_RESULT_SUBMIT_FAILED (level: ERROR) 错误日志', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-fail-submit-1',
+        businessId: 'MT-FAIL-01',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-fail-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      mockRunner.executeResult = {
+        status: 'SUCCEEDED',
+        result: { imported: true },
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockRejectedValueOnce(
+        new Error('平台接口返回业务错误: TASK_PAYLOAD_INVALID')
+      );
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const logs = engine.getRecentDutyLogs();
+      const failLog = logs.find((l) => l.event === 'DUTY_TASK_RESULT_SUBMIT_FAILED');
+      expect(failLog).toBeDefined();
+      expect(failLog?.level).toBe('ERROR');
+      expect(failLog?.taskId).toBe('task-fail-submit-1');
+      expect(failLog?.message).toContain('TASK_PAYLOAD_INVALID');
+
+      const loopErrorLog = logs.find((l) => l.event === 'DUTY_TASK_CLAIM_LOOP_ERROR');
+      expect(loopErrorLog).toBeDefined();
+      expect(loopErrorLog?.level).toBe('ERROR');
+      expect(loopErrorLog?.message).toContain('TASK_PAYLOAD_INVALID');
+    });
+
+    it('当任务 businessType 不为 OTA_MIGRATION 时，阻断执行并向中台提交 TASK_PAYLOAD_INVALID 且 retryable=false', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-invalid-biz-type',
+        businessId: 'ORD-BIZ-TYPE-01',
+        businessType: 'UNSUPPORTED_BUSINESS',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-biz-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-invalid-biz-type',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('OTA_MIGRATION'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_PAYLOAD_INVALID' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当任务缺失 businessId 时，阻断执行并向中台提交 TASK_PAYLOAD_INVALID 且 retryable=false', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-missing-biz-id',
+        businessId: '   ',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-biz-2',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-missing-biz-id',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('businessId'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_PAYLOAD_INVALID' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当中台下发 OTA_CANCEL_ORDER 任务时，阻断执行并向中台提交 TASK_TYPE_UNSUPPORTED 且 retryable=false', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-cancel-unsupported',
+        businessId: 'ORD-CANCEL-001',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_CANCEL_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-cancel-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-cancel-unsupported',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('OTA_CANCEL_ORDER'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_TYPE_UNSUPPORTED' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当任务 data 载荷非合法 Base64 JSON 对象时，阻断执行并向中台提交 TASK_PAYLOAD_INVALID 且 retryable=false', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-bad-data',
+        businessId: 'ORD-BAD-DATA',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-bad-1',
+        data: Buffer.from('["not_an_object"]').toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-bad-data',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('JSON'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_PAYLOAD_INVALID' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当任务消息类型不支持时，阻断执行并向中台提交 TASK_TYPE_UNSUPPORTED 且 retryable=false', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-unknown-msg-type',
+        businessId: 'ORD-UNKNOWN-MSG',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'UNKNOWN_MSG_TYPE' as unknown as DutyClaimedTask['msgType'],
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-unknown-msg',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-unknown-msg-type',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('UNKNOWN_MSG_TYPE'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_TYPE_UNSUPPORTED' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当目标渠道未注册或未在运行状态时，提交 TASK_ROUTE_UNAVAILABLE，导入任务 retryable=true，采集任务 retryable=false', async () => {
+      // 1. 针对未注册/未运行渠道的导入任务：retryable 应为 true
+      const importTask: DutyClaimedTask = {
+        id: 'task-unavail-import',
+        businessId: 'ORD-UNAVAIL-01',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-unavail-1',
+        data: Buffer.from(JSON.stringify({ channel: 'CTRIP' })).toString('base64'),
+      };
+
+      // 2. 针对未运行渠道的采集任务：retryable 应为 false
+      const collectTask: DutyClaimedTask = {
+        id: 'task-unavail-collect',
+        businessId: 'COLL-UNAVAIL-02',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-unavail-2',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'CTRIP' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(importTask)
+        .mockResolvedValueOnce(collectTask)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // 导入任务校验：retryable = true
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-unavail-import',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: true,
+          errorMessage: expect.stringContaining('CTRIP'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_ROUTE_UNAVAILABLE' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+
+      // 采集任务校验：retryable = false
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-unavail-collect',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('CTRIP'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_ROUTE_UNAVAILABLE' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
     });
   });
 
@@ -441,6 +730,115 @@ describe('dutyOrchestrationEngine', () => {
       expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('STOPPED');
       expect(engine.getChannelDutyStatus()['FAILING_OTA'].status).toBe('STOPPED');
       expect(engine.getCoordinatorStatus()).toBe('STOPPED');
+    });
+  });
+
+  describe('buildTaskResultPayload 契约标准化与 DTO 序列化', () => {
+    const baseTask: DutyClaimedTask = {
+      id: 'task-wire-001',
+      businessId: 'MT-ORDER-8888',
+      businessType: 'OTA_MIGRATION',
+      msgType: 'OTA_IMPORT_ORDER',
+      stationId: 'st-from-task',
+      leaseToken: 'lease-999',
+      data: 'e30=',
+      msgId: 'msg-wire-777',
+      unitId: 'unit-hotel-123',
+      unitType: 'HOTEL',
+      direction: 'INBOUND',
+      createdTime: '2026-09-18T00:00:00.000Z',
+      delaySendTime: 0,
+    };
+
+    it('成功执行时，ackData 必须解码为包含 { result: ... } 结构，并透传 msgId 与 task.stationId', () => {
+      const payload = buildTaskResultPayload(baseTask, 'st-fallback', {
+        status: 'SUCCESS',
+        confirmationNo: 'CONFIRM-12345',
+        result: { imported: true, pmsOrderId: 'PMS-111' },
+      });
+
+      expect(payload.station).toBe('st-from-task');
+      expect(payload.leaseToken).toBe('lease-999');
+      expect(payload.businessType).toBe('OTA_MIGRATION');
+      expect(payload.businessId).toBe('MT-ORDER-8888');
+      expect(payload.scope).toBe('INTERFACE');
+      expect(payload.status).toBe('SUCCESS');
+      expect(payload.msgId).toBe('msg-wire-777');
+      expect(payload.unitId).toBe('unit-hotel-123');
+      expect(payload.unitType).toBe('HOTEL');
+      expect(payload.direction).toBe('INBOUND');
+      expect(payload.createdTime).toBe('2026-09-18T00:00:00.000Z');
+      expect(payload.delaySendTime).toBe(0);
+      expect(payload.errorMessage).toBeUndefined();
+
+      expect(payload.details).toHaveLength(1);
+      const detail = payload.details[0];
+      expect(detail.businessId).toBe('MT-ORDER-8888');
+      expect(detail.confirmNo).toBe('CONFIRM-12345');
+      expect(detail.status).toBe('SUCCESS');
+
+      // 关键断言：ackData 解码后必须包含外层 result 包装对象，严格契合文旅中台 DTO 反序列化规范
+      const decodedAck = JSON.parse(Buffer.from(detail.ackData || '', 'base64').toString('utf-8'));
+      expect(decodedAck).toEqual({
+        result: {
+          imported: true,
+          pmsOrderId: 'PMS-111',
+        },
+      });
+    });
+
+    it('失败执行时，ackData 必须解码为仅包含 { errorCode } 结构，顶层带 errorMessage 与 retryable', () => {
+      const payload = buildTaskResultPayload(baseTask, 'st-fallback', {
+        status: 'FAIL',
+        errorCode: 'ROOM_FULL',
+        errorMessage: '满房拒绝',
+        retryable: true,
+      });
+
+      expect(payload.status).toBe('FAIL');
+      expect(payload.errorMessage).toBe('满房拒绝');
+      expect(payload.retryable).toBe(true);
+      expect(payload.details).toHaveLength(1);
+
+      const detail = payload.details[0];
+      expect(detail.status).toBe('FAIL');
+      expect(detail.confirmNo).toBe('');
+
+      // 关键契约断言：ackData 失败时仅包裹 errorCode，errorMessage 位于顶层 DTO
+      const decodedAck = JSON.parse(Buffer.from(detail.ackData || '', 'base64').toString('utf-8'));
+      expect(decodedAck).toEqual({
+        errorCode: 'ROOM_FULL',
+      });
+    });
+
+    it('当任务缺少可选字段或为空串时，顶层 payload 严格按条件序列化，杜绝多余空字段与 undefined 污染', () => {
+      const minimalTask: DutyClaimedTask = {
+        id: 'task-minimal-002',
+        businessId: 'MT-ORDER-MINIMAL',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: '',
+        leaseToken: 'lease-min-002',
+        data: 'e30=',
+        unitId: '', // 空字符串
+        unitType: '   ', // 空白
+      };
+
+      const payload = buildTaskResultPayload(minimalTask, 'st-fallback-identity', {
+        status: 'SUCCESS',
+        result: { recordCount: 0, orders: [] },
+      });
+
+      expect(payload.station).toBe('st-fallback-identity'); // 任务 stationId 为空，正确回退 fallbackStationId
+      expect(payload.msgId).toBeUndefined();
+      expect(payload.unitId).toBeUndefined(); // 空字符串未被输出
+      expect(payload.unitType).toBeUndefined(); // 空白未被输出
+      expect(payload.direction).toBeUndefined();
+      expect(payload.createdTime).toBeUndefined();
+      expect(payload.delaySendTime).toBeUndefined();
+
+      const decodedAck = JSON.parse(Buffer.from(payload.details[0].ackData || '', 'base64').toString('utf-8'));
+      expect(decodedAck.result).toEqual({ recordCount: 0, orders: [] });
     });
   });
 });

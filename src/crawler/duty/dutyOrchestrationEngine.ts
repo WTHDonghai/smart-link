@@ -5,6 +5,8 @@ import type {
   StationIdentity,
   ActualStateReportPayload,
   SystemLogEntry,
+  DutyClaimedTask,
+  DutyTaskResultDetail,
   DutyTaskResultPayload,
   DutyTaskWireStatus,
   DutyTaskCreationBatch,
@@ -24,6 +26,73 @@ import { logger } from '../../services/logger';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 
 export { dispatchDutyTask };
+
+export interface TaskResultPayloadOptions {
+  status: DutyTaskWireStatus;
+  confirmationNo?: string;
+  result?: Record<string, unknown>;
+  errorCode?: string;
+  errorMessage?: string;
+  retryable?: boolean;
+}
+
+/**
+ * 依据文旅中台线缆契约与标准 DTO 组装任务回执载荷 (PUT /toolkit/toolbox/tasks/:id/result)
+ * 1. ackData 严格按照 Base64 编码的 JSON 对象封装：
+ *    - 成功时包裹 { result: ... }；
+ *    - 失败时严格仅包含 { errorCode: ... }，严禁将 errorMessage 混入 ackData（errorMessage 位于顶层 DTO）；
+ * 2. 顶层 DTO 条件序列化：透传 msgId、retryable、严格按有效值输出 unitId / unitType / direction / delaySendTime，杜绝非法空串；
+ * 3. station 优先取自任务实体携带的 stationId，若缺失回退当前注册工位。
+ */
+export function buildTaskResultPayload(
+  task: DutyClaimedTask,
+  fallbackStationId: string,
+  options: TaskResultPayloadOptions
+): DutyTaskResultPayload {
+  const isSuccess = options.status === 'SUCCESS';
+  const confirmationNo = String(options.confirmationNo || '').trim();
+  const businessId = String(task.businessId || '').trim();
+
+  const completionData: Record<string, unknown> = isSuccess
+    ? { result: options.result || {} }
+    : {
+        errorCode: options.errorCode || 'TASK_EXECUTION_FAILED',
+        ...(options.result ? { result: options.result } : {}),
+      };
+
+  const ackData = Buffer.from(JSON.stringify(completionData), 'utf-8').toString('base64');
+
+  const detail: DutyTaskResultDetail = {
+    confirmNo: confirmationNo,
+    businessId,
+    status: options.status,
+    ackData,
+  };
+
+  const station = String(task.stationId || fallbackStationId || '').trim();
+  const leaseToken = String(task.leaseToken || '').trim();
+
+  const payload: DutyTaskResultPayload = {
+    station,
+    leaseToken,
+    businessType: 'OTA_MIGRATION',
+    businessId,
+    scope: 'INTERFACE',
+    status: options.status,
+    ...(task.msgId && task.msgId.trim() ? { msgId: task.msgId.trim() } : {}),
+    ...(task.msgType ? { msgType: task.msgType } : {}),
+    ...(task.unitId && task.unitId.trim() ? { unitId: task.unitId.trim() } : {}),
+    ...(task.unitType && task.unitType.trim() ? { unitType: task.unitType.trim() } : {}),
+    ...(task.direction && task.direction.trim() ? { direction: task.direction.trim() } : {}),
+    ...(task.createdTime && task.createdTime.trim() ? { createdTime: task.createdTime.trim() } : {}),
+    ...(typeof task.delaySendTime === 'number' ? { delaySendTime: task.delaySendTime } : {}),
+    details: [detail],
+    ...(!isSuccess && options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+    ...(typeof options.retryable === 'boolean' ? { retryable: options.retryable } : {}),
+  };
+
+  return payload;
+}
 
 export class DutyOrchestrationEngine {
   private runners = new Map<string, ChannelDutyRunner>();
@@ -423,25 +492,169 @@ export class DutyOrchestrationEngine {
           continue;
         }
 
-        // 获得任务，解析目标渠道
-        let targetChannel = 'MEITUAN';
+        // 1. 基础报文结构合规性校验 (Fail-Fast 阻断，向中台如实报告协议违规)
+        if (task.businessType !== 'OTA_MIGRATION') {
+          const failureMsg = `中台任务 businessType 必须为 OTA_MIGRATION (实际: ${task.businessType || '-'})`;
+          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'TASK_PAYLOAD_INVALID',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_EXECUTE_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: rejectPayload,
+            message: `[任务协议校验失败] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, rejectPayload);
+          continue;
+        }
+
+        if (!task.businessId || !String(task.businessId).trim()) {
+          const failureMsg = '中台任务缺失有效的 businessId 业务标识';
+          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'TASK_PAYLOAD_INVALID',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_EXECUTE_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: rejectPayload,
+            message: `[任务协议校验失败] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, rejectPayload);
+          continue;
+        }
+
+        // OTA_CANCEL_ORDER 为取消事实上报消息，文旅中台不应向客户端下发消费
+        if (task.msgType === 'OTA_CANCEL_ORDER') {
+          const failureMsg = '文旅中台不应向客户端下发 OTA_CANCEL_ORDER 任务';
+          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'TASK_TYPE_UNSUPPORTED',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_EXECUTE_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: rejectPayload,
+            message: `[不支持的任务类型] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, rejectPayload);
+          continue;
+        }
+
+        // 解码与校验 task.data 载荷
+        let parsedData: Record<string, unknown>;
         try {
           const rawDecoded = Buffer.from(task.data, 'base64').toString('utf-8');
-          const parsed = JSON.parse(rawDecoded) as Record<string, unknown>;
-          if (parsed.otaChannelCode) {
-            targetChannel = String(parsed.otaChannelCode).trim().toUpperCase();
-          } else if (parsed.channel) {
-            targetChannel = String(parsed.channel).trim().toUpperCase();
-          } else if (
-            Array.isArray(parsed.orders) &&
-            parsed.orders[0] &&
-            typeof parsed.orders[0] === 'object' &&
-            'otaChannel' in (parsed.orders[0] as Record<string, unknown>)
-          ) {
-            targetChannel = String((parsed.orders[0] as Record<string, unknown>).otaChannel).trim().toUpperCase();
+          const decodedObj = JSON.parse(rawDecoded) as unknown;
+          if (!decodedObj || typeof decodedObj !== 'object' || Array.isArray(decodedObj)) {
+            throw new Error('任务 data 解码后必须为非数组的 JSON 对象');
           }
-        } catch {
-          // 容错默认当前首选渠道
+          parsedData = decodedObj as Record<string, unknown>;
+        } catch (decodeErr) {
+          const failureMsg = `任务 data 解码校验失败: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`;
+          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'TASK_PAYLOAD_INVALID',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_EXECUTE_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: rejectPayload,
+            message: `[任务载荷解析失败] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, rejectPayload);
+          continue;
+        }
+
+        // 解析目标渠道与合法性收敛
+        let targetChannel = 'MEITUAN';
+        if (task.msgType === 'OTA_COLLECT_ORDER') {
+          if (parsedData.otaChannelCode) {
+            targetChannel = String(parsedData.otaChannelCode).trim().toUpperCase();
+          }
+        } else if (task.msgType === 'OTA_CONFIRM_IMPORT' || task.msgType === 'OTA_CONFIRM_CANCEL') {
+          if (parsedData.channelCode) {
+            targetChannel = String(parsedData.channelCode).trim().toUpperCase();
+          }
+        } else if (task.msgType === 'OTA_IMPORT_ORDER') {
+          if (parsedData.channel) {
+            targetChannel = String(parsedData.channel).trim().toUpperCase();
+          } else if (parsedData.otaChannelCode) {
+            targetChannel = String(parsedData.otaChannelCode).trim().toUpperCase();
+          } else if (
+            Array.isArray(parsedData.orders) &&
+            parsedData.orders[0] &&
+            typeof parsedData.orders[0] === 'object' &&
+            'otaChannel' in (parsedData.orders[0] as Record<string, unknown>)
+          ) {
+            targetChannel = String((parsedData.orders[0] as Record<string, unknown>).otaChannel).trim().toUpperCase();
+          }
+        } else {
+          // 未知任务类型
+          const failureMsg = `不支持的任务消息类型: ${task.msgType}`;
+          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'TASK_TYPE_UNSUPPORTED',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_EXECUTE_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: rejectPayload,
+            message: `[不支持的任务类型] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, rejectPayload);
+          continue;
         }
 
         // 1. 任务认领日志 (CLAIM)
@@ -470,37 +683,13 @@ export class DutyOrchestrationEngine {
         const runner = this.runners.get(targetChannel);
         if (!runner || !runner.isRunning()) {
           const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
-          const ackDataFail = Buffer.from(
-            JSON.stringify({
-              errorCode: 'CHANNEL_RUNNER_UNAVAILABLE',
-              errorMessage: failureMsg,
-            }),
-            'utf-8'
-          ).toString('base64');
-
-          const unavailResultPayload: DutyTaskResultPayload = {
-            station: identity.stationId,
-            leaseToken: task.leaseToken,
-            businessType: 'OTA_MIGRATION',
-            businessId: task.businessId,
-            scope: 'INTERFACE',
+          const isCollect = task.msgType === 'OTA_COLLECT_ORDER';
+          const unavailResultPayload = buildTaskResultPayload(task, identity.stationId, {
             status: 'FAIL',
-            msgType: task.msgType,
-            unitId: task.unitId,
-            unitType: task.unitType,
-            direction: task.direction,
-            createdTime: task.createdTime,
-            delaySendTime: task.delaySendTime,
+            errorCode: 'TASK_ROUTE_UNAVAILABLE',
             errorMessage: failureMsg,
-            details: [
-              {
-                confirmNo: '',
-                businessId: task.businessId,
-                status: 'FAIL',
-                ackData: ackDataFail,
-              },
-            ],
-          };
+            retryable: !isCollect,
+          });
 
           this.appendDutyLog({
             level: 'ERROR',
@@ -519,7 +708,28 @@ export class DutyOrchestrationEngine {
             details: failureMsg,
           });
 
-          await submitDutyTaskResult(task.id, unavailResultPayload);
+          try {
+            await submitDutyTaskResult(task.id, unavailResultPayload);
+          } catch (submitErr) {
+            const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+            this.appendDutyLog({
+              level: 'ERROR',
+              module: 'DUTY_TASK',
+              event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
+              taskActionStage: 'RESULT',
+              msgType: task.msgType,
+              taskId: task.id,
+              taskStatus: 'FAILED',
+              channelId: targetChannel,
+              apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+              apiMethod: 'PUT',
+              apiParams: unavailResultPayload,
+              apiResponse: { error: submitErrMsg },
+              message: `[回执提交失败] 任务 ${task.msgType} 异常回执提交中台失败: ${submitErrMsg} (ID: ${task.id})`,
+              details: submitErrMsg,
+            });
+            throw submitErr;
+          }
           continue;
         }
 
@@ -559,39 +769,14 @@ export class DutyOrchestrationEngine {
               )
             : '';
 
-        const ackData = isSuccess
-          ? Buffer.from(JSON.stringify(execRes.result ?? {}), 'utf-8').toString('base64')
-          : Buffer.from(
-              JSON.stringify({
-                errorCode: execRes.errorCode || 'TASK_EXECUTION_FAILED',
-                errorMessage: execRes.errorMessage || '执行失败',
-              }),
-              'utf-8'
-            ).toString('base64');
-
-        const resultPayload: DutyTaskResultPayload = {
-          station: identity.stationId,
-          leaseToken: task.leaseToken,
-          businessType: 'OTA_MIGRATION',
-          businessId: task.businessId,
-          scope: 'INTERFACE',
+        const resultPayload = buildTaskResultPayload(task, identity.stationId, {
           status: wireStatus,
-          msgType: task.msgType,
-          unitId: task.unitId,
-          unitType: task.unitType,
-          direction: task.direction,
-          createdTime: task.createdTime,
-          delaySendTime: task.delaySendTime,
-          ...(isSuccess ? {} : { errorMessage: execRes.errorMessage || '执行失败' }),
-          details: [
-            {
-              confirmNo: confirmationNo,
-              businessId: task.businessId,
-              status: wireStatus,
-              ackData,
-            },
-          ],
-        };
+          confirmationNo,
+          result: execRes.result,
+          errorCode: execRes.errorCode || (isSuccess ? undefined : 'TASK_EXECUTION_FAILED'),
+          errorMessage: execRes.errorMessage,
+          retryable: isSuccess ? undefined : true,
+        });
 
         this.appendDutyLog({
           level: isSuccess ? 'SUCCESS' : 'ERROR',
@@ -703,25 +888,45 @@ export class DutyOrchestrationEngine {
         }
 
         this.coordinatorStatus = 'REPORTING';
-        await submitDutyTaskResult(task.id, resultPayload);
-
-        this.appendDutyLog({
-          level: 'INFO',
-          module: 'DUTY_TASK',
-          event: 'DUTY_TASK_RESULT_SUBMIT',
-          taskActionStage: 'RESULT',
-          msgType: task.msgType,
-          taskId: task.id,
-          taskStatus: isSuccess ? 'SUCCEEDED' : 'FAILED',
-          channelId: targetChannel,
-          apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-          apiMethod: 'PUT',
-          apiParams: resultPayload,
-          apiResponse: { success: true },
-          httpStatus: 200,
-          message: `[回执提交] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
-          details: `回执状态: ${wireStatus}`,
-        });
+        try {
+          await submitDutyTaskResult(task.id, resultPayload);
+          this.appendDutyLog({
+            level: 'INFO',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_RESULT_SUBMIT',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: isSuccess ? 'SUCCEEDED' : 'FAILED',
+            channelId: targetChannel,
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: resultPayload,
+            apiResponse: { success: true },
+            httpStatus: 200,
+            message: `[回执提交] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
+            details: `回执状态: ${wireStatus}`,
+          });
+        } catch (submitErr) {
+          const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+          this.appendDutyLog({
+            level: 'ERROR',
+            module: 'DUTY_TASK',
+            event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
+            taskActionStage: 'RESULT',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            channelId: targetChannel,
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: resultPayload,
+            apiResponse: { error: submitErrMsg },
+            message: `[回执提交失败] 任务 ${task.msgType} 回执中台失败: ${submitErrMsg} (ID: ${task.id})`,
+            details: submitErrMsg,
+          });
+          throw submitErr;
+        }
 
         this.coordinatorStatus = 'IDLE';
       } catch (err) {
@@ -729,14 +934,14 @@ export class DutyOrchestrationEngine {
           this.coordinatorStatus = 'CLAIM_BACKOFF';
         }
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn('[DutyOrchestrationEngine] 任务认领循环异常:', err);
+        console.error('[DutyOrchestrationEngine] 任务调度循环异常:', err);
         this.appendDutyLog({
-          level: 'WARN',
+          level: 'ERROR',
           module: 'DUTY_TASK',
-          event: 'DUTY_ACTUAL_STATE_REPORT',
+          event: 'DUTY_TASK_CLAIM_LOOP_ERROR',
           taskActionStage: 'CLAIM',
-          message: `[任务认领 CLAIM] 轮询认领中台任务异常: ${errMsg}`,
-          details: `将在 3 秒后重试`,
+          message: `[任务调度异常] 任务调度认领与回执循环异常: ${errMsg}`,
+          details: `调度器已进入退避状态，将在 3 秒后自动重试`,
         });
         if (this.stopSignal || this.getActiveRunners().length === 0) {
           break;

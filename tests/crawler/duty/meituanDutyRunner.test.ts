@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   extractMeituanOrdersFromPayload,
   extractMeituanOrderDetailFromPayload,
+  extractMeituanSensitiveDataFromPayload,
+  fmtDate,
+  isMeituanDetailUrl,
+  isMeituanSensitiveUrl,
   MeituanDutyRunner,
 } from '../../../src/crawler/duty/meituanDutyRunner';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
@@ -153,6 +157,209 @@ describe('meituanDutyRunner', () => {
       expect(detail?.totalPrice).toBe(880);
       expect(detail?.unitId).toBe('poi-999');
       expect(detail?.unitName).toBe('美团度假酒店');
+    });
+
+    it('should extract structured order details from nested data.orderDetail payload', () => {
+      const payload = {
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: '20260917092248573000',
+            checkInDate: '2026-09-17',
+            checkOutDate: '2026-09-18',
+            roomName: '豪华大床房',
+            ratePlanName: '含单早特惠',
+            totalFee: 32000,
+            nights: 1,
+            roomCount: 1,
+            poiId: 'poi-8888',
+            poiName: '美团精品度假村',
+            contacts: [{ name: '李明', phone: '13800138000' }],
+          },
+        },
+      };
+
+      const detail = extractMeituanOrderDetailFromPayload(payload, '20260917092248573000');
+      expect(detail).not.toBeNull();
+      expect(detail?.otaOrderId).toBe('20260917092248573000');
+      expect(detail?.arrival).toBe('2026-09-17');
+      expect(detail?.departure).toBe('2026-09-18');
+      expect(detail?.roomTypeName).toBe('豪华大床房');
+      expect(detail?.totalPrice).toBe(320);
+      expect(detail?.guestName).toBe('李明');
+      expect(detail?.guestMobile).toBe('13800138000');
+    });
+
+    it('should extract dates and details from timestamp format in orderDetail', () => {
+      const payload = {
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: 'MT-TS-111',
+            checkInDate: 1789400000000,
+            checkOutDate: 1789486400000,
+            roomTypeName: '行政商务房',
+            guestName: '王五',
+            price: 500,
+          },
+        },
+      };
+
+      const detail = extractMeituanOrderDetailFromPayload(payload, 'MT-TS-111');
+      expect(detail).not.toBeNull();
+      expect(detail?.otaOrderId).toBe('MT-TS-111');
+      expect(detail?.arrival).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(detail?.departure).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(detail?.roomTypeName).toBe('行政商务房');
+      expect(detail?.totalPrice).toBe(500);
+    });
+
+    it('should derive arrival and departure from roomNightPriceModels when top-level dates are absent', () => {
+      const payload = {
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: 'MT-MODELS-222',
+            roomTypeName: '家庭亲子房',
+            guestName: '陈七',
+            roomNightPriceModels: [
+              { dateStr: '2026-11-01', floorPrice: 30000 },
+              { dateStr: '2026-11-02', floorPrice: 32000 },
+            ],
+          },
+        },
+      };
+
+      const detail = extractMeituanOrderDetailFromPayload(payload, 'MT-MODELS-222');
+      expect(detail).not.toBeNull();
+      expect(detail?.arrival).toBe('2026-11-01');
+      expect(detail?.departure).toBe('2026-11-03');
+      expect(detail?.nights).toBe(2);
+    });
+  });
+
+  describe('fmtDate', () => {
+    it('should return empty string for null, undefined, empty, or invalid inputs', () => {
+      expect(fmtDate(null)).toBe('');
+      expect(fmtDate(undefined)).toBe('');
+      expect(fmtDate('')).toBe('');
+      expect(fmtDate('   ')).toBe('');
+      expect(fmtDate('invalid-date')).toBe('');
+    });
+
+    it('should normalize standard hyphen, slash, dot, and Chinese dates', () => {
+      expect(fmtDate('2026-09-17')).toBe('2026-09-17');
+      expect(fmtDate('2026/9/17')).toBe('2026-09-17');
+      expect(fmtDate('2026.09.17')).toBe('2026-09-17');
+      expect(fmtDate('2026年09月17日')).toBe('2026-09-17');
+      expect(fmtDate('2026年9月7日')).toBe('2026-09-07');
+    });
+
+    it('should normalize compact YYYYMMDD string', () => {
+      expect(fmtDate('20260917')).toBe('2026-09-17');
+    });
+
+    it('should auto-complete current year for short dates', () => {
+      const currentYear = new Date().getFullYear();
+      expect(fmtDate('09-17')).toBe(`${currentYear}-09-17`);
+      expect(fmtDate('9.7')).toBe(`${currentYear}-09-07`);
+      expect(fmtDate('09月17日')).toBe(`${currentYear}-09-17`);
+    });
+
+    it('should convert numeric timestamps and timestamp strings to YYYY-MM-DD', () => {
+      const ts = Date.UTC(2026, 8, 17, 12, 0, 0);
+      const result = fmtDate(ts);
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(fmtDate(String(ts))).toBe(result);
+    });
+  });
+
+  describe('isMeituanDetailUrl and isMeituanSensitiveUrl', () => {
+    it('should match real Meituan line net order detail URL with orderId', () => {
+      const realLineNetUrl =
+        'https://eb.meituan.com/api/v1/ebooking/orders/20260917092248573000?userId=295692068&pageRequestSource=1&yodaReady=h5&csecplatform=4';
+      expect(isMeituanDetailUrl(realLineNetUrl, '20260917092248573000')).toBe(true);
+      expect(isMeituanDetailUrl(realLineNetUrl)).toBe(true);
+    });
+
+    it('should not match task list URL', () => {
+      const listUrl = 'https://eb.meituan.com/api/v1/ebooking/orders/task/list?scenario=0';
+      expect(isMeituanDetailUrl(listUrl)).toBe(false);
+    });
+
+    it('should match sensitive data URL and confirmPhone URL', () => {
+      expect(
+        isMeituanSensitiveUrl(
+          'https://eb.meituan.com/api/v1/ebooking/orders/sensitiveData/20260917092248573000?requiredSensitiveData=2'
+        )
+      ).toBe(true);
+      expect(
+        isMeituanSensitiveUrl(
+          'https://eb.meituan.com/api/v1/ebooking/resale/20260917092248573000/confirmPhone?userId=123'
+        )
+      ).toBe(true);
+    });
+  });
+
+  describe('extractMeituanSensitiveDataFromPayload', () => {
+    it('should return null for empty or invalid payload', () => {
+      expect(extractMeituanSensitiveDataFromPayload(null)).toBeNull();
+      expect(extractMeituanSensitiveDataFromPayload({})).toBeNull();
+      expect(extractMeituanSensitiveDataFromPayload({ data: {} })).toBeNull();
+    });
+
+    it('should extract decrypted name and phone from sensitiveDataList and ignore placeholders', () => {
+      const payload = {
+        code: 0,
+        data: {
+          sensitiveDataList: [
+            {
+              guestInfos: [
+                {
+                  name: '张三丰',
+                  phone: '13912345678',
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+      const result = extractMeituanSensitiveDataFromPayload(payload);
+      expect(result).not.toBeNull();
+      expect(result?.guestName).toBe('张三丰');
+      expect(result?.guestMobile).toBe('13912345678');
+    });
+
+    it('should ignore masked names and placeholder text', () => {
+      const payload = {
+        data: {
+          sensitiveDataList: [
+            {
+              guestInfos: [
+                { name: '张*', phone: '139****5678' },
+                { name: '查看姓名', phone: '13800138000' },
+              ],
+            },
+          ],
+        },
+      };
+
+      const result = extractMeituanSensitiveDataFromPayload(payload);
+      expect(result?.guestName).toBeUndefined();
+      expect(result?.guestMobile).toBe('13800138000');
+    });
+
+    it('should extract direct phone from confirmPhone response', () => {
+      const payload = {
+        code: 0,
+        data: {
+          phone: '13788889999',
+        },
+      };
+
+      const result = extractMeituanSensitiveDataFromPayload(payload);
+      expect(result?.guestMobile).toBe('13788889999');
     });
   });
 
@@ -393,6 +600,109 @@ describe('meituanDutyRunner', () => {
       expect(detail.nights).toBe(3);
       expect(detail.totalPrice).toBe(1500);
       expect(detail.unitId).toBe('poi-net-002');
+    });
+
+    it('inspectOrderDetail should intercept real Meituan line net URL /api/v1/ebooking/orders/${orderId} and merge unmasked sensitiveData', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+
+      const orderId = '20260917092248573000';
+      const onSpy = vi.fn();
+      const offSpy = vi.fn();
+
+      const revealBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+      };
+      const confirmDialogBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          on: onSpy,
+          off: offSpy,
+          locator: (selector: string) => ({
+            first: () => {
+              if (selector.includes('查看姓名')) return revealBtn;
+              if (selector.includes('我已知晓') || selector.includes('确定')) return confirmDialogBtn;
+              return { isVisible: vi.fn().mockResolvedValue(false) };
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({
+            url: () =>
+              `https://eb.meituan.com/api/v1/ebooking/orders/${orderId}?userId=295692068&pageRequestSource=1`,
+            status: () => 200,
+            text: vi.fn().mockResolvedValue(
+              JSON.stringify({
+                code: 0,
+                data: {
+                  orderDetail: {
+                    orderId,
+                    checkInDate: '2026-09-17',
+                    checkOutDate: '2026-09-18',
+                    roomName: '豪华景观大床房',
+                    ratePlanName: '连住特惠',
+                    totalFee: 29800,
+                    poiId: 'poi-999',
+                    poiName: '美团度假村',
+                    guestName: '李*',
+                    guestMobile: '138****8888',
+                  },
+                },
+              })
+            ),
+          }),
+          evaluate: vi.fn().mockResolvedValue({
+            guestName: '李*',
+            roomTypeName: '豪华景观大床房',
+            arrival: '2026-09-17',
+            departure: '2026-09-18',
+            totalPrice: 298,
+            quantity: 1,
+            hotelName: '美团度假村',
+          }),
+        },
+      };
+
+      onSpy.mockImplementation((event: string, handler: (res: unknown) => Promise<void>) => {
+        if (event === 'response') {
+          queueMicrotask(() => {
+            void handler({
+              url: () => `https://eb.meituan.com/api/v1/ebooking/orders/sensitiveData/${orderId}?requiredSensitiveData=2`,
+              status: () => 200,
+              text: () =>
+                Promise.resolve(
+                  JSON.stringify({
+                    code: 0,
+                    data: {
+                      sensitiveDataList: [
+                        {
+                          guestInfos: [
+                            {
+                              name: '李小龙',
+                              phone: '13812345678',
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  })
+                ),
+            });
+          });
+        }
+      });
+
+      const detail = await runner.inspectOrderDetail(orderId);
+      expect(detail.otaOrderId).toBe(orderId);
+      expect(detail.arrival).toBe('2026-09-17');
+      expect(detail.departure).toBe('2026-09-18');
+      expect(detail.roomTypeName).toBe('豪华景观大床房');
+      expect(detail.guestName).toBe('李小龙');
+      expect(detail.guestMobile).toBe('13812345678');
+      expect(detail.totalPrice).toBe(298);
+
+      expect(offSpy).toHaveBeenCalledWith('response', expect.any(Function));
     });
 
     it('confirmImport and confirmCancel should operate page locators safely', async () => {

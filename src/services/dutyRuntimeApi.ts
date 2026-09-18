@@ -52,6 +52,7 @@ export function unwrapDutyEnvelope<T>(res: unknown): T {
       (typeof envelope.message === 'string' && envelope.message) ||
       (typeof envelope.error === 'string' && envelope.error) ||
       `业务状态异常 (code: ${envelope.code})`;
+    console.error('[unwrapDutyEnvelope] 平台接口返回异常业务信封:', JSON.stringify(envelope));
     throw new Error(`平台接口返回业务错误: ${errorMsg}`);
   }
 
@@ -167,11 +168,22 @@ export async function submitDutyTaskResult(
   taskId: string,
   payload: DutyTaskResultPayload
 ): Promise<void> {
-  const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_RESULT(taskId), {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-  unwrapDutyEnvelope(res);
+  const cleanTaskId = String(taskId || '').trim();
+  if (!cleanTaskId) {
+    throw new Error('提交任务回执失败：taskId 不能为空');
+  }
+  console.info(`[submitDutyTaskResult] 正在向中台提交任务 ${cleanTaskId} 回执:`, JSON.stringify(payload));
+  try {
+    const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId), {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    unwrapDutyEnvelope(res);
+    console.info(`[submitDutyTaskResult] 任务 ${cleanTaskId} 回执提交成功`);
+  } catch (err) {
+    console.error(`[submitDutyTaskResult] 任务 ${cleanTaskId} 回执提交失败:`, err);
+    throw err;
+  }
 }
 
 /**

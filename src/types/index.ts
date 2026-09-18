@@ -515,6 +515,7 @@ export interface DutyClaimedTask {
   stationId: string;
   leaseToken: string;
   data: string; // Base64 encoded JSON
+  msgId?: string;
   unitId?: string;
   unitType?: string;
   direction?: string;
@@ -547,6 +548,7 @@ export interface DutyTaskResultPayload {
   businessId: string;
   scope: 'INTERFACE';
   status: DutyTaskWireStatus;
+  msgId?: string;
   msgType?: string;
   unitId?: string;
   unitType?: string;

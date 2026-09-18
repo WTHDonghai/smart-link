@@ -11,7 +11,9 @@ import { PlatformLoginView } from './components/auth/PlatformLoginView';
 import { ToastNotification } from './components/common/ToastNotification';
 import { platformAuthService, classifyAuthError, loadTokensFromStorage } from './services/platformAuth';
 import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/slices/authSlice';
-import { syncDutyTokens, clearDutyTokens } from './services/dutyBridge';
+import { syncDutyTokens, clearDutyTokens, subscribeDutyLogs } from './services/dutyBridge';
+import { addLog } from './store/slices/systemLogSlice';
+import { syncDutyStatusThunk } from './store/slices/orderGuardianSlice';
 
 export default function App() {
   const dispatch = useAppDispatch();
@@ -41,6 +43,17 @@ export default function App() {
     if (initialTokens && initialTokens.accessToken) {
       void syncDutyTokens(initialTokens);
     }
+
+    // 3. 订阅后台全链路值守与调度日志，一旦产生任何认领、执行、回执或异常日志，即刻注入 Redux 状态流
+    const unsubscribeDutyLogs = subscribeDutyLogs((entry) => {
+      dispatch(addLog(entry));
+    });
+
+    // 4. 启动并维持全局值守状态与调度日志同步轮询 (3秒周期)，确保即使无活动渠道也能捕获后台调度器异常
+    void dispatch(syncDutyStatusThunk());
+    const dutySyncTimer = setInterval(() => {
+      void dispatch(syncDutyStatusThunk());
+    }, 3000);
 
     // 2. 启动文旅平台 Token 后台自动续期调度器
     platformAuthService.startRefreshScheduler((_tokens, error) => {
@@ -83,6 +96,8 @@ export default function App() {
     return () => {
       if (wakeupTimer) clearTimeout(wakeupTimer);
       unsubscribeToken();
+      unsubscribeDutyLogs();
+      clearInterval(dutySyncTimer);
       platformAuthService.stopRefreshScheduler();
       clearInterval(timer);
       if (typeof document !== 'undefined') {
