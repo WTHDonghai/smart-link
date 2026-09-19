@@ -1,7 +1,7 @@
 {
   "name": "smart-link",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "start:built": "npm run build && npm run build:electron && electron . --start-mode=built --mode=production",
     "build": "vite build",
     "build:electron": "esbuild electron/main.ts --outfile=dist-electron/main.js --bundle --platform=node --format=esm --packages=external && esbuild electron/preload.ts --outfile=dist-electron/preload.cjs --bundle --platform=node --format=cjs --packages=external",
-    "build:package": "npm run build && npm run build:electron",
+    "build:package": "npm run build && npm run build:electron && node scripts/verifyDesktopRuntimeDependencies.mjs",
     "desktop:pack:win": "npm run build:package && node scripts/packageDesktop.mjs --win --x64 --dir",
     "desktop:dist:win": "npm run build:package && node scripts/packageDesktop.mjs --win --x64",
     "clean": "rm -rf dist dist-electron",
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
+    "liqe": "^3.8.7",
     "playwright": "^1.63.0",
     "tslog": "^5.2.0"
   },
@@ -36,7 +37,6 @@
     "electron": "^33",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.12",
-    "liqe": "^3.8.7",
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
