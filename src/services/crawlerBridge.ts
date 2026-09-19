@@ -2,29 +2,23 @@ import type {
   HotelCrawlRequest,
   HotelCrawlResult,
   ProfileSyncResult,
+  CollectorLogPayload,
 } from '../crawler/types';
-import {
-  executeHotelCrawl,
-  requestSyncChromeProfile,
-  type CrawlerApiResponse,
-  type ProfileSyncResponseData,
-} from './crawlerApi';
+import type { CrawlerBridgeApi } from '../types';
 
-export interface ElectronCrawlerApi {
-  collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
-  syncProfile?(channelCode?: string): Promise<ProfileSyncResult>;
+export interface CrawlerApiResponse extends HotelCrawlResult {
+  logs?: CollectorLogPayload[];
 }
 
-interface WindowWithElectron {
-  electron?: {
-    crawler?: ElectronCrawlerApi;
-  };
+function getCrawlerApi(): CrawlerBridgeApi {
+  const host = window.host;
+  if (!host?.crawler) {
+    throw new Error('门店采集仅支持桌面端');
+  }
+
+  return host.crawler;
 }
 
-/**
- * 统一采集通信网关 (Unified Crawler Bridge)
- * 抹平 Electron IPC 与 Vite HTTP 差异，上层业务统一通过大写 channelCode 发起采集
- */
 export async function collectHotelsByChannel(
   channelCode: string,
   options: Omit<HotelCrawlRequest, 'channelCode'> = {}
@@ -34,52 +28,30 @@ export async function collectHotelsByChannel(
     throw new Error('采集渠道编码 channelCode 不能为空');
   }
 
-  const request: HotelCrawlRequest = {
+  const result = await getCrawlerApi().collectHotels({
     ...options,
     channelCode: code,
-  };
+  });
 
-  // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC
-  if (typeof window !== 'undefined') {
-    const win = window as unknown as WindowWithElectron;
-    if (win.electron?.crawler?.collectHotels) {
-      const result = await win.electron.crawler.collectHotels(request);
-      if (!result.success) {
-        throw new Error(result.error || `「${code}」渠道采集失败`);
-      }
-      return {
-        ...result,
-        channelCode: code,
-      };
-    }
+  if (!result.success) {
+    throw new Error(result.error || `「${code}」渠道采集失败`);
   }
 
-  // 2. 默认走本地 Vite HTTP 采集服务
-  return executeHotelCrawl(request);
+  return {
+    ...result,
+    channelCode: code,
+  };
 }
 
-/**
- * 统一 Chrome 登录态同步网关 (Unified Profile Sync Bridge)
- * 优先调用 Electron IPC，回退至本地 HTTP 网关
- */
 export async function syncChromeProfileByChannel(
   channelCode = 'MEITUAN'
-): Promise<ProfileSyncResponseData> {
-  const code = (channelCode || 'MEITUAN').trim().toUpperCase();
+): Promise<ProfileSyncResult> {
+  const code = channelCode.trim().toUpperCase();
+  const result = await getCrawlerApi().syncProfile(code);
 
-  // 1. 若处于 Electron 桌面原生上下文，优先直走 IPC
-  if (typeof window !== 'undefined') {
-    const win = window as unknown as WindowWithElectron;
-    if (win.electron?.crawler?.syncProfile) {
-      const result = await win.electron.crawler.syncProfile(code);
-      if (!result.success) {
-        throw new Error(result.message || `同步「${code}」Chrome 登录态失败`);
-      }
-      return result;
-    }
+  if (!result.success) {
+    throw new Error(result.error || `同步「${code}」Chrome 登录态失败`);
   }
 
-  // 2. 默认走本地 Vite HTTP 采集服务
-  return requestSyncChromeProfile(code);
+  return result;
 }
-

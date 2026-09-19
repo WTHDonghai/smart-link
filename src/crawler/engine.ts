@@ -1,4 +1,5 @@
 import type { HotelCrawlRequest, HotelCrawlResult, CollectorLogPayload } from './types';
+import { PROCESS_ENV_KEYS } from '../types/env';
 import { hotelCollectorRegistry } from './registry';
 import { createPersistentBrowserSession, type BrowserSession } from './browserManager';
 
@@ -57,7 +58,7 @@ export class HotelCollectionEngine {
 
     let session: BrowserSession | undefined;
     try {
-      const isHeadless = request.headless ?? (process.env.PLAYWRIGHT_HEADLESS === 'true');
+      const isHeadless = request.headless ?? (process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true');
       log({
         level: 'PLAYWRIGHT',
         message: `[CrawlerEngine] 唤起${isHeadless ? '后台无头' : '可视化前台'}浏览器窗口，启动自动化操作流程...`,

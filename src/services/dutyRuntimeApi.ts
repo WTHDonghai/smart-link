@@ -1,16 +1,13 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
+import { logger } from './logger';
 import type {
   ActualStateReportPayload,
-  ChannelDutyInfo,
-  DutyCoordinatorStatus,
   StationRegistration,
   StationIdentity,
   DutyTaskClaimRequest,
   DutyClaimedTask,
   DutyTaskResultPayload,
   DutyTaskCreationBatch,
-  SystemLogEntry,
-  PlatformAuthTokens,
   ImportPayload,
 } from '../types';
 
@@ -21,11 +18,6 @@ export const DUTY_ENDPOINTS = {
   TASKS: `/${TOOLKIT_MODULE}/toolbox/tasks`,
   TASK_RESULT: (id: string) => `/${TOOLKIT_MODULE}/toolbox/tasks/${encodeURIComponent(id)}/result`,
   ORDER_IMPORT: `/${TOOLKIT_MODULE}/orders/import`,
-  LOCAL_DUTY_START: '/api/duty/start',
-  LOCAL_DUTY_STOP: '/api/duty/stop',
-  LOCAL_DUTY_STOP_ALL: '/api/duty/stop-all',
-  LOCAL_DUTY_STATUS: '/api/duty/status',
-  LOCAL_DUTY_TOKENS: '/api/duty/tokens',
 } as const;
 
 /**
@@ -52,7 +44,11 @@ export function unwrapDutyEnvelope<T>(res: unknown): T {
       (typeof envelope.message === 'string' && envelope.message) ||
       (typeof envelope.error === 'string' && envelope.error) ||
       `业务状态异常 (code: ${envelope.code})`;
-    console.error('[unwrapDutyEnvelope] 平台接口返回异常业务信封:', JSON.stringify(envelope));
+    logger.error(`[平台接口] 业务信封异常: ${errorMsg}`, {
+      module: 'API',
+      details: JSON.stringify(envelope),
+      meta: { envelope },
+    });
     throw new Error(`平台接口返回业务错误: ${errorMsg}`);
   }
 
@@ -172,16 +168,38 @@ export async function submitDutyTaskResult(
   if (!cleanTaskId) {
     throw new Error('提交任务回执失败：taskId 不能为空');
   }
-  console.info(`[submitDutyTaskResult] 正在向中台提交任务 ${cleanTaskId} 回执:`, JSON.stringify(payload));
+  logger.track('DUTY_TASK_RESULT_SUBMIT', {
+    module: 'DUTY_TASK',
+    level: 'INFO',
+    taskId: cleanTaskId,
+    taskActionStage: 'result',
+    message: `[任务回执] 正在向中台提交任务 ${cleanTaskId} 回执`,
+    apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
+    apiMethod: 'PUT',
+    apiParams: payload,
+  });
   try {
     const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId), {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
     unwrapDutyEnvelope(res);
-    console.info(`[submitDutyTaskResult] 任务 ${cleanTaskId} 回执提交成功`);
+    logger.success(`[任务回执] 任务 ${cleanTaskId} 回执提交成功`, {
+      module: 'DUTY_TASK',
+      taskId: cleanTaskId,
+      taskActionStage: 'result',
+      apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
+      apiMethod: 'PUT',
+    });
   } catch (err) {
-    console.error(`[submitDutyTaskResult] 任务 ${cleanTaskId} 回执提交失败:`, err);
+    logger.error(`[任务回执] 任务 ${cleanTaskId} 回执提交失败: ${err instanceof Error ? err.message : String(err)}`, {
+      module: 'DUTY_TASK',
+      taskId: cleanTaskId,
+      taskActionStage: 'result',
+      apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
+      apiMethod: 'PUT',
+      details: err instanceof Error ? err.stack : String(err),
+    });
     throw err;
   }
 }
@@ -225,99 +243,4 @@ export async function importToolkitOrder(
           ? data.batchId
           : undefined,
   };
-}
-
-/**
- * 本地开发服务器中间件：启动指定渠道的值守
- */
-export async function startChannelDutyHttp(channelCode: string): Promise<{ success: boolean; message?: string }> {
-  const code = (channelCode || '').trim().toUpperCase();
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_START, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ channelCode: code }),
-  });
-  if (!res.ok) {
-    throw new Error(`启动值守失败 (${res.status})`);
-  }
-  return res.json() as Promise<{ success: boolean; message?: string }>;
-}
-
-/**
- * 本地开发服务器中间件：停止指定渠道的值守
- */
-export async function stopChannelDutyHttp(channelCode: string): Promise<{ success: boolean; message?: string }> {
-  const code = (channelCode || '').trim().toUpperCase();
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_STOP, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ channelCode: code }),
-  });
-  if (!res.ok) {
-    throw new Error(`停止值守失败 (${res.status})`);
-  }
-  return res.json() as Promise<{ success: boolean; message?: string }>;
-}
-
-/**
- * 本地开发服务器中间件：一键停止所有渠道值守
- */
-export async function stopAllDutyHttp(): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_STOP_ALL, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    throw new Error(`停止所有渠道值守失败 (${res.status})`);
-  }
-  return res.json() as Promise<{ success: boolean; message?: string }>;
-}
-
-/**
- * 本地开发服务器中间件：查询当前各渠道值守与协调器状态
- */
-export async function fetchDutyStatusHttp(since?: number): Promise<{
-  channels: Record<string, ChannelDutyInfo>;
-  coordinatorStatus: DutyCoordinatorStatus;
-  station?: StationIdentity | null;
-  logs?: SystemLogEntry[];
-}> {
-  const url = since ? `${DUTY_ENDPOINTS.LOCAL_DUTY_STATUS}?since=${since}` : DUTY_ENDPOINTS.LOCAL_DUTY_STATUS;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`获取值守状态失败 (${res.status})`);
-  }
-  return res.json() as Promise<{
-    channels: Record<string, ChannelDutyInfo>;
-    coordinatorStatus: DutyCoordinatorStatus;
-    station?: StationIdentity | null;
-    logs?: SystemLogEntry[];
-  }>;
-}
-
-/**
- * 本地开发服务器中间件：同步平台 Token 凭据至 Node 宿主环境
- */
-export async function syncDutyTokensHttp(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(tokens),
-  });
-  if (!res.ok) {
-    throw new Error(`同步 Token 失败 (${res.status})`);
-  }
-  return res.json() as Promise<{ success: boolean; message?: string }>;
-}
-
-/**
- * 本地开发服务器中间件：清除 Node 宿主环境中的平台 Token
- */
-export async function clearDutyTokensHttp(): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    throw new Error(`清除 Token 失败 (${res.status})`);
-  }
-  return res.json() as Promise<{ success: boolean; message?: string }>;
 }

@@ -3,72 +3,82 @@
  * 统一管理各渠道商户中心与门店采集地址，消除业务源码中的硬编码 URL
  */
 
-export const OTA_ENV_KEY_MAP: Record<string, string> = {
-  MEITUAN: 'VITE_OTA_MEITUAN_URL',
-  MEITUAN_BIZ: 'VITE_OTA_MEITUAN_BIZ_URL',
-  DOUYIN: 'VITE_OTA_DOUYIN_URL',
-  CTRIP: 'VITE_OTA_CTRIP_URL',
-  TONGCHENG: 'VITE_OTA_TONGCHENG_URL',
-  FLIGGY: 'VITE_OTA_FLIGGY_URL',
-  QUNAR: 'VITE_OTA_QUNAR_URL',
-  RED: 'VITE_OTA_RED_URL',
+import { getAppEnv } from './env';
+import { APP_ENV_KEYS, type AppEnvKey } from '../types/env';
+
+export const OTA_ENV_KEY_MAP: Record<string, AppEnvKey> = {
+  MEITUAN: APP_ENV_KEYS.otaCatalogMeituan,
+  MEITUAN_BIZ: APP_ENV_KEYS.otaCatalogMeituanBiz,
+  DOUYIN: APP_ENV_KEYS.otaCatalogDouyin,
+  CTRIP: APP_ENV_KEYS.otaCatalogCtrip,
+  TONGCHENG: APP_ENV_KEYS.otaCatalogTongcheng,
+  FLIGGY: APP_ENV_KEYS.otaCatalogFliggy,
+  QUNAR: APP_ENV_KEYS.otaCatalogQunar,
+  RED: APP_ENV_KEYS.otaCatalogRed,
 };
 
-export const OTA_ORDER_ENV_KEY_MAP: Record<string, string> = {
-  MEITUAN: 'VITE_OTA_MEITUAN_ORDER_URL',
-  MEITUAN_BIZ: 'VITE_OTA_MEITUAN_ORDER_URL',
-  DOUYIN: 'VITE_OTA_DOUYIN_ORDER_URL',
-  CTRIP: 'VITE_OTA_CTRIP_ORDER_URL',
-  TONGCHENG: 'VITE_OTA_TONGCHENG_ORDER_URL',
-  FLIGGY: 'VITE_OTA_FLIGGY_ORDER_URL',
-  QUNAR: 'VITE_OTA_QUNAR_ORDER_URL',
+export const OTA_ORDER_ENV_KEY_MAP: Record<string, AppEnvKey> = {
+  MEITUAN: APP_ENV_KEYS.otaOrderMeituan,
+  MEITUAN_BIZ: APP_ENV_KEYS.otaOrderMeituan,
+  DOUYIN: APP_ENV_KEYS.otaOrderDouyin,
+  CTRIP: APP_ENV_KEYS.otaOrderCtrip,
+  TONGCHENG: APP_ENV_KEYS.otaOrderTongcheng,
+  FLIGGY: APP_ENV_KEYS.otaOrderFliggy,
+  QUNAR: APP_ENV_KEYS.otaOrderQunar,
 };
 
-interface ImportMetaWithEnv {
-  env?: Record<string, string | undefined>;
+interface OtaUrlErrorContext {
+  subject: string;
+  unsupportedMessagePrefix: string;
+  sharedMeituanKey: AppEnvKey;
 }
 
-/**
- * 安全获取环境变量（智能抹平 Vite import.meta.env、Node.js process.env 与 Electron window 上下文）
- */
-export function getEnvVar(key: string, defaultValue = ''): string {
-  // 1. 优先从 import.meta.env 获取 (Vite 前端客户端或 vite-node)
-  try {
-    if (typeof import.meta !== 'undefined') {
-      const meta = import.meta as unknown as ImportMetaWithEnv;
-      if (meta && typeof meta === 'object' && meta.env && meta.env[key]) {
-        const val = String(meta.env[key]).trim();
-        if (val) return val;
-      }
-    }
-  } catch {
-    // 忽略特定运行环境对 import.meta 的解析异常
+type OtaUrlType = 'catalog' | 'order';
+
+const OTA_URL_ERROR_CONTEXT: Record<OtaUrlType, OtaUrlErrorContext> = {
+  catalog: {
+    subject: '目标访问地址',
+    unsupportedMessagePrefix: '不支持的 OTA',
+    sharedMeituanKey: APP_ENV_KEYS.otaCatalogMeituan,
+  },
+  order: {
+    subject: '订单值守地址',
+    unsupportedMessagePrefix: '不支持的订单值守 OTA',
+    sharedMeituanKey: APP_ENV_KEYS.otaOrderMeituan,
+  },
+};
+
+function getOtaEnvKeyMap(urlType: OtaUrlType): Record<string, AppEnvKey> {
+  return urlType === 'catalog' ? OTA_ENV_KEY_MAP : OTA_ORDER_ENV_KEY_MAP;
+}
+
+function resolveOtaUrl(channelCode: string, urlType: OtaUrlType): string {
+  const code = channelCode.trim();
+  if (!code) {
+    throw new Error('渠道编码 channelCode 不能为空');
   }
 
-  // 2. 其次从 Node.js process.env 获取 (Node 服务端、Electron 主进程或纯 Node 脚本)
-  try {
-    if (typeof process !== 'undefined' && process.env && process.env[key]) {
-      const val = String(process.env[key]).trim();
-      if (val) return val;
-    }
-  } catch {
-    // 忽略非 Node 环境异常
+  const normalizedCode = normalizeOtaChannelCode(code);
+  const envKey = getOtaEnvKeyMap(urlType)[normalizedCode];
+  const errorContext = OTA_URL_ERROR_CONTEXT[urlType];
+
+  if (!envKey) {
+    throw new Error(`${errorContext.unsupportedMessagePrefix} 渠道编码: ${channelCode}`);
   }
 
-  // 3. Electron 渲染进程中通过 contextBridge 注入的环境字典
-  try {
-    if (typeof window !== 'undefined') {
-      const win = window as unknown as { electron?: { env?: Record<string, string> } };
-      if (win.electron?.env?.[key]) {
-        const val = String(win.electron.env[key]).trim();
-        if (val) return val;
-      }
-    }
-  } catch {
-    // 忽略异常
+  const value = getAppEnv(envKey);
+  if (value) return value;
+
+  if (normalizedCode === 'MEITUAN_BIZ') {
+    const meituanValue = getAppEnv(errorContext.sharedMeituanKey);
+    if (meituanValue) return meituanValue;
+
+    throw new Error(
+      `未配置美团商旅或美团的${errorContext.subject}，请在环境变量中配置 ${envKey} 或 ${errorContext.sharedMeituanKey}`
+    );
   }
 
-  return defaultValue;
+  throw new Error(`未配置渠道「${channelCode}」的${errorContext.subject}，请在环境变量中配置 ${envKey}`);
 }
 
 /**
@@ -111,33 +121,7 @@ export function normalizeOtaChannelCode(channelCode: string): string {
  * 支持大写或规范化编码 (如 MEITUAN, MEITUAN_BIZ, MEITUANBIZ, DOUYIN 等)
  */
 export function getOtaChannelUrl(channelCode: string): string {
-  const code = (channelCode || '').trim();
-  if (!code) {
-    throw new Error('渠道编码 channelCode 不能为空');
-  }
-
-  const normalizedCode = normalizeOtaChannelCode(code);
-  const envKey = OTA_ENV_KEY_MAP[normalizedCode];
-
-  if (!envKey) {
-    throw new Error(`不支持的 OTA 渠道编码: ${channelCode}`);
-  }
-
-  // 若美团商旅未单独配置，自动复用美团的配置
-  if (normalizedCode === 'MEITUAN_BIZ') {
-    const bizVal = getEnvVar(envKey);
-    if (bizVal) return bizVal;
-    const meituanVal = getEnvVar('VITE_OTA_MEITUAN_URL');
-    if (meituanVal) return meituanVal;
-    throw new Error(`未配置美团商旅或美团的目标访问地址，请在环境变量中配置 ${envKey} 或 VITE_OTA_MEITUAN_URL`);
-  }
-
-  const val = getEnvVar(envKey);
-  if (!val) {
-    throw new Error(`未配置渠道「${channelCode}」的目标访问地址，请在环境变量中配置 ${envKey}`);
-  }
-
-  return val;
+  return resolveOtaUrl(channelCode, 'catalog');
 }
 
 /**
@@ -152,33 +136,7 @@ export function getMeituanCatalogUrl(): string {
  * 遵循 Fail-Fast 原则：绝不使用隐式 fallback 兜底默认值，未配置时立即显式抛出异常
  */
 export function getOtaOrderUrl(channelCode: string): string {
-  const code = (channelCode || '').trim();
-  if (!code) {
-    throw new Error('渠道编码 channelCode 不能为空');
-  }
-
-  const normalizedCode = normalizeOtaChannelCode(code);
-  const envKey = OTA_ORDER_ENV_KEY_MAP[normalizedCode];
-
-  if (!envKey) {
-    throw new Error(`不支持的订单值守 OTA 渠道编码: ${channelCode}`);
-  }
-
-  // 若美团商旅未单独配置值守地址，自动复用美团值守地址
-  if (normalizedCode === 'MEITUAN_BIZ') {
-    const bizVal = getEnvVar(envKey);
-    if (bizVal) return bizVal;
-    const meituanVal = getEnvVar('VITE_OTA_MEITUAN_ORDER_URL');
-    if (meituanVal) return meituanVal;
-    throw new Error(`未配置美团商旅或美团的订单值守地址，请在环境变量中配置 ${envKey} 或 VITE_OTA_MEITUAN_ORDER_URL`);
-  }
-
-  const val = getEnvVar(envKey);
-  if (!val) {
-    throw new Error(`未配置渠道「${channelCode}」的订单值守地址，请在环境变量中配置 ${envKey}`);
-  }
-
-  return val;
+  return resolveOtaUrl(channelCode, 'order');
 }
 
 /**
@@ -187,4 +145,3 @@ export function getOtaOrderUrl(channelCode: string): string {
 export function getMeituanOrderUrl(): string {
   return getOtaOrderUrl('MEITUAN');
 }
-

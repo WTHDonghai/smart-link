@@ -218,6 +218,8 @@ export type LogEventType =
   | 'DUTY_ACTUAL_STATE_REPORT'
   | 'DUTY_TASK_CLAIM'
   | 'DUTY_TASK_EXECUTE_START'
+  | 'DUTY_TASK_ORDER_IMPORT_SUBMIT'
+  | 'DUTY_TASK_ORDER_IMPORT_SUBMIT_FAILED'
   | 'DUTY_TASK_EXECUTE_SUCCESS'
   | 'DUTY_TASK_EXECUTE_FAILED'
   | 'DUTY_TASK_CREATE_DOWNSTREAM'
@@ -232,6 +234,14 @@ export type LogEventType =
   | 'SYS_STORAGE_PURGE'
   | 'SYS_NETWORK_ONLINE'
   | 'SYS_NETWORK_OFFLINE';
+
+export type TaskActionStage =
+  | 'claim'
+  | 'execute'
+  | 'result'
+  | 'report'
+  | 'order-import-submit'
+  | 'downstream-create';
 
 export interface SystemLogEntry {
   id: string;
@@ -250,7 +260,7 @@ export interface SystemLogEntry {
   // 任务上下文专有元字段 (Task Metadata)
   taskId?: string;
   msgType?: DutyTaskMessageType | string;
-  taskActionStage?: 'CLAIM' | 'EXECUTE' | 'RESULT' | 'REPORT';
+  taskActionStage?: TaskActionStage | string;
   taskStatus?: 'SUCCEEDED' | 'FAILED' | 'PROCESSING' | 'PENDING';
   taskResult?: unknown;
 
@@ -268,6 +278,11 @@ export interface LogFilterParams {
   event?: string;
   channelId?: string;
   orderNo?: string;
+  taskId?: string;
+  taskActionStage?: 'ALL' | string;
+  date?: string;
+  startDate?: string;
+  endDate?: string;
   timeRange?: 'ALL' | '1D' | '3D' | '7D';
   onlyErrors?: boolean;
   search?: string;
@@ -425,6 +440,14 @@ export interface ChannelDutyInfo {
   channelCode: string;
   status: ChannelDutyStatus;
   lastStartedAt?: number;
+  error?: string;
+}
+
+/**
+ * Desktop IPC acknowledgement. Operation failures use one stable error field.
+ */
+export interface DesktopOperationResult {
+  success: boolean;
   error?: string;
 }
 
@@ -671,12 +694,18 @@ export type {
 } from './error';
 
 export type {
+  CrawlerBridgeApi,
+  DutyBridgeApi,
+  HostBridgeApi,
+} from './host';
+
+export type {
   ProtocolFieldCategory,
   ProtocolFieldTransform,
   ProtocolFieldMapping,
   ChannelProtocolSchema,
   CleanOrderContext,
   ProtocolDriftWarning,
+  OrderProtocolPricing,
+  OrderProtocolData,
 } from './template';
-
-

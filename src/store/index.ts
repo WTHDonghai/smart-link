@@ -8,6 +8,7 @@ import orderGuardianReducer from './slices/orderGuardianSlice';
 import systemLogReducer from './slices/systemLogSlice';
 import authReducer from './slices/authSlice';
 import { channelListenerMiddleware } from './channelListener';
+import { logPersistenceMiddleware } from './logPersistenceMiddleware';
 
 export const rootReducer = {
   app: appReducer,
@@ -23,7 +24,10 @@ export const createAppStore = () =>
   configureStore({
     reducer: rootReducer,
     middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware().prepend(channelListenerMiddleware.middleware),
+      getDefaultMiddleware().prepend(
+        logPersistenceMiddleware,
+        channelListenerMiddleware.middleware
+      ),
   });
 
 export const store = createAppStore();

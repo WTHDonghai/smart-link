@@ -465,18 +465,21 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
           json: async () => ({
             code: 0,
             msg: '模板保存成功',
-            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团】单号:{OTA订单号}' },
+            data: {
+              otaChannelCode: 'MEITUAN',
+              remarkTemplate: '【远端规范化】单号:{OTA订单号}',
+            },
           }),
         } as unknown as Response;
       });
 
       const res = await saveChannelRemarkTemplate('meituan', {
-        remarkTemplate: '【美团】单号:{OTA订单号}',
+        remarkTemplate: '【本地提交】单号:{OTA订单号}',
       });
 
       expect(res.ok).toBe(true);
       expect(res.otaChannelCode).toBe('meituan');
-      expect(res.remarkTemplate).toBe('【美团】单号:{OTA订单号}');
+      expect(res.remarkTemplate).toBe('【远端规范化】单号:{OTA订单号}');
       expect(res.message).toBe('模板保存成功');
 
       // 验证真实请求参数，确认包含文旅后台 toolkit 业务模块前缀
@@ -484,9 +487,55 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
       expect(interceptedMethod).toBe('PUT');
       expect(interceptedAuth).toBe('bearer test-token');
       expect(JSON.parse(interceptedBody)).toEqual({
-        remarkTemplate: '【美团】单号:{OTA订单号}',
+        remarkTemplate: '【本地提交】单号:{OTA订单号}',
       });
     });
+
+    it('当 PUT 响应未提供 data.remarkTemplate 时返回 null，交由上层显式回读远端', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: '模板保存成功',
+            data: { otaChannelCode: 'MEITUAN' },
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await saveChannelRemarkTemplate('MEITUAN', {
+        remarkTemplate: '【本地提交】',
+      });
+
+      expect(res.remarkTemplate).toBeNull();
+    });
+
+    it.each([123, { nested: 'invalid' }])(
+      '当 PUT 成功响应存在非法 remarkTemplate 类型时 Fail-Fast 抛出异常: %j',
+      async (invalidTemplate) => {
+        globalThis.fetch = vi.fn().mockImplementation(async () => {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              code: 0,
+              msg: '模板保存成功',
+              data: {
+                otaChannelCode: 'MEITUAN',
+                remarkTemplate: invalidTemplate,
+              },
+            }),
+          } as unknown as Response;
+        });
+
+        await expect(
+          saveChannelRemarkTemplate('MEITUAN', { remarkTemplate: '合法输入模板' })
+        ).rejects.toThrow('保存渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null');
+      }
+    );
 
     it('当缺少 otaChannelCode 时 Fail-Fast 阻断，不发起网络调用', async () => {
       const fetchSpy = vi.fn();
@@ -567,7 +616,7 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
       expect(interceptedAuth).toBe('bearer test-token');
     });
 
-    it('当服务端返回 404 NOT_FOUND 时，优雅解析为 remarkTemplate: null 供展示默认模板', async () => {
+    it('当服务端返回 404 NOT_FOUND 时，优雅解析为 remarkTemplate: null 表示远端未配置', async () => {
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         return {
           ok: false,
@@ -609,6 +658,31 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
       expect(res.remarkTemplate).toBeNull();
     });
 
+    it.each([123, { nested: 'invalid' }])(
+      '当 GET 成功响应存在非法 remarkTemplate 类型时 Fail-Fast 抛出异常: %j',
+      async (invalidTemplate) => {
+        globalThis.fetch = vi.fn().mockImplementation(async () => {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              code: 0,
+              msg: 'success',
+              data: {
+                otaChannelCode: 'MEITUAN',
+                remarkTemplate: invalidTemplate,
+              },
+            }),
+          } as unknown as Response;
+        });
+
+        await expect(fetchChannelRemarkTemplate('MEITUAN')).rejects.toThrow(
+          '获取渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null'
+        );
+      }
+    );
+
     it('当缺少 otaChannelCode 时 Fail-Fast 阻断，不发起网络调用', async () => {
       const fetchSpy = vi.fn();
       globalThis.fetch = fetchSpy;
@@ -620,7 +694,7 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('当遇到 500 等不可恢复的后端错误时 Fail-Fast 抛出异常', async () => {
+    it('当遇到 500 且错误文案包含“模板不存在”时仍 Fail-Fast 抛出异常', async () => {
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         return {
           ok: false,
@@ -628,14 +702,33 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
           headers: new Headers({ 'content-type': 'application/json' }),
           json: async () => ({
             code: 500,
-            msg: '内部数据库异常',
+            msg: '模板不存在',
           }),
         } as unknown as Response;
       });
 
       await expect(fetchChannelRemarkTemplate('MEITUAN')).rejects.toThrow(
-        '平台接口调用失败 (500)'
+        '平台接口调用失败 (500): 模板不存在'
       );
+    });
+
+    it('当 HTTP 200 业务信封 code 为 404 时，按远端未配置返回 null', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 404,
+            success: false,
+            msg: '模板不存在',
+          }),
+        } as unknown as Response;
+      });
+
+      const res = await fetchChannelRemarkTemplate('MEITUAN');
+
+      expect(res.remarkTemplate).toBeNull();
     });
 
     it('当服务端返回 HTTP 200 但业务信封标记失败（success: false）时 Fail-Fast 抛出异常', async () => {

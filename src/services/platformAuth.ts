@@ -1,4 +1,6 @@
 import { PlatformAuthTokens, PlatformDeviceCodeInfo, PlatformTokenState } from '../types';
+import { getAppEnv } from '../config/env';
+import { APP_ENV_KEYS } from '../types/env';
 import { formatBaseUrl, joinApiUrl } from '../utils/url';
 import { logger } from './logger';
 
@@ -37,40 +39,10 @@ export interface ClassifiedAuthError extends Error {
   oauthError?: string;
 }
 
-interface MetaWithEnv {
-  env?: {
-    DEV?: boolean;
-    PROD?: boolean;
-    MODE?: string;
-    VITE_PLATFORM_BASE_URL?: string;
-  };
-}
-
-export function getEnvironmentMode(): { mode: string; isDev: boolean; isProd: boolean } {
-  if (typeof process !== 'undefined' && process.env?.NODE_ENV) {
-    const env = process.env.NODE_ENV;
-    return {
-      mode: env,
-      isDev: env === 'development',
-      isProd: env === 'production',
-    };
-  }
-
-  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
-  if (meta?.env) {
-    const isDev = Boolean(meta.env.DEV);
-    const isProd = Boolean(meta.env.PROD);
-    const mode = String(meta.env.MODE || (isDev ? 'development' : 'production'));
-    return { mode, isDev, isProd };
-  }
-
-  return { mode: 'development', isDev: true, isProd: false };
-}
-
 /**
  * 全局统一获取当前生效的文旅平台 Base URL
  * 优先级 1：当前登录会话中持久化的 platformBaseUrl (杜绝串服)
- * 优先级 2：环境变量 VITE_PLATFORM_BASE_URL (未配置则立即 Fail-Fast 抛错，绝不隐式硬编码兜底)
+ * 优先级 2：公开环境契约中的平台网关地址 (未配置则立即 Fail-Fast 抛错，绝不隐式硬编码兜底)
  */
 export function getPlatformBaseUrl(): string {
   const savedTokens = loadTokensFromStorage();
@@ -79,19 +51,12 @@ export function getPlatformBaseUrl(): string {
     if (url) return url;
   }
 
-  const electronUrl =
-    typeof window !== 'undefined'
-      ? (window as unknown as { electron?: { env?: { platformBaseUrl?: string } } }).electron?.env?.platformBaseUrl
-      : undefined;
-
-  const meta = typeof import.meta !== 'undefined' ? (import.meta as unknown as MetaWithEnv) : undefined;
-  const envUrl =
-    (typeof process !== 'undefined' && process.env?.VITE_PLATFORM_BASE_URL) ||
-    meta?.env?.VITE_PLATFORM_BASE_URL ||
-    electronUrl;
+  const envUrl = getAppEnv(APP_ENV_KEYS.platformBaseUrl);
 
   if (!envUrl || !envUrl.trim()) {
-    throw new Error('未配置平台接口基础地址，请在环境变量中配置 VITE_PLATFORM_BASE_URL');
+    throw new Error(
+      `未配置平台接口基础地址，请在环境变量中配置 ${APP_ENV_KEYS.platformBaseUrl}`
+    );
   }
 
   return formatBaseUrl(envUrl);
@@ -210,14 +175,17 @@ export function setInMemoryTokens(tokens: PlatformAuthTokens | null): void {
 }
 
 export function saveTokensToStorage(tokens: PlatformAuthTokens): void {
-  inMemoryTokens = tokens;
   if (typeof localStorage !== 'undefined') {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
-    } catch {
-      // 忽略存储配额或权限异常
+    } catch (error) {
+      throw new Error(
+        `保存平台登录凭证失败: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
     }
   }
+  inMemoryTokens = tokens;
   notifyTokenChange(tokens);
   for (const scheduler of activeSchedulers) {
     if (scheduler.isSchedulerActive()) {
@@ -230,15 +198,29 @@ export function loadTokensFromStorage(): PlatformAuthTokens | null {
   if (typeof localStorage !== 'undefined') {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as PlatformAuthTokens;
-        if (parsed.accessToken && parsed.refreshToken && parsed.expiresAt) {
-          inMemoryTokens = parsed;
-          return parsed;
-        }
+      if (!raw) {
+        return inMemoryTokens;
       }
-    } catch {
-      // 容错回退内存缓存
+
+      const parsed = JSON.parse(raw) as PlatformAuthTokens;
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        !parsed.accessToken ||
+        !parsed.refreshToken ||
+        !parsed.expiresAt
+      ) {
+        throw new Error('凭证结构缺少 accessToken、refreshToken 或 expiresAt');
+      }
+
+      inMemoryTokens = parsed;
+      return parsed;
+    } catch (error) {
+      throw new Error(
+        `本地平台登录凭证无效: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
     }
   }
   return inMemoryTokens;
@@ -252,8 +234,11 @@ export function clearTokensFromStorage(): void {
     try {
       hadStorage = Boolean(localStorage.getItem(STORAGE_KEY));
       localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // 忽略异常
+    } catch (error) {
+      throw new Error(
+        `清除本地平台登录凭证失败: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
     }
   }
   if (hadStorage || hadInMemory) {
@@ -280,6 +265,10 @@ export class PlatformAuthService {
   private isSchedulerRunning = false;
 
   async requestDeviceCode(platformBaseUrl?: string): Promise<PlatformDeviceCodeInfo> {
+    if (typeof window !== 'undefined' && !window.host) {
+      throw new Error('平台登录仅支持桌面端');
+    }
+
     const baseUrl = formatBaseUrl(platformBaseUrl || getPlatformBaseUrl());
     const targetUrl = joinApiUrl(baseUrl, PLATFORM_DEVICE_CODE_PATH);
 
@@ -346,6 +335,10 @@ export class PlatformAuthService {
       onPollAttempt?: (attempt: number) => void;
     } = {}
   ): Promise<PlatformAuthTokens> {
+    if (typeof window !== 'undefined' && !window.host) {
+      throw new Error('平台登录仅支持桌面端');
+    }
+
     const baseUrl = formatBaseUrl(platformBaseUrl || getPlatformBaseUrl());
     const targetUrl = joinApiUrl(baseUrl, PLATFORM_TOKEN_PATH);
     const expiresIn = options.expiresIn ?? 600;

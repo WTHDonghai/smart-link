@@ -10,6 +10,7 @@ import type {
   DutyTaskResultPayload,
   DutyTaskWireStatus,
   DutyTaskCreationBatch,
+  DesktopOperationResult,
 } from '../../types';
 import type { ChannelDutyRunner } from './dutyContracts';
 import { MeituanDutyRunner } from './meituanDutyRunner';
@@ -23,7 +24,10 @@ import {
 } from '../../services/dutyRuntimeApi';
 import { registerApiLogListener } from '../../services/platformApi';
 import { logger } from '../../services/logger';
+import { formatLogTimestamp } from '../../services/logStorage';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
+import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';
+import { createTaskLogger } from './dutyTaskLogger';
 
 export { dispatchDutyTask };
 
@@ -175,38 +179,12 @@ export class DutyOrchestrationEngine {
     const now = Date.now();
     const entry: SystemLogEntry = {
       id: `duty-log-${now}-${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: new Date(now).toISOString().slice(11, 19),
+      timestamp: formatLogTimestamp(new Date(now)),
       createdAt: now,
       ...entryPartial,
     };
 
     this.appendDutyLogDirect(entry);
-
-    // 广播到统一系统日志服务
-    try {
-      logger.track(entry.event || 'DUTY_LOG', {
-        level: entry.level,
-        module: entry.module || 'DUTY_TASK',
-        message: entry.message,
-        details: entry.details,
-        channelId: entry.channelId,
-        orderNo: entry.orderNo,
-        durationMs: entry.durationMs,
-        meta: entry.meta,
-        taskId: entry.taskId,
-        msgType: entry.msgType,
-        taskActionStage: entry.taskActionStage,
-        taskStatus: entry.taskStatus,
-        taskResult: entry.taskResult,
-        apiUrl: entry.apiUrl,
-        apiMethod: entry.apiMethod,
-        apiParams: entry.apiParams,
-        apiResponse: entry.apiResponse,
-        httpStatus: entry.httpStatus,
-      });
-    } catch {
-      // 容错
-    }
 
     return entry;
   }
@@ -224,7 +202,7 @@ export class DutyOrchestrationEngine {
   /**
    * 启动指定渠道值守
    */
-  public async startDuty(channelCode: string): Promise<{ success: boolean; message: string }> {
+  public async startDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
     const runner = this.runners.get(code);
     if (!runner) {
@@ -232,7 +210,7 @@ export class DutyOrchestrationEngine {
     }
 
     if (runner.isRunning()) {
-      return { success: true, message: `渠道「${code}」值守已在运行中` };
+      return { success: true };
     }
 
     this.channelStates.set(code, {
@@ -256,7 +234,7 @@ export class DutyOrchestrationEngine {
         module: 'DUTY_TASK',
         event: 'PLAYWRIGHT_WORKER_START',
         channelId: code,
-        taskActionStage: 'EXECUTE',
+        taskActionStage: "execute",
         message: `[值守启动] 渠道「${code}」可视化前台浏览器窗口已唤起，进入订单自动化值守监听`,
         details: `渠道: ${code} | 状态: RUNNING | 监听目标: ${(runner as unknown as { targetUrl?: string })?.targetUrl || code}`,
       });
@@ -273,7 +251,7 @@ export class DutyOrchestrationEngine {
           module: 'DUTY_TASK',
           event: 'DUTY_ACTUAL_STATE_REPORT',
           channelId: code,
-          taskActionStage: 'REPORT',
+          taskActionStage: "report",
           message: `[中台协同] 渠道「${code}」前台浏览器已启动，中台工位申请中: ${msg}`,
           details: `若未完成文旅平台登录授权，请在登录界面完成登录，工位将在后台自愈激活`,
         });
@@ -282,10 +260,7 @@ export class DutyOrchestrationEngine {
       // 3. 激活认领调度循环 (具备自愈重试与工位后置绑定能力)
       this.ensureClaimLoop();
 
-      return {
-        success: true,
-        message: `渠道「${code}」订单自动化值守已成功激活`,
-      };
+      return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.channelStates.set(code, {
@@ -308,7 +283,7 @@ export class DutyOrchestrationEngine {
   /**
    * 停止指定渠道值守
    */
-  public async stopDuty(channelCode: string): Promise<{ success: boolean; message: string }> {
+  public async stopDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
     const runner = this.runners.get(code);
     if (!runner) {
@@ -345,16 +320,13 @@ export class DutyOrchestrationEngine {
       await this.reportActualState(this.stationIdentity.stationId);
     }
 
-    return {
-      success: true,
-      message: `渠道「${code}」值守已安全终止`,
-    };
+    return { success: true };
   }
 
   /**
    * 一键停止所有渠道值守与后台调度引擎，向中台发送工位离线报文，彻底释放所有资源
    */
-  public async stopAllDuty(): Promise<{ success: boolean; message: string }> {
+  public async stopAllDuty(): Promise<DesktopOperationResult> {
     // 1. 设置 stopSignal = true 阻断长轮询任务认领
     this.stopSignal = true;
 
@@ -372,7 +344,15 @@ export class DutyOrchestrationEngine {
         try {
           await runner.stop();
         } catch (err) {
-          console.warn(`[DutyOrchestrationEngine] 停止渠道「${code}」值守异常:`, err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.appendDutyLog({
+            level: 'WARN',
+            event: 'DUTY_RUNNER_STOP_FAILED',
+            taskActionStage: 'execute',
+            channelId: code,
+            message: `[值守调度] 停止渠道「${code}」值守异常: ${errMsg}`,
+            details: err instanceof Error ? err.stack : errMsg,
+          });
         } finally {
           this.channelStates.set(code, {
             channelCode: code,
@@ -399,7 +379,14 @@ export class DutyOrchestrationEngine {
       try {
         await this.reportActualState(station.stationId, true);
       } catch (reportErr) {
-        console.warn('[DutyOrchestrationEngine] 离线状态上报异常:', reportErr);
+        const errMsg = reportErr instanceof Error ? reportErr.message : String(reportErr);
+        this.appendDutyLog({
+          level: 'WARN',
+          event: 'DUTY_ACTUAL_STATE_REPORT_FAILED',
+          taskActionStage: 'report',
+          message: `[值守调度] 离线状态上报异常: ${errMsg}`,
+          details: reportErr instanceof Error ? reportErr.stack : errMsg,
+        });
       }
     }
 
@@ -408,15 +395,12 @@ export class DutyOrchestrationEngine {
       level: 'INFO',
       module: 'DUTY_TASK',
       event: 'DUTY_STOP_ALL',
-      taskActionStage: 'EXECUTE',
+      taskActionStage: "execute",
       message: '[值守终止] 全局值守已安全终止，所有渠道自动化监听与心跳均已清退',
       details: `停止渠道数: ${activeRunners.length} | 工位: ${station?.stationId || '未分配'} | 状态: STOPPED`,
     });
 
-    return {
-      success: true,
-      message: '所有自动化值守及调度任务已安全停止',
-    };
+    return { success: true };
   }
 
   private async reportActualState(stationId: string, forceStop = false): Promise<void> {
@@ -442,7 +426,14 @@ export class DutyOrchestrationEngine {
     try {
       await reportDutyActualState(payload);
     } catch (e) {
-      console.warn('[DutyOrchestrationEngine] actual-state/report 上报异常:', e);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      this.appendDutyLog({
+        level: 'WARN',
+        event: 'DUTY_ACTUAL_STATE_REPORT_FAILED',
+        taskActionStage: 'report',
+        message: `[值守心跳] actual-state/report 上报异常: ${errMsg}`,
+        details: e instanceof Error ? e.stack : errMsg,
+      });
     }
   }
 
@@ -505,7 +496,7 @@ export class DutyOrchestrationEngine {
             level: 'ERROR',
             module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
+            taskActionStage: "result",
             msgType: task.msgType,
             taskId: task.id,
             taskStatus: 'FAILED',
@@ -531,7 +522,7 @@ export class DutyOrchestrationEngine {
             level: 'ERROR',
             module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
+            taskActionStage: "result",
             msgType: task.msgType,
             taskId: task.id,
             taskStatus: 'FAILED',
@@ -558,7 +549,7 @@ export class DutyOrchestrationEngine {
             level: 'ERROR',
             module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
+            taskActionStage: "result",
             msgType: task.msgType,
             taskId: task.id,
             taskStatus: 'FAILED',
@@ -572,15 +563,10 @@ export class DutyOrchestrationEngine {
           continue;
         }
 
-        // 解码与校验 task.data 载荷
-        let parsedData: Record<string, unknown>;
+        // 解码与校验中台下发任务的上下文载荷
+        let parsedContext: ParsedDutyTaskContext;
         try {
-          const rawDecoded = Buffer.from(task.data, 'base64').toString('utf-8');
-          const decodedObj = JSON.parse(rawDecoded) as unknown;
-          if (!decodedObj || typeof decodedObj !== 'object' || Array.isArray(decodedObj)) {
-            throw new Error('任务 data 解码后必须为非数组的 JSON 对象');
-          }
-          parsedData = decodedObj as Record<string, unknown>;
+          parsedContext = parseDutyTaskContext(task);
         } catch (decodeErr) {
           const failureMsg = `任务 data 解码校验失败: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`;
           const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
@@ -593,7 +579,7 @@ export class DutyOrchestrationEngine {
             level: 'ERROR',
             module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
+            taskActionStage: "result",
             msgType: task.msgType,
             taskId: task.id,
             taskStatus: 'FAILED',
@@ -607,31 +593,9 @@ export class DutyOrchestrationEngine {
           continue;
         }
 
-        // 解析目标渠道与合法性收敛
-        let targetChannel = 'MEITUAN';
-        if (task.msgType === 'OTA_COLLECT_ORDER') {
-          if (parsedData.otaChannelCode) {
-            targetChannel = String(parsedData.otaChannelCode).trim().toUpperCase();
-          }
-        } else if (task.msgType === 'OTA_CONFIRM_IMPORT' || task.msgType === 'OTA_CONFIRM_CANCEL') {
-          if (parsedData.channelCode) {
-            targetChannel = String(parsedData.channelCode).trim().toUpperCase();
-          }
-        } else if (task.msgType === 'OTA_IMPORT_ORDER') {
-          if (parsedData.channel) {
-            targetChannel = String(parsedData.channel).trim().toUpperCase();
-          } else if (parsedData.otaChannelCode) {
-            targetChannel = String(parsedData.otaChannelCode).trim().toUpperCase();
-          } else if (
-            Array.isArray(parsedData.orders) &&
-            parsedData.orders[0] &&
-            typeof parsedData.orders[0] === 'object' &&
-            'otaChannel' in (parsedData.orders[0] as Record<string, unknown>)
-          ) {
-            targetChannel = String((parsedData.orders[0] as Record<string, unknown>).otaChannel).trim().toUpperCase();
-          }
-        } else {
-          // 未知任务类型
+        // 校验任务消息类型是否在客户端执行器支持范围内
+        const supportedTypes = ['OTA_COLLECT_ORDER', 'OTA_IMPORT_ORDER', 'OTA_CONFIRM_IMPORT', 'OTA_CONFIRM_CANCEL'];
+        if (!supportedTypes.includes(task.msgType)) {
           const failureMsg = `不支持的任务消息类型: ${task.msgType}`;
           const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
             status: 'FAIL',
@@ -643,7 +607,7 @@ export class DutyOrchestrationEngine {
             level: 'ERROR',
             module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
+            taskActionStage: 'result',
             msgType: task.msgType,
             taskId: task.id,
             taskStatus: 'FAILED',
@@ -657,16 +621,20 @@ export class DutyOrchestrationEngine {
           continue;
         }
 
+        const targetChannel = parsedContext.channelCode;
+        const taskOrderNo = parsedContext.orderNo;
+        const taskLogger = createTaskLogger(
+          task,
+          { channelCode: targetChannel, orderNo: taskOrderNo },
+          (entry) => this.appendDutyLog(entry)
+        );
+
         // 1. 任务认领日志 (CLAIM)
-        this.appendDutyLog({
+        taskLogger.log({
           level: 'INFO',
-          module: 'DUTY_TASK',
           event: 'DUTY_TASK_CLAIM',
-          taskActionStage: 'CLAIM',
-          msgType: task.msgType,
-          taskId: task.id,
+          taskActionStage: "claim",
           taskStatus: 'PROCESSING',
-          channelId: targetChannel,
           apiUrl: '/toolkit/toolbox/task-claims',
           apiMethod: 'POST',
           apiParams: {
@@ -676,8 +644,10 @@ export class DutyOrchestrationEngine {
           },
           apiResponse: task,
           httpStatus: 200,
-          message: `[任务认领 CLAIM] 任务类型: ${task.msgType} (ID: ${task.id})`,
-          details: `业务标识: ${task.businessId || '-'} | 所属渠道: ${targetChannel} | 工位: ${identity.stationId}`,
+          message: `[任务认领 claim] 任务类型: ${task.msgType} (ID: ${task.id})`,
+          details: `业务标识: ${task.businessId || '-'} | 所属渠道: ${targetChannel} | 工位: ${identity.stationId}${
+            taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''
+          }`,
         });
 
         const runner = this.runners.get(targetChannel);
@@ -691,20 +661,16 @@ export class DutyOrchestrationEngine {
             retryable: !isCollect,
           });
 
-          this.appendDutyLog({
+          taskLogger.log({
             level: 'ERROR',
-            module: 'DUTY_TASK',
             event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'RESULT',
-            msgType: task.msgType,
-            taskId: task.id,
+            taskActionStage: "result",
             taskStatus: 'FAILED',
-            channelId: targetChannel,
             apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
             apiMethod: 'PUT',
             apiParams: unavailResultPayload,
             apiResponse: { success: false, error: failureMsg },
-            message: `[任务结果 RESULT] 任务 ${task.msgType} 执行失败: ${failureMsg} (ID: ${task.id})`,
+            message: `[任务结果 result] 任务 ${task.msgType} 执行失败: ${failureMsg} (ID: ${task.id})`,
             details: failureMsg,
           });
 
@@ -712,15 +678,11 @@ export class DutyOrchestrationEngine {
             await submitDutyTaskResult(task.id, unavailResultPayload);
           } catch (submitErr) {
             const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
-            this.appendDutyLog({
+            taskLogger.log({
               level: 'ERROR',
-              module: 'DUTY_TASK',
               event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
-              taskActionStage: 'RESULT',
-              msgType: task.msgType,
-              taskId: task.id,
+              taskActionStage: "result",
               taskStatus: 'FAILED',
-              channelId: targetChannel,
               apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
               apiMethod: 'PUT',
               apiParams: unavailResultPayload,
@@ -736,24 +698,26 @@ export class DutyOrchestrationEngine {
         this.coordinatorStatus = 'EXECUTING';
 
         // 2. 任务执行开始日志 (EXECUTE)
-        this.appendDutyLog({
+        taskLogger.log({
           level: 'PLAYWRIGHT',
-          module: 'DUTY_TASK',
           event: 'DUTY_TASK_EXECUTE_START',
-          taskActionStage: 'EXECUTE',
-          msgType: task.msgType,
-          taskId: task.id,
+          taskActionStage: "execute",
           taskStatus: 'PROCESSING',
-          channelId: targetChannel,
-          message: `[任务执行 EXECUTE] 正在执行 ${task.msgType} (ID: ${task.id})`,
-          details: `执行渠道: ${targetChannel} | 业务主键: ${task.businessId || '-'}`,
+          message: `[任务执行 execute] 正在执行 ${task.msgType} (ID: ${task.id})`,
+          details: `执行渠道: ${targetChannel} | 业务主键: ${task.businessId || '-'}${
+            taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''
+          }`,
         });
 
         const startTime = Date.now();
         const execRes =
           typeof runner.executeTask === 'function'
-            ? await runner.executeTask(task)
-            : await dispatchDutyTask(task, runner);
+            ? await runner.executeTask(task, (entry) =>
+                taskLogger.log(entry)
+              )
+            : await dispatchDutyTask(task, runner, (entry) =>
+                taskLogger.log(entry)
+              );
         const durationMs = Date.now() - startTime;
 
         // 3. 任务执行完成与结果日志 (RESULT)
@@ -780,35 +744,27 @@ export class DutyOrchestrationEngine {
         });
 
         if (isRiskIntercepted) {
-          this.appendDutyLog({
+          taskLogger.log({
             level: 'WARN',
-            module: 'DUTY_TASK',
             event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
-            taskActionStage: 'EXECUTE',
-            msgType: task.msgType,
-            taskId: task.id,
-            channelId: targetChannel,
+            taskActionStage: "execute",
             message: `[风控拦截熔断] 页面遭遇美团安全验证/滑块/人机拦截，已自动熔断阻断机器重试`,
             details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
           });
         }
 
-        this.appendDutyLog({
+        taskLogger.log({
           level: isSuccess ? 'SUCCESS' : 'ERROR',
-          module: 'DUTY_TASK',
           event: isSuccess ? 'DUTY_TASK_EXECUTE_SUCCESS' : 'DUTY_TASK_EXECUTE_FAILED',
-          taskActionStage: 'RESULT',
-          msgType: task.msgType,
-          taskId: task.id,
+          taskActionStage: "result",
           taskStatus: execRes.status,
           taskResult: execRes.result,
-          channelId: targetChannel,
           durationMs,
           apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
           apiMethod: 'PUT',
           apiParams: resultPayload,
           apiResponse: execRes.result,
-          message: `[任务结果 RESULT] 任务 ${task.msgType} 执行${isSuccess ? '成功' : '失败'} (ID: ${task.id})`,
+          message: `[任务结果 result] 任务 ${task.msgType} 执行${isSuccess ? '成功' : '失败'} (ID: ${task.id})`,
           details: isSuccess
             ? `耗时: ${durationMs}ms | 状态: SUCCESS${execRes.result ? ` | 结果: ${JSON.stringify(execRes.result)}` : ''}`
             : `状态: FAIL | 错误代码: ${execRes.errorCode || '-'} | 错误信息: ${execRes.errorMessage || '未知异常'}`,
@@ -857,14 +813,10 @@ export class DutyOrchestrationEngine {
                 items: creationItems,
               });
 
-              this.appendDutyLog({
+              taskLogger.log({
                 level: 'INFO',
-                module: 'DUTY_TASK',
                 event: 'DUTY_TASK_CREATE_DOWNSTREAM',
-                taskActionStage: 'EXECUTE',
-                msgType: task.msgType,
-                taskId: task.id,
-                channelId: targetChannel,
+                taskActionStage: 'downstream-create',
                 apiUrl: '/toolkit/toolbox/tasks',
                 apiMethod: 'POST',
                 apiParams: {
@@ -873,20 +825,15 @@ export class DutyOrchestrationEngine {
                   items: creationItems,
                 },
                 apiResponse: { success: true, count: orders.length },
-                message: `[下游派发] 发现 ${orders.length} 个订单，已批量创建下游中台处理任务`,
+                message: `[下游派发 downstream-create] 发现 ${orders.length} 个订单，已批量创建下游中台处理任务`,
                 details: `订单列表: ${orders.map((o) => `${o.orderId}(${o.cancelOrder ? '退单' : '入单'})`).join(', ')}`,
               });
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              console.warn('[DutyOrchestrationEngine] 自动创建下游订单任务异常:', err);
-              this.appendDutyLog({
+              taskLogger.log({
                 level: 'ERROR',
-                module: 'DUTY_TASK',
                 event: 'DUTY_TASK_CREATE_DOWNSTREAM',
-                taskActionStage: 'EXECUTE',
-                msgType: task.msgType,
-                taskId: task.id,
-                channelId: targetChannel,
+                taskActionStage: 'downstream-create',
                 apiUrl: '/toolkit/toolbox/tasks',
                 apiMethod: 'POST',
                 apiParams: {
@@ -895,7 +842,7 @@ export class DutyOrchestrationEngine {
                   count: orders.length,
                 },
                 apiResponse: { error: errMsg },
-                message: `[下游派发失败] 创建下游订单处理任务异常: ${errMsg}`,
+                message: `[下游派发失败 downstream-create] 创建下游订单处理任务异常: ${errMsg}`,
                 details: errMsg,
               });
             }
@@ -905,39 +852,31 @@ export class DutyOrchestrationEngine {
         this.coordinatorStatus = 'REPORTING';
         try {
           await submitDutyTaskResult(task.id, resultPayload);
-          this.appendDutyLog({
+          taskLogger.log({
             level: 'INFO',
-            module: 'DUTY_TASK',
             event: 'DUTY_TASK_RESULT_SUBMIT',
-            taskActionStage: 'RESULT',
-            msgType: task.msgType,
-            taskId: task.id,
+            taskActionStage: "result",
             taskStatus: isSuccess ? 'SUCCEEDED' : 'FAILED',
-            channelId: targetChannel,
             apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
             apiMethod: 'PUT',
             apiParams: resultPayload,
             apiResponse: { success: true },
             httpStatus: 200,
-            message: `[回执提交] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
-            details: `回执状态: ${wireStatus}`,
+            message: `[回执提交 RESULT] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
+            details: `回执状态: ${wireStatus}${taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''}`,
           });
         } catch (submitErr) {
           const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
-          this.appendDutyLog({
+          taskLogger.log({
             level: 'ERROR',
-            module: 'DUTY_TASK',
             event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
-            taskActionStage: 'RESULT',
-            msgType: task.msgType,
-            taskId: task.id,
+            taskActionStage: "result",
             taskStatus: 'FAILED',
-            channelId: targetChannel,
             apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
             apiMethod: 'PUT',
             apiParams: resultPayload,
             apiResponse: { error: submitErrMsg },
-            message: `[回执提交失败] 任务 ${task.msgType} 回执中台失败: ${submitErrMsg} (ID: ${task.id})`,
+            message: `[回执提交失败 RESULT] 任务 ${task.msgType} 回执中台失败: ${submitErrMsg} (ID: ${task.id})`,
             details: submitErrMsg,
           });
           throw submitErr;
@@ -949,14 +888,13 @@ export class DutyOrchestrationEngine {
           this.coordinatorStatus = 'CLAIM_BACKOFF';
         }
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.error('[DutyOrchestrationEngine] 任务调度循环异常:', err);
         this.appendDutyLog({
           level: 'ERROR',
           module: 'DUTY_TASK',
           event: 'DUTY_TASK_CLAIM_LOOP_ERROR',
-          taskActionStage: 'CLAIM',
+          taskActionStage: "claim",
           message: `[任务调度异常] 任务调度认领与回执循环异常: ${errMsg}`,
-          details: `调度器已进入退避状态，将在 3 秒后自动重试`,
+          details: err instanceof Error ? err.stack : `调度器已进入退避状态，将在 3 秒后自动重试`,
         });
         if (this.stopSignal || this.getActiveRunners().length === 0) {
           break;

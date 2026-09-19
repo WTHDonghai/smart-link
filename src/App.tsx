@@ -11,8 +11,14 @@ import { PlatformLoginView } from './components/auth/PlatformLoginView';
 import { ToastNotification } from './components/common/ToastNotification';
 import { platformAuthService, classifyAuthError, loadTokensFromStorage } from './services/platformAuth';
 import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/slices/authSlice';
-import { syncDutyTokens, clearDutyTokens, subscribeDutyLogs } from './services/dutyBridge';
-import { addLog } from './store/slices/systemLogSlice';
+import {
+  syncDutyTokens,
+  clearDutyTokens,
+  subscribeDutyLogs,
+  takePendingMainLogs,
+} from './services/dutyBridge';
+import { addLog, addLogs } from './store/slices/systemLogSlice';
+import { logger } from './services/logger';
 import { syncDutyStatusThunk } from './store/slices/orderGuardianSlice';
 
 export default function App() {
@@ -47,6 +53,18 @@ export default function App() {
     // 3. 订阅后台全链路值守与调度日志，一旦产生任何认领、执行、回执或异常日志，即刻注入 Redux 状态流
     const unsubscribeDutyLogs = subscribeDutyLogs((entry) => {
       dispatch(addLog(entry));
+    });
+    void takePendingMainLogs().then((entries) => {
+      if (entries.length > 0) {
+        dispatch(addLogs(entries));
+      }
+    }).catch((error: unknown) => {
+      logger.track('SYS_MAIN_LOG_QUEUE_ERROR', {
+        level: 'ERROR',
+        module: 'SYSTEM',
+        message: '获取主进程暂存日志失败',
+        details: error instanceof Error ? error.message : String(error),
+      });
     });
 
     // 4. 启动并维持全局值守状态与调度日志同步轮询 (3秒周期)，确保即使无活动渠道也能捕获后台调度器异常
@@ -147,4 +165,3 @@ export default function App() {
     </div>
   );
 }
-

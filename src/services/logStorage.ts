@@ -1,9 +1,64 @@
 import { SystemLogEntry, LogFilterParams } from '../types';
+import { compileLogQuery, evaluateLogQuery, LogDateBounds } from '../utils/logQuery';
 
 export const LOG_DB_NAME = 'SmartLink_LogDB';
 export const LOG_STORE_NAME = 'logs';
 export const LOG_DB_VERSION = 1;
 export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+const TIME_RANGE_DURATION_MS: Record<'1D' | '3D' | '7D', number> = {
+  '1D': 24 * 60 * 60 * 1000,
+  '3D': 3 * 24 * 60 * 60 * 1000,
+  '7D': 7 * 24 * 60 * 60 * 1000,
+};
+
+interface ParsedDateBounds extends LogDateBounds {
+  hasInvalidInput: boolean;
+}
+
+function reportInvalidDate(value: string): void {
+  console.error('[LogStorage] 日期筛选值非法，必须为有效的 YYYY-MM-DD:', value);
+}
+
+function parseCalendarDate(dateValue: string): LogDateBounds | null {
+  const datePart = normalizeDateString(dateValue);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+
+  if (!match) {
+    reportInvalidDate(dateValue);
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const start = new Date(0);
+  start.setFullYear(year, month - 1, day);
+  start.setHours(0, 0, 0, 0);
+
+  if (
+    start.getFullYear() !== year ||
+    start.getMonth() !== month - 1 ||
+    start.getDate() !== day
+  ) {
+    reportInvalidDate(dateValue);
+    return null;
+  }
+
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+function readIndexedDBEventError(event: Event): unknown {
+  const target = event.target as { error?: unknown } | null;
+  return target?.error ?? new Error('IndexedDB 操作未提供错误详情');
+}
+
+function reportIndexedDBOperationError(operation: string, error: unknown): unknown {
+  console.error(`[LogStorage] ${operation} IndexedDB 操作失败:`, error);
+  return error;
+}
 
 /**
  * 格式化日志时间为人类友好的标准本地化字符串 "YYYY-MM-DD HH:mm:ss.SSS"
@@ -17,6 +72,98 @@ export function formatLogTimestamp(date = new Date()): string {
   const s = String(date.getSeconds()).padStart(2, '0');
   const ms = String(date.getMilliseconds()).padStart(3, '0');
   return `${y}-${m}-${d} ${h}:${min}:${s}.${ms}`;
+}
+
+/**
+ * 规范化日期字符串为 YYYY-MM-DD 格式，平滑兼容 1-9 单数字月份/日期与斜杠分隔符
+ */
+export function normalizeDateString(dateStr: string): string {
+  const clean = dateStr.trim();
+  const datePart = clean.includes('T') ? clean.split('T')[0] : clean.split(' ')[0];
+  const parts = datePart.split(/[-/]/);
+  if (parts.length === 3 && parts[0].length === 4) {
+    const year = parts[0];
+    const month = parts[1].padStart(2, '0');
+    const day = parts[2].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return datePart;
+}
+
+/**
+ * 解析日期过滤边界（毫秒时间戳）
+ * 严格支持 YYYY-MM-DD 与 ISO 字符串，统一收敛为本地天起始 00:00:00.000 与天截止 23:59:59.999
+ */
+export function parseDateBounds(
+  startDate?: string,
+  endDate?: string,
+  singleDate?: string
+): ParsedDateBounds {
+  let startMs: number | null = null;
+  let endMs: number | null = null;
+
+  if (singleDate && singleDate.trim()) {
+    const parsed = parseCalendarDate(singleDate);
+    if (!parsed) {
+      return { startMs: null, endMs: null, hasInvalidInput: true };
+    }
+    return { ...parsed, hasInvalidInput: false };
+  } else {
+    if (startDate && startDate.trim()) {
+      const parsed = parseCalendarDate(startDate);
+      if (parsed) {
+        startMs = parsed.startMs;
+      }
+    }
+    if (endDate && endDate.trim()) {
+      const parsed = parseCalendarDate(endDate);
+      if (parsed) {
+        endMs = parsed.endMs;
+      }
+    }
+  }
+
+  const hasInvalidInput =
+    (!!startDate?.trim() && startMs === null) || (!!endDate?.trim() && endMs === null);
+  if (hasInvalidInput) {
+    return { startMs: null, endMs: null, hasInvalidInput: true };
+  }
+
+  return { startMs, endMs, hasInvalidInput: false };
+}
+
+/**
+ * 解析过滤条件中的日期与时间范围边界，统一供内存引擎与 IndexedDB 游标使用
+ */
+export function resolveQueryBounds(filter?: LogFilterParams): ParsedDateBounds {
+  const bounds = parseDateBounds(filter?.startDate, filter?.endDate, filter?.date);
+  if (bounds.hasInvalidInput) {
+    return bounds;
+  }
+
+  let startBound = bounds.startMs;
+  const endBound = bounds.endMs;
+
+  if (filter?.timeRange && filter.timeRange !== 'ALL') {
+    const cutoff = Date.now() - TIME_RANGE_DURATION_MS[filter.timeRange];
+    startBound = startBound !== null ? Math.max(startBound, cutoff) : cutoff;
+  }
+
+  return { startMs: startBound, endMs: endBound, hasInvalidInput: false };
+}
+
+/**
+ * 统一多维日志过滤断言纯函数
+ * 所有维度统一编译为 liqe 查询表达式，由单一 AST 引擎裁决
+ */
+export function matchesLogFilter(
+  entry: SystemLogEntry,
+  filter?: LogFilterParams,
+  bounds?: LogDateBounds & { hasInvalidInput?: boolean }
+): boolean {
+  if (bounds?.hasInvalidInput) return false;
+  if (!filter) return true;
+  return evaluateLogQuery(entry, compileLogQuery(filter, bounds));
 }
 
 /**
@@ -40,45 +187,21 @@ class MemoryLogStorage {
     let result = [...this.logs];
 
     if (filter) {
-      if (filter.level && filter.level !== 'ALL') {
-        result = result.filter((l) => l.level === filter.level);
+      const activeBounds = resolveQueryBounds(filter);
+
+      if (activeBounds.hasInvalidInput) {
+        return [];
       }
-      if (filter.module && filter.module !== 'ALL') {
-        result = result.filter((l) => l.module === filter.module);
+
+      if (
+        activeBounds.startMs !== null &&
+        activeBounds.endMs !== null &&
+        activeBounds.startMs > activeBounds.endMs
+      ) {
+        return [];
       }
-      if (filter.event && filter.event !== 'ALL') {
-        result = result.filter((l) => l.event === filter.event);
-      }
-      if (filter.channelId && filter.channelId !== 'ALL') {
-        result = result.filter((l) => l.channelId === filter.channelId);
-      }
-      if (filter.orderNo) {
-        result = result.filter((l) => l.orderNo === filter.orderNo);
-      }
-      if (filter.onlyErrors) {
-        result = result.filter((l) => l.level === 'ERROR' || l.level === 'WARN');
-      }
-      if (filter.timeRange && filter.timeRange !== 'ALL') {
-        const now = Date.now();
-        const durationMap: Record<'1D' | '3D' | '7D', number> = {
-          '1D': 24 * 60 * 60 * 1000,
-          '3D': 3 * 24 * 60 * 60 * 1000,
-          '7D': 7 * 24 * 60 * 60 * 1000,
-        };
-        const cutoff = now - durationMap[filter.timeRange];
-        result = result.filter((l) => l.createdAt >= cutoff);
-      }
-      if (filter.search && filter.search.trim()) {
-        const s = filter.search.toLowerCase().trim();
-        result = result.filter(
-          (l) =>
-            l.message.toLowerCase().includes(s) ||
-            (l.details && l.details.toLowerCase().includes(s)) ||
-            (l.orderNo && l.orderNo.toLowerCase().includes(s)) ||
-            (l.channelId && l.channelId.toLowerCase().includes(s)) ||
-            (l.event && l.event.toLowerCase().includes(s))
-        );
-      }
+
+      result = result.filter((l) => matchesLogFilter(l, filter, activeBounds));
     }
 
     result.sort((a, b) => b.createdAt - a.createdAt);
@@ -147,12 +270,14 @@ export class LogStorageService {
           resolve(this.dbInstance);
         };
 
-        request.onerror = () => {
+        request.onerror = (event) => {
           this.isIndexedDBAvailable = false;
+          reportIndexedDBOperationError('initDB', readIndexedDBEventError(event));
           resolve(null);
         };
-      } catch {
+      } catch (error: unknown) {
         this.isIndexedDBAvailable = false;
+        reportIndexedDBOperationError('initDB', error);
         resolve(null);
       }
     });
@@ -180,11 +305,11 @@ export class LogStorageService {
         }
 
         tx.oncomplete = () => resolve();
-        tx.onerror = () => {
-          this.memoryFallback.saveLogs(entries).then(resolve, reject);
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('saveLogs', readIndexedDBEventError(event)));
         };
-      } catch {
-        this.memoryFallback.saveLogs(entries).then(resolve, reject);
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('saveLogs', error));
       }
     });
   }
@@ -193,6 +318,11 @@ export class LogStorageService {
    * 多维查询日志
    */
   async queryLogs(filter?: LogFilterParams, options?: { limit?: number; offset?: number }): Promise<SystemLogEntry[]> {
+    const bounds = resolveQueryBounds(filter);
+    if (bounds.hasInvalidInput) {
+      return [];
+    }
+
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
       return this.memoryFallback.queryLogs(filter, options);
@@ -207,60 +337,34 @@ export class LogStorageService {
         const results: SystemLogEntry[] = [];
 
         let keyRange: IDBKeyRange | null = null;
-        if (filter?.timeRange && filter.timeRange !== 'ALL') {
-          const now = Date.now();
-          const durationMap: Record<'1D' | '3D' | '7D', number> = {
-            '1D': 24 * 60 * 60 * 1000,
-            '3D': 3 * 24 * 60 * 60 * 1000,
-            '7D': 7 * 24 * 60 * 60 * 1000,
-          };
-          const cutoff = now - durationMap[filter.timeRange];
-          keyRange = IDBKeyRange.lowerBound(cutoff);
+        const startBound = bounds.startMs;
+        const endBound = bounds.endMs;
+
+        // 边界保护：若起始边界大于截止边界，直接返回空结果，避免 IndexedDB IDBKeyRange.bound 抛出 DataError
+        if (startBound !== null && endBound !== null && startBound > endBound) {
+          return resolve([]);
+        }
+
+        if (startBound !== null && endBound !== null) {
+          keyRange = IDBKeyRange.bound(startBound, endBound);
+        } else if (startBound !== null) {
+          keyRange = IDBKeyRange.lowerBound(startBound);
+        } else if (endBound !== null) {
+          keyRange = IDBKeyRange.upperBound(endBound);
         }
 
         const cursorRequest = keyRange
           ? index.openCursor(keyRange, 'prev')
           : index.openCursor(null, 'prev');
 
-        const searchKeyword = filter?.search?.toLowerCase().trim();
+        const activeBounds: LogDateBounds = { startMs: startBound, endMs: endBound };
 
         cursorRequest.onsuccess = (event) => {
           const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
           if (cursor) {
             const entry = cursor.value as SystemLogEntry;
 
-            let matches = true;
-
-            if (filter?.level && filter.level !== 'ALL' && entry.level !== filter.level) {
-              matches = false;
-            }
-            if (matches && filter?.module && filter.module !== 'ALL' && entry.module !== filter.module) {
-              matches = false;
-            }
-            if (matches && filter?.event && filter.event !== 'ALL' && entry.event !== filter.event) {
-              matches = false;
-            }
-            if (matches && filter?.channelId && filter.channelId !== 'ALL' && entry.channelId !== filter.channelId) {
-              matches = false;
-            }
-            if (matches && filter?.orderNo && entry.orderNo !== filter.orderNo) {
-              matches = false;
-            }
-            if (matches && filter?.onlyErrors && entry.level !== 'ERROR' && entry.level !== 'WARN') {
-              matches = false;
-            }
-            if (matches && searchKeyword) {
-              const inMsg = entry.message.toLowerCase().includes(searchKeyword);
-              const inDetails = entry.details ? entry.details.toLowerCase().includes(searchKeyword) : false;
-              const inOrderNo = entry.orderNo ? entry.orderNo.toLowerCase().includes(searchKeyword) : false;
-              const inChannel = entry.channelId ? entry.channelId.toLowerCase().includes(searchKeyword) : false;
-              const inEvent = entry.event ? entry.event.toLowerCase().includes(searchKeyword) : false;
-              if (!inMsg && !inDetails && !inOrderNo && !inChannel && !inEvent) {
-                matches = false;
-              }
-            }
-
-            if (matches) {
+            if (matchesLogFilter(entry, filter, activeBounds)) {
               results.push(entry);
             }
 
@@ -280,11 +384,15 @@ export class LogStorageService {
           }
         };
 
-        cursorRequest.onerror = () => {
-          this.memoryFallback.queryLogs(filter, options).then(resolve, reject);
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
         };
-      } catch {
-        this.memoryFallback.queryLogs(filter, options).then(resolve, reject);
+
+        cursorRequest.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('queryLogs', error));
       }
     });
   }
@@ -322,11 +430,14 @@ export class LogStorageService {
           }
         };
 
-        request.onerror = () => {
-          this.memoryFallback.purgeLogsBefore(cutoffTimestamp).then(resolve, reject);
+        request.onerror = (event) => {
+          reject(reportIndexedDBOperationError('purgeLogsBefore', readIndexedDBEventError(event)));
         };
-      } catch {
-        this.memoryFallback.purgeLogsBefore(cutoffTimestamp).then(resolve, reject);
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('purgeLogsBefore', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('purgeLogsBefore', error));
       }
     });
   }
@@ -354,11 +465,14 @@ export class LogStorageService {
         const store = tx.objectStore(LOG_STORE_NAME);
         const req = store.count();
         req.onsuccess = () => resolve(req.result);
-        req.onerror = () => {
-          this.memoryFallback.countLogs().then(resolve, reject);
+        req.onerror = (event) => {
+          reject(reportIndexedDBOperationError('countLogs', readIndexedDBEventError(event)));
         };
-      } catch {
-        this.memoryFallback.countLogs().then(resolve, reject);
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('countLogs', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('countLogs', error));
       }
     });
   }
@@ -378,11 +492,14 @@ export class LogStorageService {
         const store = tx.objectStore(LOG_STORE_NAME);
         const req = store.clear();
         req.onsuccess = () => resolve();
-        req.onerror = () => {
-          this.memoryFallback.clearAll().then(resolve, reject);
+        req.onerror = (event) => {
+          reject(reportIndexedDBOperationError('clearAllStoredLogs', readIndexedDBEventError(event)));
         };
-      } catch {
-        this.memoryFallback.clearAll().then(resolve, reject);
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('clearAllStoredLogs', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('clearAllStoredLogs', error));
       }
     });
   }

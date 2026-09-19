@@ -143,6 +143,7 @@ export const OrderGuardianView: React.FC = () => {
       level: 'INFO',
       channelId: order.otaChannel,
       orderNo: order.otaOrderId,
+      taskActionStage: 'order-import-submit',
       message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderId}`,
       details: `酒店: ${order.unitName} | 房型: ${order.booking.roomType} | 客人: ${order.contact.name}`,
       meta: { otaOrderId: order.otaOrderId, pmsOrderId: order.pmsOrderId, price: order.booking.totalPrice },

@@ -5,6 +5,7 @@ import type { ProtocolFieldMapping, ProtocolFieldCategory } from '../../types/te
 interface TemplateVariablePickerProps {
   fields: ProtocolFieldMapping[];
   onInsertTag: (tag: string) => void;
+  disabled?: boolean;
 }
 
 const CATEGORY_TABS: { key: 'all' | ProtocolFieldCategory; label: string }[] = [
@@ -21,6 +22,7 @@ const CATEGORY_TABS: { key: 'all' | ProtocolFieldCategory; label: string }[] = [
 export const TemplateVariablePicker: React.FC<TemplateVariablePickerProps> = ({
   fields,
   onInsertTag,
+  disabled = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'all' | ProtocolFieldCategory>('all');
 
@@ -50,8 +52,9 @@ export const TemplateVariablePicker: React.FC<TemplateVariablePickerProps> = ({
             <button
               key={tab.key}
               type="button"
+              disabled={disabled}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all shrink-0 cursor-pointer ${
+              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all shrink-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
                 isActive
                   ? 'bg-[#004ac6] text-white shadow-2xs'
                   : 'text-[#434655] hover:bg-[#eff4ff] hover:text-[#004ac6]'
@@ -69,8 +72,9 @@ export const TemplateVariablePicker: React.FC<TemplateVariablePickerProps> = ({
           <button
             key={field.key}
             type="button"
+            disabled={disabled}
             onClick={() => onInsertTag(`{${field.label}}`)}
-            className="group px-2.5 py-1 text-xs font-mono bg-white hover:bg-[#004ac6] hover:text-white text-[#004ac6] border border-[#dce9ff] rounded-md transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer select-none"
+            className="group px-2.5 py-1 text-xs font-mono bg-white hover:bg-[#004ac6] hover:text-white text-[#004ac6] border border-[#dce9ff] rounded-md transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer select-none disabled:cursor-not-allowed disabled:opacity-50"
             title={`${field.description || field.label} (路径: ${field.path || field.conditionExpr || '派生'})`}
           >
             <span>{`{${field.label}}`}</span>

@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { createPersistentBrowserSession, type BrowserSession } from '../browserManager';
 import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker';
-import type { DutyClaimedTask } from '../../types';
+import type { DutyClaimedTask, SystemLogEntry } from '../../types';
 import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
@@ -11,6 +11,9 @@ import type {
 } from './dutyContracts';
 import { getMeituanOrderUrl } from '../../config/otaUrls';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
+import { isRiskControlError } from './dutyTaskContext';
+import { logger } from '../../services/logger';
+import { PROCESS_ENV_KEYS } from '../../types/env';
 
 export function getDefaultMeituanOrderUrl(): string {
   return getMeituanOrderUrl();
@@ -128,8 +131,7 @@ export function isMeituanSensitiveUrl(url: string): boolean {
  * 检测文本是否命中美团安全验证/滑块/人机风控特征（纯纯函数）
  */
 export function isMeituanRiskControlText(text: string): boolean {
-  if (!text) return false;
-  return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha/i.test(text);
+  return isRiskControlError(text);
 }
 
 /**
@@ -560,7 +562,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
     this.session = await createPersistentBrowserSession({
       channelCode: this.channelCode,
-      headless: process.env.PLAYWRIGHT_HEADLESS === 'true',
+      headless: process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true',
     });
 
     const page = this.session.page;
@@ -660,7 +662,12 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         return;
       }
     } catch (err) {
-      console.warn('[MeituanDutyRunner] 交互点击待确认订单/刷新失败，回退重载:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn(`[MeituanDutyRunner] 交互点击待确认订单/刷新失败，回退重载: ${errMsg}`, {
+        module: 'DUTY_TASK',
+        channelId: 'MEITUAN',
+        details: err instanceof Error ? err.stack : errMsg,
+      });
     }
 
     // 3. 兜底容错：页面轻量重载
@@ -1330,7 +1337,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   /**
    * 统一任务执行入口：将任务委托给顶层通用任务编排调度器 dispatchDutyTask
    */
-  public async executeTask(task: DutyClaimedTask): Promise<DutyTaskExecutionResult> {
-    return dispatchDutyTask(task, this);
+  public async executeTask(
+    task: DutyClaimedTask,
+    onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
+  ): Promise<DutyTaskExecutionResult> {
+    return dispatchDutyTask(task, this, onLog);
   }
 }

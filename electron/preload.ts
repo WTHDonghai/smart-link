@@ -1,33 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../src/crawler/types';
-import type { SystemLogEntry, StationIdentity, PlatformAuthTokens } from '../src/types';
+import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
+import type {
+  CrawlerBridgeApi,
+  DutyBridgeApi,
+  PlatformAuthTokens,
+  SystemLogEntry,
+} from '../src/types';
+import { selectAppEnv } from '../src/types/env';
 
-/**
- * 桌面端预加载 API 契约
- * 与 src/services/crawlerBridge.ts 中的 ElectronCrawlerApi 保持 1:1 严格对齐
- */
-export interface ElectronCrawlerApi {
-  collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
-  syncProfile?(channelCode?: string): Promise<ProfileSyncResult>;
-}
+const HOST_LOG_CHANNEL = 'host:log-entry';
 
-export interface ElectronDutyApi {
-  startDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
-  stopDuty(channelCode: string): Promise<{ success: boolean; message?: string }>;
-  stopAllDuty?(): Promise<{ success: boolean; message?: string }>;
-  teardownApp?(): Promise<{ success: boolean; message?: string }>;
-  getStatus(since?: number): Promise<{
-    channels: Record<string, { channelCode: string; status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'DEGRADED'; lastStartedAt?: number; error?: string }>;
-    coordinatorStatus: 'STOPPED' | 'IDLE' | 'CLAIMING' | 'EXECUTING' | 'REPORTING' | 'CLAIM_BACKOFF' | 'DEGRADED';
-    station?: StationIdentity | null;
-    logs?: SystemLogEntry[];
-  }>;
-  syncTokens?(tokens: PlatformAuthTokens): Promise<{ success: boolean; message?: string }>;
-  clearTokens?(): Promise<{ success: boolean; message?: string }>;
-  onLog?(callback: (entry: SystemLogEntry) => void): () => void;
-}
-
-const crawlerApi: ElectronCrawlerApi = {
+const crawlerApi: CrawlerBridgeApi = {
   collectHotels: (request: HotelCrawlRequest): Promise<HotelCrawlResult> => {
     return ipcRenderer.invoke('crawler:collect-hotels', request);
   },
@@ -36,7 +19,7 @@ const crawlerApi: ElectronCrawlerApi = {
   },
 };
 
-const dutyApi: ElectronDutyApi = {
+const dutyApi: DutyBridgeApi = {
   startDuty: (channelCode: string) => {
     return ipcRenderer.invoke('duty:start', channelCode);
   },
@@ -58,27 +41,22 @@ const dutyApi: ElectronDutyApi = {
   clearTokens: () => {
     return ipcRenderer.invoke('duty:clear-tokens');
   },
+  takePendingLogs: (): Promise<SystemLogEntry[]> => {
+    return ipcRenderer.invoke('host:pending-logs');
+  },
   onLog: (callback: (entry: SystemLogEntry) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, entry: SystemLogEntry) => callback(entry);
-    ipcRenderer.on('duty:log-entry', listener);
+    ipcRenderer.on(HOST_LOG_CHANNEL, listener);
     return () => {
-      ipcRenderer.removeListener('duty:log-entry', listener);
+      ipcRenderer.removeListener(HOST_LOG_CHANNEL, listener);
     };
   },
 };
 
-const exposedEnv: Record<string, string> = {
-  platformBaseUrl: process.env.VITE_PLATFORM_BASE_URL || '',
-};
-
-for (const [key, value] of Object.entries(process.env)) {
-  if (key.startsWith('VITE_') && typeof value === 'string') {
-    exposedEnv[key] = value;
-  }
-}
+const exposedEnv = selectAppEnv(process.env);
 
 // 安全隔离注入至渲染进程主世界
-contextBridge.exposeInMainWorld('electron', {
+contextBridge.exposeInMainWorld('host', {
   crawler: crawlerApi,
   duty: dutyApi,
   env: exposedEnv,

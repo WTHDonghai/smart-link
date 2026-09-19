@@ -51,7 +51,7 @@ export function normalizeBaseUrl(url?: string): string {
 /**
  * 获取 Electron 标准用户数据目录
  * 优先遵循 process.env.SMARTLINK_USER_DATA_DIR (Electron app.getPath('userData'))
- * 在非 Electron 开发调试环境下自动对齐操作系统原生 Electron 标准路径
+ * 在 CLI 独立运行环境下自动对齐操作系统原生 Electron 标准路径
  */
 export function getDefaultStationConfigDir(): string {
   return resolveUserDataDir();

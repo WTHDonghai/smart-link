@@ -4,6 +4,7 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import { injectStealthScripts, getStealthLaunchArgs } from './stealth';
 import { installVisualTracker } from './visualTracker';
 import { resolveChromeProfileDir } from './paths';
+import { PROCESS_ENV_KEYS } from '../types/env';
 
 export interface LaunchBrowserOptions {
   channelCode: string;
@@ -108,7 +109,7 @@ export async function createPersistentBrowserSession(
 
   // 默认以可视化窗口 (Headed) 启动，让用户清晰目睹自动化操作流程，获得操作掌控感与确定性；
   // 仅在显式指定 headless: true 或环境变量 PLAYWRIGHT_HEADLESS === 'true' 时才走无头模式。
-  const isHeadless = options.headless ?? (process.env.PLAYWRIGHT_HEADLESS === 'true');
+  const isHeadless = options.headless ?? (process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true');
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: isHeadless,

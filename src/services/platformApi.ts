@@ -1,12 +1,14 @@
 import { platformAuthService, getPlatformBaseUrl } from './platformAuth';
 import { joinApiUrl } from '../utils/url';
 import { logger } from './logger';
-import type { LogModule, SystemLogEntry } from '../types';
+import type { LogModule, SystemLogEntry, TaskActionStage } from '../types';
 
 export interface PlatformApiOptions extends RequestInit {
   baseUrl?: string;
   timeoutMs?: number;
   module?: LogModule;
+  orderNo?: string;
+  taskActionStage?: TaskActionStage;
 }
 
 export type ApiLogListener = (entry: SystemLogEntry) => void;
@@ -92,6 +94,10 @@ export async function requestPlatformApi<T = unknown>(
   path: string,
   options: PlatformApiOptions = {}
 ): Promise<T> {
+  if (typeof window !== 'undefined' && !window.host) {
+    throw new Error('平台接口仅支持桌面端');
+  }
+
   const { baseUrl = getPlatformBaseUrl(), timeoutMs = 15000, ...fetchOptions } = options;
   const fullUrl = joinApiUrl(baseUrl, path);
   const method = (fetchOptions.method || 'GET').toUpperCase();
@@ -182,6 +188,8 @@ export async function requestPlatformApi<T = unknown>(
         apiParams: requestParams,
         apiResponse: responseData,
         httpStatus: response.status,
+        taskActionStage: options.taskActionStage,
+        orderNo: options.orderNo,
       });
       broadcastApiLog(logEntry);
 
@@ -217,6 +225,8 @@ export async function requestPlatformApi<T = unknown>(
       apiParams: requestParams,
       apiResponse: responseData,
       httpStatus: response.status,
+      taskActionStage: options.taskActionStage,
+      orderNo: options.orderNo,
     });
     broadcastApiLog(logEntry);
 
@@ -238,6 +248,8 @@ export async function requestPlatformApi<T = unknown>(
       apiMethod: method,
       apiParams: requestParams,
       apiResponse: { error: errorMsg },
+      taskActionStage: options.taskActionStage,
+      orderNo: options.orderNo,
     });
     broadcastApiLog(logEntry);
 

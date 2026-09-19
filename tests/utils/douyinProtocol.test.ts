@@ -6,10 +6,15 @@ import {
 import {
   DOUYIN_RAW_SAMPLE_ORDER,
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
-  DEFAULT_DOUYIN_REMARK_TEMPLATE,
 } from '../../src/services/protocols/douyinProtocol';
 import { renderTemplate } from '../../src/utils/template/templateEngine';
 import { formatDate } from '../../src/utils/template/filters';
+
+const SAMPLE_DOUYIN_REMARK_TEMPLATE =
+  '【抖音团购核销】主单号:{抖音主单号} | 预约单:{预约单号} (确认号:{确认号})\n' +
+  '房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话})\n' +
+  '入离:{入住日期}至{离店日期} | 实付:¥{实付金额}\n' +
+  '{{#if 是否含餐}}套餐:{早餐说明} | {{/if}}门票:{门票权益}';
 
 describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
   const originalTZ = process.env.TZ;
@@ -73,7 +78,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
       DOUYIN_RAW_SAMPLE_ORDER,
       DEFAULT_DOUYIN_PROTOCOL_SCHEMA
     );
-    const rendered = renderTemplate(DEFAULT_DOUYIN_REMARK_TEMPLATE, cleanCtx);
+    const rendered = renderTemplate(SAMPLE_DOUYIN_REMARK_TEMPLATE, cleanCtx);
 
     expect(rendered).toContain('【抖音团购核销】主单号:1116431119643540077');
     expect(rendered).toContain('预约单:800014640948279296216700077');
@@ -124,7 +129,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(cleanCtx.guestName).toBe('刘彩霞、王小明');
     expect(cleanCtx.guestPhone).toBe('138****5090、139****8888');
 
-    const rendered = renderTemplate(DEFAULT_DOUYIN_REMARK_TEMPLATE, cleanCtx);
+    const rendered = renderTemplate(SAMPLE_DOUYIN_REMARK_TEMPLATE, cleanCtx);
     expect(rendered).toContain('客人:刘彩霞、王小明 (138****5090、139****8888)');
   });
 });

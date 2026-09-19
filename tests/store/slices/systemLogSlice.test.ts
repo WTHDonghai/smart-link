@@ -2,39 +2,43 @@ import { describe, it, expect } from 'vitest';
 import systemLogReducer, {
   setFilterLevel,
   setFilterModule,
-  setFilterEvent,
-  setFilterChannel,
-  setFilterTimeRange,
-  toggleOnlyErrors,
   setFilterSearch,
+  setFilterStartDate,
+  setFilterEndDate,
+  setFilterDateRange,
+  resetDateFilter,
+  setFilterTaskStage,
+  resetLogFilters,
   toggleAutoScroll,
   addLog,
   addLogs,
-  hydrateLogs,
   clearLogs,
   clearAllLogs,
+  hydrateLogsFromStorage,
 } from '../../../src/store/slices/systemLogSlice';
-import { SystemLogEntry } from '../../../src/types';
+import type { SystemLogEntry, TaskActionStage } from '../../../src/types';
+
+function createInitialState() {
+  return systemLogReducer(undefined, { type: '@@INIT' });
+}
 
 describe('systemLogSlice', () => {
   it('initializes with clean empty logs and default filter configurations', () => {
-    const state = systemLogReducer(undefined, { type: '@@INIT' });
+    const state = createInitialState();
 
     expect(state.logs).toEqual([]);
     expect(state.filterLevel).toBe('ALL');
     expect(state.filterModule).toBe('ALL');
-    expect(state.filterEvent).toBe('ALL');
-    expect(state.filterChannel).toBe('ALL');
-    expect(state.filterTimeRange).toBe('ALL');
-    expect(state.onlyErrors).toBe(false);
+    expect(state.filterStartDate).toBe('');
+    expect(state.filterEndDate).toBe('');
+    expect(state.filterTaskStage).toBe('ALL');
     expect(state.filterSearch).toBe('');
     expect(state.isAutoScroll).toBe(true);
-    expect(state.storedLogCount).toBe(0);
   });
 
   describe('filter actions', () => {
     it('updates log level filter accurately', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
 
       const errorState = systemLogReducer(initialState, setFilterLevel('ERROR'));
       expect(errorState.filterLevel).toBe('ERROR');
@@ -46,39 +50,42 @@ describe('systemLogSlice', () => {
       expect(allState.filterLevel).toBe('ALL');
     });
 
-    it('updates module and automatically resets event filter if module changed', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
-      const withEvent = systemLogReducer(initialState, setFilterEvent('ORDER_TRANSFER_PMS_FAILED'));
-      expect(withEvent.filterEvent).toBe('ORDER_TRANSFER_PMS_FAILED');
+    it('updates module and task stage filters accurately', () => {
+      const initialState = createInitialState();
 
-      const moduleChanged = systemLogReducer(withEvent, setFilterModule('AUTH'));
-      expect(moduleChanged.filterModule).toBe('AUTH');
-      expect(moduleChanged.filterEvent).toBe('ALL');
+      const moduleState = systemLogReducer(initialState, setFilterModule('AUTH'));
+      expect(moduleState.filterModule).toBe('AUTH');
+
+      const validStage: 'ALL' | TaskActionStage = 'order-import-submit';
+      const stageState = systemLogReducer(moduleState, setFilterTaskStage(validStage));
+      expect(stageState.filterTaskStage).toBe('order-import-submit');
+      expect(stageState.filterModule).toBe('AUTH');
     });
 
-    it('updates channel and timeRange filters correctly', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+    it('updates date range filters and resets them independently', () => {
+      const initialState = createInitialState();
 
-      const channelState = systemLogReducer(initialState, setFilterChannel('meituan'));
-      expect(channelState.filterChannel).toBe('meituan');
+      const rangeState = systemLogReducer(
+        initialState,
+        setFilterDateRange({ startDate: '2026-09-10', endDate: '2026-09-18' })
+      );
+      expect(rangeState.filterStartDate).toBe('2026-09-10');
+      expect(rangeState.filterEndDate).toBe('2026-09-18');
 
-      const timeState = systemLogReducer(channelState, setFilterTimeRange('7D'));
-      expect(timeState.filterTimeRange).toBe('7D');
-    });
+      const startOnly = systemLogReducer(rangeState, setFilterStartDate('2026-09-12'));
+      expect(startOnly.filterStartDate).toBe('2026-09-12');
+      expect(startOnly.filterEndDate).toBe('2026-09-18');
 
-    it('toggles onlyErrors flag', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
-      expect(initialState.onlyErrors).toBe(false);
+      const endOnly = systemLogReducer(startOnly, setFilterEndDate('2026-09-20'));
+      expect(endOnly.filterEndDate).toBe('2026-09-20');
 
-      const toggled = systemLogReducer(initialState, toggleOnlyErrors());
-      expect(toggled.onlyErrors).toBe(true);
-
-      const toggledBack = systemLogReducer(toggled, toggleOnlyErrors());
-      expect(toggledBack.onlyErrors).toBe(false);
+      const dateReset = systemLogReducer(endOnly, resetDateFilter());
+      expect(dateReset.filterStartDate).toBe('');
+      expect(dateReset.filterEndDate).toBe('');
     });
 
     it('updates keyword search query', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
 
       const searchState = systemLogReducer(initialState, setFilterSearch('DY-20260914-5502'));
       expect(searchState.filterSearch).toBe('DY-20260914-5502');
@@ -87,8 +94,30 @@ describe('systemLogSlice', () => {
       expect(clearedSearchState.filterSearch).toBe('');
     });
 
+    it('resets every filter dimension back to defaults', () => {
+      const dirtyState = systemLogReducer(
+        systemLogReducer(
+          systemLogReducer(createInitialState(), setFilterLevel('ERROR')),
+          setFilterModule('ORDER')
+        ),
+        setFilterDateRange({ startDate: '2026-09-10', endDate: '2026-09-18' })
+      );
+      const withSearch = systemLogReducer(dirtyState, setFilterSearch('丽呈酒店'));
+      const withStage = systemLogReducer(withSearch, setFilterTaskStage('claim'));
+
+      const reset = systemLogReducer(withStage, resetLogFilters());
+
+      expect(reset.filterLevel).toBe('ALL');
+      expect(reset.filterModule).toBe('ALL');
+      expect(reset.filterStartDate).toBe('');
+      expect(reset.filterEndDate).toBe('');
+      expect(reset.filterTaskStage).toBe('ALL');
+      expect(reset.filterSearch).toBe('');
+      expect(reset.isAutoScroll).toBe(withStage.isAutoScroll);
+    });
+
     it('toggles auto scroll flag between true and false', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
       expect(initialState.isAutoScroll).toBe(true);
 
       const disabledState = systemLogReducer(initialState, toggleAutoScroll());
@@ -101,7 +130,7 @@ describe('systemLogSlice', () => {
 
   describe('addLog', () => {
     it('prepends a new log entry with generated id, timestamp, and createdAt', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
 
       const nextState = systemLogReducer(
         initialState,
@@ -118,11 +147,9 @@ describe('systemLogSlice', () => {
       );
 
       expect(nextState.logs.length).toBe(1);
-      expect(nextState.storedLogCount).toBe(1);
 
       const newLog = nextState.logs[0];
       expect(newLog.id).toMatch(/^log-\d+-[a-z0-9]+$/);
-      // 验证日期时间格式为 YYYY-MM-DD HH:mm:ss.SSS
       expect(newLog.timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
       expect(typeof newLog.createdAt).toBe('number');
       expect(newLog.createdAt).toBeGreaterThan(0);
@@ -146,16 +173,14 @@ describe('systemLogSlice', () => {
       }));
 
       const stateAtCap = {
-        ...systemLogReducer(undefined, { type: '@@INIT' }),
+        ...createInitialState(),
         logs: fullLogs,
-        storedLogCount: 500,
       };
 
       expect(stateAtCap.logs.length).toBe(500);
       expect(stateAtCap.logs[0].id).toBe('existing-log-0');
       expect(stateAtCap.logs[499].id).toBe('existing-log-499');
 
-      // 插入第 501 条新日志
       const nextState = systemLogReducer(
         stateAtCap,
         addLog({
@@ -165,21 +190,17 @@ describe('systemLogSlice', () => {
         })
       );
 
-      // 断言日志总数被严格保持在 500 条上限
       expect(nextState.logs.length).toBe(500);
-      expect(nextState.storedLogCount).toBe(501);
 
-      // 断言新插入的日志位于队首
       expect(nextState.logs[0].message).toBe('Cap overflow test log');
       expect(nextState.logs[0].level).toBe('WARN');
 
-      // 断言最老的一条日志 (existing-log-499) 被弹出丢弃
       expect(nextState.logs.some((l) => l.id === 'existing-log-499')).toBe(false);
       expect(nextState.logs[499].id).toBe('existing-log-498');
     });
 
     it('preserves task metadata including taskId, msgType, taskActionStage, taskStatus, and taskResult', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
 
       const nextState = systemLogReducer(
         initialState,
@@ -187,10 +208,10 @@ describe('systemLogSlice', () => {
           level: 'SUCCESS',
           module: 'DUTY_TASK',
           event: 'DUTY_TASK_EXECUTE_SUCCESS',
-          message: '[任务结果 RESULT] 任务 OTA_IMPORT_ORDER 执行成功',
+          message: '[任务结果 result] 任务 OTA_IMPORT_ORDER 执行成功',
           taskId: 'task-abc-123',
           msgType: 'OTA_IMPORT_ORDER',
-          taskActionStage: 'RESULT',
+          taskActionStage: 'result',
           taskStatus: 'SUCCEEDED',
           taskResult: { imported: true, pmsOrderNo: 'PMS-001' },
         })
@@ -200,13 +221,13 @@ describe('systemLogSlice', () => {
       const log = nextState.logs[0];
       expect(log.taskId).toBe('task-abc-123');
       expect(log.msgType).toBe('OTA_IMPORT_ORDER');
-      expect(log.taskActionStage).toBe('RESULT');
+      expect(log.taskActionStage).toBe('result');
       expect(log.taskStatus).toBe('SUCCEEDED');
       expect(log.taskResult).toEqual({ imported: true, pmsOrderNo: 'PMS-001' });
     });
 
     it('deduplicates logs when adding an entry with an existing id', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+      const initialState = createInitialState();
 
       const firstState = systemLogReducer(
         initialState,
@@ -218,7 +239,6 @@ describe('systemLogSlice', () => {
       );
       expect(firstState.logs.length).toBe(1);
 
-      // 再次添加相同 id 的日志，应当被去重跳过
       const secondState = systemLogReducer(
         firstState,
         addLog({
@@ -234,8 +254,6 @@ describe('systemLogSlice', () => {
 
   describe('addLogs batch', () => {
     it('appends multiple logs in batch while skipping existing duplicates', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
-
       const existingLog: SystemLogEntry = {
         id: 'log-batch-1',
         timestamp: '2026-09-17 12:00:00.000',
@@ -244,18 +262,18 @@ describe('systemLogSlice', () => {
         message: 'Existing log 1',
       };
 
-      const withExisting = systemLogReducer(initialState, hydrateLogs([existingLog]));
+      const withExisting = systemLogReducer(createInitialState(), addLogs([existingLog]));
       expect(withExisting.logs.length).toBe(1);
 
       const batch: SystemLogEntry[] = [
-        existingLog, // 重复项
+        existingLog,
         {
           id: 'log-batch-2',
           timestamp: '2026-09-17 12:01:00.000',
           createdAt: 2000,
           level: 'SUCCESS',
           module: 'DUTY_TASK',
-          taskActionStage: 'CLAIM',
+          taskActionStage: 'claim',
           msgType: 'OTA_COLLECT_ORDER',
           message: 'New batch log 2',
         },
@@ -265,7 +283,7 @@ describe('systemLogSlice', () => {
           createdAt: 3000,
           level: 'SUCCESS',
           module: 'DUTY_TASK',
-          taskActionStage: 'RESULT',
+          taskActionStage: 'result',
           taskStatus: 'SUCCEEDED',
           msgType: 'OTA_COLLECT_ORDER',
           message: 'New batch log 3',
@@ -274,16 +292,49 @@ describe('systemLogSlice', () => {
 
       const afterBatch = systemLogReducer(withExisting, addLogs(batch));
       expect(afterBatch.logs.length).toBe(3);
-      // 最新创建的应位于队首
       expect(afterBatch.logs[0].id).toBe('log-batch-3');
       expect(afterBatch.logs[1].id).toBe('log-batch-2');
       expect(afterBatch.logs[2].id).toBe('log-batch-1');
     });
+
+    it('caps batch insertion at 500 logs and keeps the newest entries', () => {
+      const existingLogs: SystemLogEntry[] = Array.from({ length: 499 }, (_, index) => ({
+        id: `cap-log-${index}`,
+        timestamp: '2026-09-17 12:00:00.000',
+        createdAt: 1000 + index,
+        level: 'INFO',
+        message: `Cap log ${index}`,
+      }));
+      const seeded = systemLogReducer(createInitialState(), addLogs(existingLogs));
+
+      const incoming: SystemLogEntry[] = [
+        {
+          id: 'cap-incoming-old',
+          timestamp: '2026-09-17 13:00:00.000',
+          createdAt: 5000,
+          level: 'WARN',
+          message: 'incoming older',
+        },
+        {
+          id: 'cap-incoming-new',
+          timestamp: '2026-09-17 13:01:00.000',
+          createdAt: 6000,
+          level: 'ERROR',
+          message: 'incoming newer',
+        },
+      ];
+
+      const afterBatch = systemLogReducer(seeded, addLogs(incoming));
+
+      expect(afterBatch.logs.length).toBe(500);
+      expect(afterBatch.logs[0].id).toBe('cap-incoming-new');
+      expect(afterBatch.logs[1].id).toBe('cap-incoming-old');
+      expect(afterBatch.logs.some((l) => l.id === 'cap-log-0')).toBe(false);
+    });
   });
 
-  describe('hydrateLogs', () => {
+  describe('hydrateLogsFromStorage', () => {
     it('populates state logs from storage history batch', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
       const mockHistory: SystemLogEntry[] = [
         {
           id: 'hist-1',
@@ -296,7 +347,11 @@ describe('systemLogSlice', () => {
         },
       ];
 
-      const hydrated = systemLogReducer(initialState, hydrateLogs(mockHistory));
+      const hydrated = systemLogReducer(createInitialState(), {
+        type: hydrateLogsFromStorage.fulfilled.type,
+        payload: mockHistory,
+      });
+
       expect(hydrated.logs.length).toBe(1);
       expect(hydrated.logs[0].id).toBe('hist-1');
       expect(hydrated.logs[0].message).toBe('历史登录成功');
@@ -304,8 +359,8 @@ describe('systemLogSlice', () => {
   });
 
   describe('clearLogs and clearAllLogs', () => {
-    it('clears active logs and resets storedLogCount to 0 in state', () => {
-      const initialState = systemLogReducer(undefined, { type: '@@INIT' });
+    it('clears active logs from state', () => {
+      const initialState = createInitialState();
       const withLog = systemLogReducer(
         initialState,
         addLog({
@@ -314,17 +369,14 @@ describe('systemLogSlice', () => {
         })
       );
       expect(withLog.logs.length).toBe(1);
-      expect(withLog.storedLogCount).toBe(1);
 
       const clearedState = systemLogReducer(withLog, clearLogs());
       expect(clearedState.logs).toEqual([]);
-      expect(clearedState.logs.length).toBe(0);
-      expect(clearedState.storedLogCount).toBe(0);
     });
 
-    it('resets logs and storedLogCount when clearAllLogs is pending or fulfilled', () => {
+    it('resets logs when clearAllLogs is pending or fulfilled', () => {
       const withLog = {
-        ...systemLogReducer(undefined, { type: '@@INIT' }),
+        ...createInitialState(),
         logs: [
           {
             id: 'log-1',
@@ -334,20 +386,17 @@ describe('systemLogSlice', () => {
             message: '测试待清理日志',
           },
         ],
-        storedLogCount: 1,
       };
 
       const pendingState = systemLogReducer(withLog, {
         type: clearAllLogs.pending.type,
       });
       expect(pendingState.logs).toEqual([]);
-      expect(pendingState.storedLogCount).toBe(0);
 
       const fulfilledState = systemLogReducer(withLog, {
         type: clearAllLogs.fulfilled.type,
       });
       expect(fulfilledState.logs).toEqual([]);
-      expect(fulfilledState.storedLogCount).toBe(0);
     });
   });
 });

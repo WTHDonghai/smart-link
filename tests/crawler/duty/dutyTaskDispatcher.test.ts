@@ -4,8 +4,9 @@ import type {
   ChannelDutyRunner,
   ExtractedOrderDetail,
 } from '../../../src/crawler/duty/dutyContracts';
-import type { DutyClaimedTask } from '../../../src/types';
+import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
+import * as channelApi from '../../../src/services/channelApi';
 
 class MockDutyRunner implements ChannelDutyRunner {
   public channelCode = 'TEST_OTA';
@@ -295,6 +296,68 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.errorCode).toBe('IMPORT_FAILED');
       expect(result.errorMessage).toContain('网络连接超时');
     });
+
+    it('should emit DUTY_TASK_ORDER_IMPORT_SUBMIT log with order-import-submit stage and orderNo on success', async () => {
+      vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-LOG-100',
+      });
+
+      const logsEmitted: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+      const onLog = (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => {
+        logsEmitted.push(entry);
+      };
+
+      const taskPayload = { otaOrderId: 'OTA-IMPORT-LOG-1', unitId: 'HOTEL-U1' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-log-ok',
+        businessId: 'OTA-IMPORT-LOG-1',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner, onLog);
+      expect(result.status).toBe('SUCCEEDED');
+
+      const submitLog = logsEmitted.find((l) => l.event === 'DUTY_TASK_ORDER_IMPORT_SUBMIT');
+      expect(submitLog).toBeDefined();
+      expect(submitLog?.taskActionStage).toBe('order-import-submit');
+      expect(submitLog?.orderNo).toBe('OTA-IMPORT-LOG-1');
+      expect(submitLog?.apiUrl).toBe('/toolkit/orders/import');
+      expect(submitLog?.level).toBe('INFO');
+    });
+
+    it('should emit DUTY_TASK_ORDER_IMPORT_SUBMIT_FAILED log with order-import-submit stage on failure', async () => {
+      vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockRejectedValue(new Error('PMS入单接口异常: 500'));
+
+      const logsEmitted: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+      const onLog = (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => {
+        logsEmitted.push(entry);
+      };
+
+      const taskPayload = { otaOrderId: 'OTA-IMPORT-LOG-FAIL', unitId: 'HOTEL-U1' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-log-fail',
+        businessId: 'OTA-IMPORT-LOG-FAIL',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner, onLog);
+      expect(result.status).toBe('FAILED');
+
+      const failLog = logsEmitted.find((l) => l.event === 'DUTY_TASK_ORDER_IMPORT_SUBMIT_FAILED');
+      expect(failLog).toBeDefined();
+      expect(failLog?.taskActionStage).toBe('order-import-submit');
+      expect(failLog?.orderNo).toBe('OTA-IMPORT-LOG-FAIL');
+      expect(failLog?.level).toBe('ERROR');
+    });
   });
 
   describe('OTA_CONFIRM_IMPORT', () => {
@@ -336,6 +399,86 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.errorCode).toBe('CONFIRM_IMPORT_FAILED');
       expect(result.errorMessage).toContain('回填确认号按钮不可见');
     });
+
+    it('should return RISK_VERIFICATION_REQUIRED when runner.confirmImport encounters risk verification', async () => {
+      runner.confirmImport = vi.fn().mockRejectedValue(new Error('页面提示安全验证，请拖动滑块'));
+
+      const taskPayload = { confirmNo: 'CFM-RISK' };
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-risk',
+        businessId: 'ORD-RISK',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('RISK_VERIFICATION_REQUIRED');
+      expect(result.errorMessage).toContain('安全验证');
+    });
+
+    it('should fail fast with CONFIRM_NO_MISSING when confirmNo is empty', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-no-confirm-no',
+        businessId: 'ORD-CFM-999',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({ confirmNo: '   ' })).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('CONFIRM_NO_MISSING');
+      expect(result.errorMessage).toContain('缺失有效的确认号');
+    });
+
+    it('should fail fast with ORDER_ID_MISSING when orderId is empty in OTA_CONFIRM_IMPORT', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-no-order',
+        businessId: '',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({ confirmNo: 'CFM-123' })).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('ORDER_ID_MISSING');
+      expect(result.errorMessage).toContain('缺失有效的订单号');
+    });
+
+    it('should fail fast with METHOD_NOT_IMPLEMENTED when runner lacks confirmImport', async () => {
+      const bareRunner = {
+        channelCode: 'BARE_OTA',
+        isRunning: () => true,
+        start: async () => {},
+        stop: async () => {},
+        collectOrders: async () => ({ orders: [] }),
+        inspectOrderDetail: async () => ({} as unknown as ExtractedOrderDetail),
+      } as unknown as ChannelDutyRunner;
+
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-no-method',
+        businessId: 'ORD-CFM-001',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({ confirmNo: 'CFM-123' })).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, bareRunner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('METHOD_NOT_IMPLEMENTED');
+      expect(result.errorMessage).toContain('未实现 confirmImport 方法');
+    });
   });
 
   describe('OTA_CONFIRM_CANCEL', () => {
@@ -357,6 +500,49 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(runner.confirmCancelCalls).toEqual(['ORD-CANCEL-1']);
     });
 
+    it('should fail fast with ORDER_ID_MISSING when orderId is empty in OTA_CONFIRM_CANCEL', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-cnc-no-order',
+        businessId: '',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_CANCEL',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: '',
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('ORDER_ID_MISSING');
+      expect(result.errorMessage).toContain('缺失有效的订单号');
+    });
+
+    it('should fail fast with METHOD_NOT_IMPLEMENTED when runner lacks confirmCancel', async () => {
+      const bareRunner = {
+        channelCode: 'BARE_OTA',
+        isRunning: () => true,
+        start: async () => {},
+        stop: async () => {},
+        collectOrders: async () => ({ orders: [] }),
+        inspectOrderDetail: async () => ({} as unknown as ExtractedOrderDetail),
+      } as unknown as ChannelDutyRunner;
+
+      const task: DutyClaimedTask = {
+        id: 'task-cnc-no-method',
+        businessId: 'ORD-CNC-001',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_CANCEL',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: '',
+      };
+
+      const result = await dispatchDutyTask(task, bareRunner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('METHOD_NOT_IMPLEMENTED');
+      expect(result.errorMessage).toContain('未实现 confirmCancel 方法');
+    });
+
     it('should return CONFIRM_CANCEL_FAILED when runner.confirmCancel throws', async () => {
       runner.confirmCancel = vi.fn().mockRejectedValue(new Error('确认取消异常'));
 
@@ -373,6 +559,25 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       const result = await dispatchDutyTask(task, runner);
       expect(result.status).toBe('FAILED');
       expect(result.errorCode).toBe('CONFIRM_CANCEL_FAILED');
+    });
+
+    it('should return RISK_VERIFICATION_REQUIRED when runner.confirmCancel encounters risk verification', async () => {
+      runner.confirmCancel = vi.fn().mockRejectedValue(new Error('检测到操作频繁，已被风控拦截 (yoda verification)'));
+
+      const task: DutyClaimedTask = {
+        id: 'task-cnc-risk',
+        businessId: 'ORD-CNC-RISK',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_CANCEL',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: '',
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('RISK_VERIFICATION_REQUIRED');
+      expect(result.errorMessage).toContain('风控拦截');
     });
   });
 
@@ -392,6 +597,143 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('FAILED');
       expect(result.errorCode).toBe('UNSUPPORTED_TASK_TYPE');
       expect(result.errorMessage).toContain('不支持的任务消息类型');
+    });
+  });
+
+  describe('Remark template resolution & dynamic rendering in OTA_IMPORT_ORDER', () => {
+    const sampleDetail: ExtractedOrderDetail = {
+      otaOrderId: 'MT-987654321',
+      otaChannel: 'MEITUAN',
+      guestName: '李小龙',
+      guestMobile: '13800138000',
+      roomTypeName: '豪华海景房',
+      arrival: '2026-09-25',
+      departure: '2026-09-27',
+      nights: 2,
+      quantity: 1,
+      totalPrice: 880,
+      raw: {
+        remark: '客人要求尽量安排高楼层安静房间',
+        data: {
+          orderId: 'MT-987654321',
+          roomName: '豪华海景房',
+          floorPrice: 88000,
+          checkInDateString: '2026-09-25 00:00:00',
+          checkOutDateString: '2026-09-27 00:00:00',
+          invoiceTagModel: {
+            invoiceParty: 3,
+            invoiceMoney: 88000,
+          },
+        },
+      },
+    };
+
+    it('should inject rendered remark into importPayload when remote template exists', async () => {
+      vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-RENDERED-888',
+      });
+      vi.spyOn(channelApi, 'fetchChannelRemarkTemplate').mockResolvedValue({
+        otaChannelCode: 'MEITUAN',
+        remarkTemplate: '【自动入单】外部单号:{{OTA订单号}}，住客:{{入住人}}，间夜:{{间夜数}}',
+      });
+
+      runner.detailResult = sampleDetail;
+
+      const taskPayload = { otaOrderId: 'MT-987654321', extUnitCode: 'HOTEL-TEST' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-rendered',
+        businessId: 'MT-987654321',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('SUCCEEDED');
+
+      expect(dutyRuntimeApi.importToolkitOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orders: [
+            expect.objectContaining({
+              remark: '【自动入单】外部单号:MT-987654321，住客:李小龙，间夜:2间夜',
+            }),
+          ],
+        })
+      );
+    });
+
+    it('should fallback to order raw remark when remote template is empty or null', async () => {
+      vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-FALLBACK-100',
+      });
+      vi.spyOn(channelApi, 'fetchChannelRemarkTemplate').mockResolvedValue({
+        otaChannelCode: 'MEITUAN',
+        remarkTemplate: null,
+      });
+
+      runner.detailResult = sampleDetail;
+
+      const taskPayload = { otaOrderId: 'MT-987654321', extUnitCode: 'HOTEL-TEST' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-fallback',
+        businessId: 'MT-987654321',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('SUCCEEDED');
+
+      expect(dutyRuntimeApi.importToolkitOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orders: [
+            expect.objectContaining({
+              remark: '客人要求尽量安排高楼层安静房间',
+            }),
+          ],
+        })
+      );
+    });
+
+    it('should fallback to order raw remark when remote template API fails', async () => {
+      vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-FALLBACK-200',
+      });
+      vi.spyOn(channelApi, 'fetchChannelRemarkTemplate').mockRejectedValue(new Error('Network error'));
+
+      runner.detailResult = sampleDetail;
+
+      const taskPayload = { otaOrderId: 'MT-987654321', extUnitCode: 'HOTEL-TEST' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-net-fallback',
+        businessId: 'MT-987654321',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('SUCCEEDED');
+
+      expect(dutyRuntimeApi.importToolkitOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orders: [
+            expect.objectContaining({
+              remark: '客人要求尽量安排高楼层安静房间',
+            }),
+          ],
+        })
+      );
     });
   });
 });

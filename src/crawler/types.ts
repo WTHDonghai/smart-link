@@ -56,6 +56,6 @@ export interface ProfileSyncResult {
   sourceDir: string;
   sourceProfile: string;
   targetDir: string;
-  message: string;
+  message?: string;
+  error?: string;
 }
-

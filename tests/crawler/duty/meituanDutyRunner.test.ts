@@ -13,6 +13,7 @@ import {
   MeituanDutyRunner,
 } from '../../../src/crawler/duty/meituanDutyRunner';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
+import { APP_ENV_KEYS } from '../../../src/types/env';
 import type { DutyClaimedTask } from '../../../src/types';
 
 describe('meituanDutyRunner', () => {
@@ -448,10 +449,10 @@ describe('meituanDutyRunner', () => {
       expect(runner.targetUrl).toBe('https://eb.meituan.com/ebooking/orders#/unhandled');
     });
 
-    it('should dynamically reflect VITE_OTA_MEITUAN_ORDER_URL environment variable', () => {
-      const original = process.env.VITE_OTA_MEITUAN_ORDER_URL;
+    it('should dynamically reflect the configured Meituan order URL', () => {
+      const original = process.env[APP_ENV_KEYS.otaOrderMeituan];
       try {
-        process.env.VITE_OTA_MEITUAN_ORDER_URL =
+        process.env[APP_ENV_KEYS.otaOrderMeituan] =
           'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
         const mockRunner = new MeituanDutyRunner();
         expect(mockRunner.targetUrl).toBe(
@@ -459,9 +460,9 @@ describe('meituanDutyRunner', () => {
         );
       } finally {
         if (original === undefined) {
-          delete process.env.VITE_OTA_MEITUAN_ORDER_URL;
+          delete process.env[APP_ENV_KEYS.otaOrderMeituan];
         } else {
-          process.env.VITE_OTA_MEITUAN_ORDER_URL = original;
+          process.env[APP_ENV_KEYS.otaOrderMeituan] = original;
         }
       }
     });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   requestPlatformApi,
   PlatformApiError,
@@ -9,10 +9,17 @@ import {
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
 import { PlatformAuthTokens, SystemLogEntry } from '../../src/types';
 
+const hostWindow = window as unknown as { host?: unknown };
+
 describe('platformApi - 接口调用、认证注入与 401 透明重试', () => {
   beforeEach(() => {
+    hostWindow.host = {};
     clearTokensFromStorage();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    delete hostWindow.host;
   });
 
   it('自动注入 App-Auth: bearer {token} 头部', async () => {
@@ -46,6 +53,14 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
 
     expect(result.data.orderCount).toBe(42);
     expect(capturedHeaders?.get('App-Auth')).toBe('bearer valid-test-bearer-token');
+  });
+
+  it('standalone browser context cannot call platform APIs', async () => {
+    delete hostWindow.host;
+
+    await expect(requestPlatformApi('/api/v1/orders/summary')).rejects.toThrow(
+      '平台接口仅支持桌面端'
+    );
   });
 
   it('遇 401 自动执行单次强制刷新并透明重试', async () => {
@@ -284,6 +299,7 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
       expect(failedLog?.httpStatus).toBe(400);
       expect(failedLog?.apiParams).toEqual({ stationId: 'invalid-station' });
       expect(failedLog?.apiResponse).toEqual({ code: 'PARAM_ERROR', msg: '工位标识非法或不存在' });
+      expect(failedLog?.taskActionStage).toBe('claim');
     } finally {
       unsubscribe();
     }
@@ -324,6 +340,53 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
         status: 'WAIT_CONFIRM',
       });
       expect(successLog?.apiResponse).toEqual({ records: [], total: 0 });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('作为通用 HTTP 客户端不应在底层猜测业务字段，支持显式透传 options.orderNo 与 options.taskActionStage', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ success: true, pmsOrderId: 'PMS-9988' }),
+      } as unknown as Response);
+
+      await requestPlatformApi('/toolkit/orders/import', {
+        baseUrl: 'https://pms.example.com',
+        method: 'POST',
+        orderNo: 'MT-987654321',
+        taskActionStage: 'order-import-submit',
+        body: JSON.stringify({
+          otaOrderId: 987654321,
+          extUnitCode: 'HOTEL-ROOM-1',
+        }),
+      });
+
+      const log = capturedLogs.find((l) => l.event === 'API_REQUEST_SUCCESS');
+      expect(log).toBeDefined();
+      expect(log?.taskActionStage).toBe('order-import-submit');
+      expect(log?.orderNo).toBe('MT-987654321');
+      expect(log?.apiParams).toEqual({
+        otaOrderId: 987654321,
+        extUnitCode: 'HOTEL-ROOM-1',
+      });
     } finally {
       unsubscribe();
     }

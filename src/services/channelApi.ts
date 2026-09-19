@@ -366,7 +366,7 @@ export interface SaveChannelRemarkTemplateResult {
   ok: boolean;
   message: string;
   otaChannelCode: string;
-  remarkTemplate: string;
+  remarkTemplate: string | null;
 }
 
 /**
@@ -422,11 +422,26 @@ export async function saveChannelRemarkTemplate(
     response?.message ||
     `「${otaChannelCode}」备注模板已保存`;
 
+  let remarkTemplate: string | null = null;
+  if (response?.data && typeof response.data === 'object') {
+    const dataObj = response.data as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(dataObj, 'remarkTemplate')) {
+      const remoteTemplate = dataObj.remarkTemplate;
+      if (remoteTemplate === null || remoteTemplate === undefined) {
+        remarkTemplate = null;
+      } else if (typeof remoteTemplate === 'string') {
+        remarkTemplate = remoteTemplate;
+      } else {
+        throw new Error('保存渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null');
+      }
+    }
+  }
+
   return {
     ok: true,
     message,
     otaChannelCode,
-    remarkTemplate: payload.remarkTemplate,
+    remarkTemplate,
   };
 }
 
@@ -440,7 +455,7 @@ export interface FetchChannelRemarkTemplateResult {
  * GET /toolkit/channel-remark-templates/{otaChannelCode}
  * 接口ID：507972669
  * 
- * 规则：若后台未配置或资源不存在 (404/空)，返回 remarkTemplate: null，由调用方回退展示默认模板
+ * 规则：若后台未配置或资源不存在 (404/空)，返回 remarkTemplate: null，由调用方显式呈现空模板
  */
 export async function fetchChannelRemarkTemplate(
   otaChannelCode: string
@@ -464,13 +479,21 @@ export async function fetchChannelRemarkTemplate(
       const respObj = response as Record<string, unknown>;
 
       // 业务信封失败 Fail-Fast 阻断，避免业务异常被静默误判为未配置模板
-      if (
+      const hasBusinessError =
         respObj.success === false ||
         (respObj.code !== undefined &&
           respObj.code !== null &&
           String(respObj.code) !== '0' &&
-          String(respObj.code) !== '200')
-      ) {
+          String(respObj.code) !== '200');
+
+      if (hasBusinessError && String(respObj.code) === '404') {
+        return {
+          otaChannelCode,
+          remarkTemplate: null,
+        };
+      }
+
+      if (hasBusinessError) {
         const errorMsg =
           typeof respObj.msg === 'string'
             ? respObj.msg
@@ -486,8 +509,15 @@ export async function fetchChannelRemarkTemplate(
         template = data;
       } else if (data && typeof data === 'object') {
         const dataObj = data as Record<string, unknown>;
-        if (typeof dataObj.remarkTemplate === 'string') {
-          template = dataObj.remarkTemplate;
+        if (Object.prototype.hasOwnProperty.call(dataObj, 'remarkTemplate')) {
+          const remoteTemplate = dataObj.remarkTemplate;
+          if (remoteTemplate === null) {
+            template = null;
+          } else if (typeof remoteTemplate === 'string') {
+            template = remoteTemplate;
+          } else {
+            throw new Error('获取渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null');
+          }
         }
       }
     }
@@ -497,7 +527,7 @@ export async function fetchChannelRemarkTemplate(
       remarkTemplate: template && template.trim() ? template : null,
     };
   } catch (error) {
-    // 若服务端返回 404 (资源/模板不存在) 或明确包含未配置相关描述，按设计返回 null 触发默认模板回退
+    // 仅可信 HTTP 404 表示远端未配置；其他服务器或业务异常继续抛出。
     const status =
       error && typeof error === 'object' && 'statusCode' in error && typeof (error as { statusCode?: unknown }).statusCode === 'number'
         ? (error as { statusCode: number }).statusCode
@@ -505,16 +535,7 @@ export async function fetchChannelRemarkTemplate(
         ? (error as { status: number }).status
         : undefined;
 
-    const msg = error instanceof Error ? error.message : String(error);
-
-    if (
-      status === 404 ||
-      msg.includes('404') ||
-      msg.includes('NOT_FOUND') ||
-      msg.includes('No static resource') ||
-      msg.includes('未找到') ||
-      msg.includes('不存在')
-    ) {
+    if (status === 404) {
       return {
         otaChannelCode,
         remarkTemplate: null,
@@ -525,4 +546,3 @@ export async function fetchChannelRemarkTemplate(
     throw error;
   }
 }
-

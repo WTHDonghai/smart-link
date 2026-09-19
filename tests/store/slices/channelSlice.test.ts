@@ -4,13 +4,11 @@ import channelReducer, {
   removeChannel,
   updateChannelTargetSystem,
   selectCulturalTourismChannel,
-  updateRemarkTemplate,
   setSelectedChannelForTemplate,
   clearChannelError,
   fetchChannelMappingData,
   saveChannelMapping,
   SCHEMA_STORAGE_PREFIX,
-  TEMPLATE_STORAGE_PREFIX,
 } from '../../../src/store/slices/channelSlice';
 
 describe('channelSlice', () => {
@@ -53,8 +51,7 @@ describe('channelSlice', () => {
       expect(nextState.channels).toEqual(initialState.channels);
     });
 
-    it('loads custom schema and template from localStorage if previously persisted', () => {
-      localStorage.setItem(`${TEMPLATE_STORAGE_PREFIX}ctrip`, '【携程自定义测试模板】');
+    it('loads custom schema from localStorage while using an empty remote-template projection', () => {
       const customCtripSchema = {
         channelId: 'ctrip',
         channelCode: 'CTRIP',
@@ -69,10 +66,9 @@ describe('channelSlice', () => {
 
       const ctrip = nextState.channels.find((c) => c.id === 'ctrip');
       expect(ctrip).toBeDefined();
-      expect(ctrip?.remarkTemplate).toBe('【携程自定义测试模板】');
+      expect(ctrip?.remarkTemplate).toBe('');
       expect(ctrip?.protocolSchema?.version).toBe('9.9.9');
 
-      localStorage.removeItem(`${TEMPLATE_STORAGE_PREFIX}ctrip`);
       localStorage.removeItem(`${SCHEMA_STORAGE_PREFIX}ctrip`);
     });
   });
@@ -154,21 +150,6 @@ describe('channelSlice', () => {
       );
 
       expect(nextState.channels).toEqual(initialState.channels);
-    });
-  });
-
-  describe('updateRemarkTemplate', () => {
-    it('updates remark template string for specified channel', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const customTemplate = '【美团VIP】OTA单号:{OTA订单号}，请务必安排无烟房！';
-
-      const nextState = channelReducer(
-        initialState,
-        updateRemarkTemplate({ channelId: 'meituan', template: customTemplate })
-      );
-
-      const target = nextState.channels.find((c) => c.id === 'meituan');
-      expect(target?.remarkTemplate).toBe(customTemplate);
     });
   });
 
@@ -533,4 +514,3 @@ describe('channelSlice', () => {
     });
   });
 });
-

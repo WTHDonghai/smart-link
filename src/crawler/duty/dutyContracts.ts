@@ -1,4 +1,4 @@
-import type { DutyClaimedTask } from '../../types';
+import type { DutyClaimedTask, SystemLogEntry } from '../../types';
 
 export interface DutyTaskExecutionResult {
   status: 'SUCCEEDED' | 'FAILED';
@@ -73,5 +73,8 @@ export interface ChannelDutyRunner {
   confirmCancel?(otaOrderId: string): Promise<void>;
 
   /** 兼容层：支持直接执行任务 */
-  executeTask?(task: DutyClaimedTask): Promise<DutyTaskExecutionResult>;
+  executeTask?(
+    task: DutyClaimedTask,
+    onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
+  ): Promise<DutyTaskExecutionResult>;
 }

@@ -1,57 +1,66 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import processEnvKeys from '../src/types/processEnvKeys.json' with { type: 'json' };
+import rendererServerConfig from '../src/config/rendererServer.json' with { type: 'json' };
 
-function checkHttpReady(urlStr = 'http://localhost:3000', timeoutMs = 400) {
+const rendererAssetServerUrl = rendererServerConfig.url;
+
+export function probeHttpPort(url, timeoutMs = 400) {
+  const target = new URL(url);
+
   return new Promise((resolve) => {
-    try {
-      const u = new URL(urlStr);
-      const req = http.get(
-        {
-          hostname: u.hostname,
-          port: u.port || 80,
-          path: '/',
-          timeout: timeoutMs,
-        },
-        (res) => {
-          res.resume();
-          resolve(res.statusCode !== undefined && res.statusCode < 500);
-        }
-      );
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve(false);
-      });
-    } catch {
+    const req = http.get(
+      {
+        hostname: target.hostname,
+        port: target.port || 80,
+        path: target.pathname,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode !== undefined && res.statusCode < 500);
+      }
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
       resolve(false);
-    }
+    });
   });
 }
 
-function loadEnvFileIntoProcess(envPath, override = false) {
-  if (!fs.existsSync(envPath)) return;
-  try {
-    const raw = fs.readFileSync(envPath, 'utf-8');
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx !== -1) {
-        const key = trimmed.slice(0, eqIdx).trim();
-        let val = trimmed.slice(eqIdx + 1).trim();
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-          val = val.slice(1, -1);
-        }
-        if (key) {
-          if (override || process.env[key] === undefined) {
-            process.env[key] = val;
-          }
-        }
-      }
+export async function settleRendererServerReadiness({
+  url,
+  probe = probeHttpPort,
+  getFailure,
+  attempts = 30,
+  intervalMs = 500,
+  settleMs = 50,
+}) {
+  let ready = false;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const failure = getFailure();
+    if (failure) throw failure;
+    if (await probe(url)) {
+      ready = true;
+      break;
     }
-  } catch {}
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  if (!ready) {
+    throw new Error(`Electron 渲染层资源服务启动超时: ${url}`);
+  }
+
+  const immediateFailure = getFailure();
+  if (immediateFailure) throw immediateFailure;
+
+  await new Promise((resolve) => setTimeout(resolve, settleMs));
+
+  const settledFailure = getFailure();
+  if (settledFailure) throw settledFailure;
 }
 
 async function main() {
@@ -59,9 +68,8 @@ async function main() {
   const npmCmd = isWindows ? 'npm.cmd' : 'npm';
   const npxCmd = isWindows ? 'npx.cmd' : 'npx';
 
-  // 解析 --mode 启动参数 (默认为 development)
   const args = process.argv.slice(2);
-  let mode = process.env.MODE || 'development';
+  let mode = process.env[processEnvKeys.mode] || 'development';
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--mode' && args[i + 1]) {
       mode = args[i + 1].trim();
@@ -69,18 +77,8 @@ async function main() {
     }
   }
 
-  // 加载主环境与目标 mode 环境配置 (如 .env 与 .env.mock)
-  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env'), false);
-  if (mode && mode !== 'development') {
-    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}`), true);
-  }
-  loadEnvFileIntoProcess(path.resolve(process.cwd(), '.env.local'), true);
-  if (mode && mode !== 'development') {
-    loadEnvFileIntoProcess(path.resolve(process.cwd(), `.env.${mode}.local`), true);
-  }
-  process.env.MODE = mode;
+  process.env[processEnvKeys.mode] = mode;
 
-  // 1. 编译 Electron 主进程与预加载脚本
   console.log(`[Smart-Link] 正在编译 Electron 主进程与预加载脚本 (模式: ${mode})...`);
   const buildProc = spawn(npmCmd, ['run', 'build:electron'], {
     stdio: 'inherit',
@@ -89,77 +87,108 @@ async function main() {
   });
 
   await new Promise((resolve, reject) => {
+    buildProc.on('error', (error) => {
+      reject(new Error(`无法启动 build:electron: ${error.message}`, { cause: error }));
+    });
     buildProc.on('exit', (code) => {
       if (code === 0) resolve(undefined);
-      else reject(new Error(`build:electron 编译失败，退出码: ${code}`));
+      else reject(new Error(`build:electron 编译失败，退出码: ${code ?? 'unknown'}`));
     });
   });
 
-  // 2. 检测本地 3000 端口是否已存在运行中的 Vite 服务
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
-  const isAlreadyRunning = await checkHttpReady(devServerUrl);
-  let viteProcess = null;
-
-  if (!isAlreadyRunning) {
-    console.log(`[Smart-Link] 正在启动 Vite 前端开发服务器 (${devServerUrl}, mode: ${mode})...`);
-    const viteArgs = ['run', 'dev'];
-    if (mode && mode !== 'development') {
-      viteArgs.push('--', '--mode', mode);
-    }
-    viteProcess = spawn(npmCmd, viteArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: isWindows,
-      env: process.env,
-    });
-
-    viteProcess.stdout?.on('data', (data) => {
-      const line = data.toString();
-      if (line.includes('Local:') || line.includes('ready in')) {
-        process.stdout.write(`[Vite] ${line}`);
-      }
-    });
-
-    viteProcess.stderr?.on('data', (data) => {
-      process.stderr.write(`[Vite Error] ${data.toString()}`);
-    });
-
-    // 等待 Vite 服务就绪 (最多等待 15 秒)
-    let ready = false;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      if (await checkHttpReady(devServerUrl)) {
-        ready = true;
-        break;
-      }
-    }
-
-    if (!ready) {
-      console.warn('[Smart-Link] 等待 Vite 服务超时，将由 Electron 智能加载本地构建产物...');
-    } else {
-      console.log('[Smart-Link] Vite 开发服务器已就绪！');
-    }
-  } else {
-    console.log(`[Smart-Link] 检测到已有 Vite 开发服务器在运行 (${devServerUrl})，复用当前服务。`);
+  if (await probeHttpPort(rendererAssetServerUrl)) {
+    throw new Error(`开发端口已被占用: ${rendererAssetServerUrl}`);
   }
 
-  // 3. 启动 Electron 桌面视窗
+  console.log(
+    `[Smart-Link] 正在启动 Electron 渲染层资源服务 (${rendererAssetServerUrl}, mode: ${mode})...`
+  );
+  const viteArgs = [
+    'vite',
+    '--port',
+    String(rendererServerConfig.port),
+    '--host',
+    rendererServerConfig.hostname,
+    '--strictPort',
+  ];
+  if (mode && mode !== 'development') {
+    viteArgs.push('--mode', mode);
+  }
+
+  const viteProcess = spawn(npxCmd, viteArgs, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: isWindows,
+    env: process.env,
+  });
+  let electronProcess;
+
+  const cleanup = () => {
+    const isRunning = !viteProcess.killed && viteProcess.exitCode === null && viteProcess.signalCode === null;
+    if (isRunning) {
+      console.log('[Smart-Link] 关闭本地 Vite 后台服务...');
+      try {
+        viteProcess.kill('SIGTERM');
+      } catch (error) {
+        console.warn(
+          `[Smart-Link] 停止渲染层资源服务失败: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  };
+
+  viteProcess.stdout?.on('data', (data) => {
+    const line = data.toString();
+    if (line.includes('Local:') || line.includes('ready in')) {
+      process.stdout.write(`[Vite] ${line}`);
+    }
+  });
+
+  viteProcess.stderr?.on('data', (data) => {
+    process.stderr.write(`[Vite Error] ${data.toString()}`);
+  });
+
+  let viteFailure;
+  viteProcess.on('error', (error) => {
+    viteFailure = new Error(`无法启动渲染层资源服务: ${error.message}`, { cause: error });
+  });
+  viteProcess.on('exit', (code, signal) => {
+    viteFailure = new Error(
+      `渲染层资源服务提前退出 (code: ${code ?? 'null'}, signal: ${signal ?? 'null'})`
+    );
+
+    if (electronProcess && electronProcess.exitCode === null && electronProcess.signalCode === null) {
+      console.error(`[Smart-Link] ${viteFailure.message}`);
+      electronProcess.kill('SIGTERM');
+      cleanup();
+      process.exit(1);
+    }
+  });
+
+  try {
+    await settleRendererServerReadiness({
+      url: rendererAssetServerUrl,
+      getFailure: () => viteFailure,
+    });
+  } catch (error) {
+    if (viteProcess.exitCode === null && viteProcess.signalCode === null) {
+      viteProcess.kill('SIGTERM');
+    }
+    throw error;
+  }
+
+  console.log('[Smart-Link] Electron 渲染层资源服务已就绪！');
   console.log('[Smart-Link] 正在启动 Electron 桌面应用窗口...');
-  const electronProcess = spawn(npxCmd, ['electron', '.'], {
+  electronProcess = spawn(npxCmd, ['electron', '.'], {
     stdio: 'inherit',
     shell: isWindows,
     env: process.env,
   });
 
-  const cleanup = () => {
-    if (viteProcess && !viteProcess.killed) {
-      console.log('[Smart-Link] 关闭本地 Vite 后台服务...');
-      try {
-        viteProcess.kill('SIGTERM');
-      } catch {
-        // 忽略
-      }
-    }
-  };
+  electronProcess.on('error', (error) => {
+    console.error(`[Smart-Link] 无法启动 Electron: ${error.message}`);
+    cleanup();
+    process.exit(1);
+  });
 
   process.on('SIGINT', () => {
     cleanup();
@@ -171,12 +200,20 @@ async function main() {
   });
 
   electronProcess.on('exit', (code) => {
+    if (code === null) {
+      console.error('[Smart-Link] Electron 被信号终止，未收到正常退出码。');
+      cleanup();
+      process.exit(1);
+    }
+
     cleanup();
-    process.exit(code || 0);
+    process.exit(code);
   });
 }
 
-main().catch((err) => {
-  console.error('[Smart-Link] 启动异常:', err);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch((err) => {
+    console.error('[Smart-Link] 启动异常:', err);
+    process.exit(1);
+  });
+}

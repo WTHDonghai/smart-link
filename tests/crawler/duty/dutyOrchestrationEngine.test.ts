@@ -102,6 +102,14 @@ describe('dutyOrchestrationEngine', () => {
       expect(statusMap['MOCK_OTA'].channelCode).toBe('MOCK_OTA');
     });
 
+    it('should format appendDutyLog timestamp as standard YYYY-MM-DD HH:mm:ss.SSS in local timezone', () => {
+      const entry = engine.appendDutyLog({
+        level: 'INFO',
+        message: '测试时间戳格式对齐',
+      });
+      expect(entry.timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+    });
+
     it('should return STOPPED coordinator status initially', () => {
       expect(engine.getCoordinatorStatus()).toBe('STOPPED');
     });
@@ -147,7 +155,7 @@ describe('dutyOrchestrationEngine', () => {
       const secondRes = await engine.startDuty('MOCK_OTA');
 
       expect(secondRes.success).toBe(true);
-      expect(secondRes.message).toContain('已在运行中');
+      expect(secondRes.error).toBeUndefined();
       expect(mockRunner.startCalls).toBe(1);
     });
 
@@ -321,8 +329,8 @@ describe('dutyOrchestrationEngine', () => {
       const logs = engine.getRecentDutyLogs();
       const taskLogs = logs.filter((l) => l.taskId === 'task-log-test-1');
 
-      // 必须包含 CLAIM 阶段日志
-      const claimLog = taskLogs.find((l) => l.taskActionStage === 'CLAIM');
+      // 必须包含 claim 阶段日志
+      const claimLog = taskLogs.find((l) => l.taskActionStage === 'claim');
       expect(claimLog).toBeDefined();
       expect(claimLog?.msgType).toBe('OTA_IMPORT_ORDER');
       expect(claimLog?.module).toBe('DUTY_TASK');
@@ -335,13 +343,13 @@ describe('dutyOrchestrationEngine', () => {
       });
       expect(claimLog?.apiResponse).toEqual(task);
 
-      // 必须包含 EXECUTE 阶段日志
-      const execLog = taskLogs.find((l) => l.taskActionStage === 'EXECUTE');
+      // 必须包含 execute 阶段日志
+      const execLog = taskLogs.find((l) => l.taskActionStage === 'execute');
       expect(execLog).toBeDefined();
       expect(execLog?.msgType).toBe('OTA_IMPORT_ORDER');
 
-      // 必须包含 RESULT 阶段日志
-      const resultLog = taskLogs.find((l) => l.taskActionStage === 'RESULT' && l.event === 'DUTY_TASK_EXECUTE_SUCCESS');
+      // 必须包含 result 阶段日志
+      const resultLog = taskLogs.find((l) => l.taskActionStage === 'result' && l.event === 'DUTY_TASK_EXECUTE_SUCCESS');
       expect(resultLog).toBeDefined();
       expect(resultLog?.msgType).toBe('OTA_IMPORT_ORDER');
       expect(resultLog?.taskStatus).toBe('SUCCEEDED');
@@ -724,7 +732,7 @@ describe('dutyOrchestrationEngine', () => {
 
       // 1. 断言停止响应
       expect(stopResult.success).toBe(true);
-      expect(stopResult.message).toContain('已安全停止');
+      expect(stopResult.error).toBeUndefined();
 
       // 2. 精准断言所有 runner 状态变为 false，调用了 stop()
       expect(mockRunner.running).toBe(false);

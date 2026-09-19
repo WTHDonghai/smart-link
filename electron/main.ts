@@ -1,8 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
@@ -15,66 +14,148 @@ import {
 } from '../src/crawler/duty/platformTokenStore';
 import { saveTokensToStorage, clearTokensFromStorage } from '../src/services/platformAuth';
 import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
-import type { PlatformAuthTokens } from '../src/types';
+import type {
+  DesktopOperationResult,
+  PlatformAuthTokens,
+  SystemLogEntry,
+} from '../src/types';
+import { loadProjectEnv } from '../src/config/envLoader';
+import rendererServerConfig from '../src/config/rendererServer.json';
+import { PROCESS_ENV_KEYS } from '../src/types/env';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 
-/**
- * 从本地配置文件安全解析并加载环境变量至当前 Node 进程
- */
-function parseAndLoadEnvFile(envPath: string, override = false): void {
-  if (!fs.existsSync(envPath)) return;
-  try {
-    const raw = fs.readFileSync(envPath, 'utf-8');
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx !== -1) {
-        const key = trimmed.slice(0, eqIdx).trim();
-        let val = trimmed.slice(eqIdx + 1).trim();
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-          val = val.slice(1, -1);
-        }
-        if (key && (override || process.env[key] === undefined)) {
-          process.env[key] = val;
-        }
+const rendererAssetServerUrl = rendererServerConfig.url;
+const MAX_PENDING_MAIN_LOGS = 50;
+
+const pendingMainLogs = new Map<string, SystemLogEntry>();
+let mainLogStreamDrained = false;
+
+function publishMainLog(entry: SystemLogEntry): void {
+  if (!mainLogStreamDrained) {
+    pendingMainLogs.delete(entry.id);
+    pendingMainLogs.set(entry.id, entry);
+    if (pendingMainLogs.size > MAX_PENDING_MAIN_LOGS) {
+      const oldestLogId = pendingMainLogs.keys().next().value;
+      if (oldestLogId !== undefined) {
+        pendingMainLogs.delete(oldestLogId);
       }
     }
-  } catch {
-    // 忽略加载异常
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('host:log-entry', entry);
   }
 }
 
-/**
- * 初始化 Electron 主进程环境变量（支持 --mode 与单一数据源对齐）
- */
-export function initProcessEnvironment(): void {
-  const args = process.argv.slice(2);
-  let mode = process.env.MODE || 'development';
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--mode' && args[i + 1]) {
-      mode = args[i + 1].trim();
-      break;
+function registerMainLogIpcHandlers(): void {
+  ipcMain.handle('host:pending-logs', () => {
+    const entries = [...pendingMainLogs.values()];
+    pendingMainLogs.clear();
+    mainLogStreamDrained = true;
+    return entries;
+  });
+
+}
+
+if (process.type === 'browser') {
+  logger.subscribe(publishMainLog);
+}
+
+export interface ProcessEnvironmentHost {
+  args: readonly string[];
+  currentMode: string | undefined;
+  isPackaged: boolean;
+  cwd: string;
+  appPath: string;
+}
+
+export type ApplicationStartupMode = 'dev' | 'built';
+
+export interface ApplicationTeardownResult {
+  completed: boolean;
+  timedOut: boolean;
+  failureReasons: string[];
+}
+
+function getCliOption(args: readonly string[], name: string): string | undefined {
+  const flag = `--${name}`;
+  const index = args.indexOf(flag);
+  if (index >= 0) return args[index + 1]?.trim();
+  return args.find((arg) => arg.startsWith(`${flag}=`))?.slice(flag.length + 1);
+}
+
+export function resolveProcessEnvironment(host: ProcessEnvironmentHost): {
+  mode: string;
+  startupMode: ApplicationStartupMode;
+  cwd: string;
+} {
+  const cliMode = getCliOption(host.args, 'mode');
+  const cliStartupMode = getCliOption(host.args, 'start-mode');
+
+  const fallbackMode = host.isPackaged ? 'production' : 'development';
+  const mode =
+    cliMode ||
+    (host.isPackaged ? fallbackMode : host.currentMode?.trim() || fallbackMode);
+
+  const startupMode: ApplicationStartupMode = host.isPackaged
+    ? 'built'
+    : cliStartupMode === 'built'
+      ? 'built'
+      : 'dev';
+
+  if (cliStartupMode && cliStartupMode !== 'built' && cliStartupMode !== 'dev') {
+    throw new Error(`启动模式无效: ${cliStartupMode}，仅支持 dev 或 built`);
+  }
+
+  return {
+    mode,
+    startupMode,
+    cwd: host.isPackaged ? host.appPath : host.cwd,
+  };
+}
+
+function initProcessEnvironment(): void {
+  if (!gotSingleInstanceLock) {
+    return;
+  }
+
+  const { mode, startupMode, cwd } = resolveProcessEnvironment({
+    args: process.argv.slice(2),
+    currentMode: process.env[PROCESS_ENV_KEYS.mode],
+    isPackaged: app.isPackaged,
+    cwd: process.cwd(),
+    appPath: app.getAppPath(),
+  });
+
+  const projectEnv = loadProjectEnv(mode, cwd);
+  for (const [key, value] of Object.entries(projectEnv)) {
+    process.env[key] = value;
+  }
+  process.env[PROCESS_ENV_KEYS.mode] = mode;
+  process.env[PROCESS_ENV_KEYS.startupMode] = startupMode;
+}
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  initProcessEnvironment();
+
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
     }
-  }
-
-  const cwd = process.cwd();
-  parseAndLoadEnvFile(path.resolve(cwd, '.env'), false);
-  if (mode && mode !== 'development') {
-    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}`), true);
-  }
-  parseAndLoadEnvFile(path.resolve(cwd, '.env.local'), true);
-  if (mode && mode !== 'development') {
-    parseAndLoadEnvFile(path.resolve(cwd, `.env.${mode}.local`), true);
-  }
-  process.env.MODE = mode;
+  });
 }
-
-initProcessEnvironment();
 
 
 /**
@@ -115,6 +196,7 @@ export function registerCrawlerIpcHandlers(): void {
     }
   );
 
+  // [TODO]: 需要移除，同步profile 只是用于开发需要
   // 2. Profile 本地登录态同步
   ipcMain.handle(
     'crawler:sync-profile',
@@ -124,9 +206,13 @@ export function registerCrawlerIpcHandlers(): void {
         const result = syncChromeProfile({ channelCode: code });
         return result;
       } catch (error) {
+        const code = (channelCode || 'MEITUAN').trim().toUpperCase();
         return {
           success: false,
-          message: error instanceof Error ? error.message : String(error),
+          sourceDir: '',
+          sourceProfile: '',
+          targetDir: '',
+          error: error instanceof Error ? error.message : String(error),
         };
       }
     }
@@ -140,15 +226,15 @@ export function registerDutyIpcHandlers(): void {
   ipcMain.handle('duty:start', async (_event, channelCode: string) => {
     const code = (channelCode || '').trim().toUpperCase();
     if (!code) {
-      return { success: false, message: '渠道编码不能为空' };
+      return { success: false, error: '渠道编码不能为空' };
     }
     try {
       const res = await dutyOrchestrationEngine.startDuty(code);
-      return res;
+      return { success: res.success, error: res.error } satisfies DesktopOperationResult;
     } catch (err) {
       return {
         success: false,
-        message: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       };
     }
   });
@@ -156,15 +242,15 @@ export function registerDutyIpcHandlers(): void {
   ipcMain.handle('duty:stop', async (_event, channelCode: string) => {
     const code = (channelCode || '').trim().toUpperCase();
     if (!code) {
-      return { success: false, message: '渠道编码不能为空' };
+      return { success: false, error: '渠道编码不能为空' };
     }
     try {
       const res = await dutyOrchestrationEngine.stopDuty(code);
-      return res;
+      return { success: res.success, error: res.error } satisfies DesktopOperationResult;
     } catch (err) {
       return {
         success: false,
-        message: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       };
     }
   });
@@ -180,10 +266,23 @@ export function registerDutyIpcHandlers(): void {
 
   ipcMain.handle('duty:sync-tokens', async (_event, tokens: PlatformAuthTokens) => {
     if (!tokens || !tokens.accessToken) {
-      return { success: false, message: '无效的 Token 载荷' };
+      return { success: false, error: '无效的 Token 载荷' };
     }
-    saveTokensToStorage(tokens);
-    savePlatformTokenFile(tokens);
+
+    try {
+      saveTokensToStorage(tokens);
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    const fileResult = savePlatformTokenFile(tokens);
+    if (!fileResult.success) {
+      return { success: false, error: fileResult.error };
+    }
+
     return { success: true };
   });
 
@@ -196,11 +295,12 @@ export function registerDutyIpcHandlers(): void {
   // 3. 一键停止所有渠道值守与后台调度
   ipcMain.handle('duty:stop-all', async () => {
     try {
-      return await dutyOrchestrationEngine.stopAllDuty();
+      const result = await dutyOrchestrationEngine.stopAllDuty();
+      return { success: result.success, error: result.error } satisfies DesktopOperationResult;
     } catch (err) {
       return {
         success: false,
-        message: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       };
     }
   });
@@ -208,63 +308,77 @@ export function registerDutyIpcHandlers(): void {
   // 4. 应用级退出与全量资源回收调度
   ipcMain.handle('app:teardown', async () => {
     try {
-      await teardownApplicationResources();
-      return { success: true };
+      const result = await teardownApplicationResources();
+      return {
+        success: result.completed && result.failureReasons.length === 0,
+        error: result.failureReasons.join('; ') || undefined,
+      };
     } catch (err) {
       return {
         success: false,
-        message: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : String(err),
       };
     }
   });
 
-  dutyOrchestrationEngine.subscribeLogs((entry) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('duty:log-entry', entry);
-    }
-  });
+  dutyOrchestrationEngine.subscribeLogs(publishMainLog);
 }
 
 let isTearingDown = false;
-let teardownPromise: Promise<void> | null = null;
+let teardownPromise: Promise<ApplicationTeardownResult> | null = null;
 
 /**
  * 唯一的应用退出与全量资源回收调度函数
  * 具备幂等性防护、2.5 秒超时兜底熔断与异常隔离保障，按序关闭值守、清退浏览器子进程并持久化日志
  */
-export async function teardownApplicationResources(timeoutMs = 2500): Promise<void> {
+export async function teardownApplicationResources(
+  timeoutMs = 2500
+): Promise<ApplicationTeardownResult> {
   if (isTearingDown && teardownPromise) {
     return teardownPromise;
   }
   isTearingDown = true;
 
-  const teardownAction = async (): Promise<void> => {
+  const teardownAction = async (): Promise<ApplicationTeardownResult> => {
+    const failureReasons: string[] = [];
+
     // 1. 停止所有值守任务、清除心跳并通知中台离线
     try {
-      await dutyOrchestrationEngine.stopAllDuty();
+      const result = await dutyOrchestrationEngine.stopAllDuty();
+      if (!result.success) {
+        failureReasons.push(result.error || '停止值守任务失败');
+      }
     } catch (err) {
-      console.warn('[Smart-Link] 停止值守任务异常:', err);
+      const reason = err instanceof Error ? err.message : String(err);
+      failureReasons.push(reason);
+      logger.warn('[Smart-Link] 停止值守任务异常', {
+        module: 'SYSTEM',
+        details: reason,
+      });
     }
 
     // 2. 并发安全关闭所有未释放的 BrowserContext，清空活跃集合并释放 Profile 物理锁文件
     try {
       await closeAllBrowserSessions();
     } catch (err) {
-      console.warn('[Smart-Link] 关闭浏览器子进程异常:', err);
+      const reason = err instanceof Error ? err.message : String(err);
+      failureReasons.push(reason);
+      logger.warn('[Smart-Link] 关闭浏览器子进程异常', {
+        module: 'SYSTEM',
+        details: reason,
+      });
     }
 
-    // 3. 立即刷新日志持久化存储缓冲
-    try {
-      await logger.flushStorage();
-    } catch (err) {
-      console.warn('[Smart-Link] 刷新持久化日志缓冲异常:', err);
-    }
+    return { completed: true, timedOut: false, failureReasons };
   };
 
-  const timeoutFallback = new Promise<void>((resolve) => {
+  const timeoutFallback = new Promise<ApplicationTeardownResult>((resolve) => {
     const timer = setTimeout(() => {
-      console.warn(`[Smart-Link] teardownApplicationResources 超时 ${timeoutMs}ms，执行强制兜底熔断`);
-      resolve();
+      const reason = `资源回收超时 ${timeoutMs}ms`;
+      logger.warn(`[Smart-Link] teardownApplicationResources 超时 ${timeoutMs}ms，执行强制兜底熔断`, {
+        module: 'SYSTEM',
+      });
+      resolve({ completed: false, timedOut: true, failureReasons: [reason] });
     }, timeoutMs);
     if (typeof timer.unref === 'function') {
       timer.unref();
@@ -272,7 +386,7 @@ export async function teardownApplicationResources(timeoutMs = 2500): Promise<vo
   });
 
   teardownPromise = Promise.race([teardownAction(), timeoutFallback]);
-  await teardownPromise;
+  return await teardownPromise;
 }
 
 /**
@@ -284,44 +398,16 @@ export function resetTeardownStateForTest(): void {
 }
 
 /**
- * 使用轻量 HTTP GET 检测本地开发服务是否就绪 (无 Chromium 控制台刷屏异常)
+ * 加载视窗内容：打包态读取本地构建产物，开发态仅连接 Electron 渲染层资源服务。
  */
-function probeHttpServer(urlStr: string, timeoutMs = 500): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const u = new URL(urlStr);
-      const req = http.get(
-        {
-          hostname: u.hostname,
-          port: u.port || 80,
-          path: '/',
-          timeout: timeoutMs,
-        },
-        (res) => {
-          res.resume();
-          resolve(res.statusCode !== undefined && res.statusCode < 500);
-        }
-      );
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve(false);
-      });
-    } catch {
-      resolve(false);
-    }
-  });
-}
-
-/**
- * 智能加载视窗内容：优先连接 Vite 开发服务器；若未启动则平滑回退加载已构建的本地 dist/index.html
- */
-async function loadWindowContent(window: BrowserWindow): Promise<void> {
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
+async function loadWindowContent(
+  window: BrowserWindow,
+  startupMode: ApplicationStartupMode
+): Promise<void> {
   const indexPath = path.resolve(__dirname, '../dist/index.html');
 
-  // 1. 如果处于已打包环境，直接加载本地静态单页应用
-  if (app.isPackaged) {
+  // 1. built 模式（打包态或 start:built）直接加载新构建产物。
+  if (startupMode === 'built') {
     if (fs.existsSync(indexPath)) {
       await window.loadFile(indexPath);
       return;
@@ -329,114 +415,56 @@ async function loadWindowContent(window: BrowserWindow): Promise<void> {
     throw new Error(`未找到已打包的应用主页文件: ${indexPath}`);
   }
 
-  // 2. 开发环境下，优先检测 Vite 开发服务器是否已就绪 (最多静默探测 4 次，共约 1.5 秒)
-  const maxProbes = 4;
-  for (let i = 1; i <= maxProbes; i++) {
-    const isReady = await probeHttpServer(devServerUrl, 400);
-    if (isReady) {
-      try {
-        await window.loadURL(devServerUrl);
-        return;
-      } catch {
-        // 若瞬时加载异常，继续重试
+  // 2. dev 模式由 devRunner 先确保资源服务就绪；这里不可回退到旧构建产物。
+  await window.loadURL(rendererAssetServerUrl);
+}
+
+function isAllowedNavigationUrl(
+  navigationUrl: string,
+  startupMode: ApplicationStartupMode,
+  builtIndexPath: string
+): boolean {
+  try {
+    const parsedUrl = new URL(navigationUrl);
+    if (startupMode === 'dev') {
+      return parsedUrl.origin === new URL(rendererAssetServerUrl).origin;
+    }
+    return parsedUrl.protocol === 'file:' && fileURLToPath(parsedUrl) === builtIndexPath;
+  } catch {
+    return false;
+  }
+}
+
+function configureWindowSecurity(
+  window: BrowserWindow,
+  startupMode: ApplicationStartupMode,
+  builtIndexPath: string
+): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.protocol === 'https:' || parsedUrl.protocol === 'http:') {
+        void shell.openExternal(url);
       }
+    } catch {
+      // Invalid payloads are denied; they are never handed to the OS.
     }
-    if (i < maxProbes) {
-      await new Promise((resolve) => setTimeout(resolve, 350));
+    return { action: 'deny' };
+  });
+
+  window.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isAllowedNavigationUrl(navigationUrl, startupMode, builtIndexPath)) {
+      event.preventDefault();
     }
-  }
+  });
 
-  // 3. 若本地 Vite 开发服务器未启动，但已存在构建产物 dist/index.html，平滑回退至本地产物，杜绝白屏
-  if (fs.existsSync(indexPath)) {
-    console.info('[Smart-Link] 未检测到运行中的 Vite 开发服务器，平滑加载本地已构建产物 (dist/index.html)...');
-    await window.loadFile(indexPath);
-    return;
-  }
+  window.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+  });
 
-  // 4. 若两者均未就绪，呈现科技灰蓝设计风格指引页面，拒绝白屏崩溃
-  const guideHtml = `
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-      <meta charset="UTF-8">
-      <title>Smart-Link 智能直连控制台 - 正在准备开发环境</title>
-      <style>
-        body {
-          margin: 0;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-          background: #f8f9ff;
-          color: #0b1c30;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 100vh;
-        }
-        .card {
-          background: #ffffff;
-          border: 1px solid #dce9ff;
-          border-radius: 12px;
-          padding: 32px;
-          max-width: 540px;
-          box-shadow: 0 4px 16px rgba(0, 74, 198, 0.06);
-          text-align: center;
-        }
-        .title {
-          font-size: 18px;
-          font-weight: 700;
-          margin-bottom: 12px;
-          color: #004ac6;
-        }
-        .desc {
-          font-size: 13px;
-          color: #737686;
-          line-height: 1.6;
-          margin-bottom: 20px;
-        }
-        .code-box {
-          background: #0b1c30;
-          color: #93c5fd;
-          padding: 12px 16px;
-          border-radius: 8px;
-          font-family: monospace;
-          font-size: 12px;
-          text-align: left;
-          margin-bottom: 24px;
-        }
-        .btn {
-          display: inline-block;
-          background: #004ac6;
-          color: #ffffff;
-          border: none;
-          padding: 10px 24px;
-          border-radius: 8px;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-        .btn:hover {
-          background: #003da6;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="title">正在等待本地开发服务启动</div>
-        <div class="desc">
-          当前未检测到正在运行的 Vite 开发服务器 (<code>${devServerUrl}</code>)，且未找到本地构建文件。
-        </div>
-        <div class="code-box">
-          # 启动 Vite 开发服务：<br/>
-          &gt; npm run dev<br/><br/>
-          # 或一键构建后启动：<br/>
-          &gt; npm run build &amp;&amp; npm run dev:electron
-        </div>
-        <button class="btn" onclick="window.location.reload()">重新连接</button>
-      </div>
-    </body>
-    </html>
-  `;
-  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(guideHtml)}`);
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
 }
 
 /**
@@ -444,6 +472,7 @@ async function loadWindowContent(window: BrowserWindow): Promise<void> {
  */
 export async function createMainWindow(): Promise<BrowserWindow> {
   const preloadPath = path.resolve(__dirname, 'preload.cjs');
+  const builtIndexPath = path.resolve(__dirname, '../dist/index.html');
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -460,22 +489,21 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     },
   });
 
-  // 外部链接默认在系统默认浏览器中打开，避免劫持应用视窗
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https:') || url.startsWith('http:')) {
-      shell.openExternal(url);
-    }
-    return { action: 'deny' };
-  });
-
   try {
-    await loadWindowContent(mainWindow);
+    const startupMode = process.env[PROCESS_ENV_KEYS.startupMode] === 'built' ? 'built' : 'dev';
+    configureWindowSecurity(mainWindow, startupMode, builtIndexPath);
+    await loadWindowContent(mainWindow, startupMode);
   } catch (error) {
-    console.error('[Smart-Link] 加载主视窗内容异常:', error);
+    logger.error('[Smart-Link] 加载主视窗内容异常', {
+      module: 'SYSTEM',
+      details: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    mainLogStreamDrained = false;
   });
 
   return mainWindow;
@@ -512,16 +540,12 @@ if (process.type === 'browser') {
 
   app.whenReady().then(async () => {
     // 注入应用数据持久化目录，防止在打包后的只读安装目录下引发 EACCES
-    process.env.SMARTLINK_USER_DATA_DIR = app.getPath('userData');
+    process.env[PROCESS_ENV_KEYS.userDataDir] = app.getPath('userData');
 
     // 初始化已持久化的文旅平台 Token 凭据至 Node 内存
     initNodePlatformTokens();
 
-    // 默认平台网关环境变量托管（若宿主环境未指定）
-    if (!process.env.VITE_PLATFORM_BASE_URL) {
-      process.env.VITE_PLATFORM_BASE_URL = 'https://xctp-api.devops.foxhis.com';
-    }
-
+    registerMainLogIpcHandlers();
     registerCrawlerIpcHandlers();
     registerDutyIpcHandlers();
     await createMainWindow();

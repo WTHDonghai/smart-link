@@ -3,19 +3,14 @@ import channelReducer, {
   updateChannelFieldMapping,
   toggleChannelField,
   resetChannelProtocol,
-  updateRemarkTemplate,
   saveRemarkTemplateAsync,
   fetchRemarkTemplateAsync,
   updateChannelProtocolSchema,
   getSavedProtocolSchema,
   saveProtocolSchemaToStorage,
   removeProtocolSchemaFromStorage,
-  getSavedRemarkTemplate,
-  saveRemarkTemplateToStorage,
-  removeRemarkTemplateFromStorage,
   ALL_CHANNELS_CATALOG,
   SCHEMA_STORAGE_PREFIX,
-  TEMPLATE_STORAGE_PREFIX,
   createInitialChannels,
 } from '../../../src/store/slices/channelSlice';
 import { createAppStore } from '../../../src/store';
@@ -34,14 +29,14 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
   });
 
   describe('1. Pure Reducer Behavior (Zero Side-Effects, Zero External Mutations)', () => {
-    it('initializes Meituan channel with default protocol schema and template', () => {
+    it('initializes Meituan channel with default protocol schema and an empty remote-template projection', () => {
       const state = channelReducer(undefined, { type: '@@INIT' });
       const meituan = state.channels.find((c) => c.id === 'meituan');
       expect(meituan).toBeDefined();
       expect(meituan?.protocolSchema).toBeDefined();
       expect(meituan?.protocolSchema?.channelCode).toBe('MEITUAN');
       expect(meituan?.protocolSchema?.fields.length).toBeGreaterThan(10);
-      expect(meituan?.remarkTemplate).toContain('【美团搬单】');
+      expect(meituan?.remarkTemplate).toBe('');
     });
 
     it('ALL_CHANNELS_CATALOG is frozen and strictly read-only', () => {
@@ -103,40 +98,15 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(localStorage.getItem(`${SCHEMA_STORAGE_PREFIX}meituan`)).toBeNull();
     });
 
-    it('updateRemarkTemplate updates template purely in-memory without side-effects', () => {
+    it('resetChannelProtocol restores protocol defaults without replacing remote template state', () => {
       const state = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(
-        state,
-        updateRemarkTemplate({
-          channelId: 'meituan',
-          template: '【纯函数测试模板】单号:{OTA订单号}',
-        })
-      );
-
-      const meituan = nextState.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toBe('【纯函数测试模板】单号:{OTA订单号}');
-
-      // 纯函数无 localStorage 副作用
-      expect(localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`)).toBeNull();
-    });
-
-    it('resetChannelProtocol restores defaults in-memory purely', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
-      const modifiedState = channelReducer(
-        state,
-        updateRemarkTemplate({
-          channelId: 'meituan',
-          template: '自定义临时模板',
-        })
-      );
-
       const resetState = channelReducer(
-        modifiedState,
+        state,
         resetChannelProtocol({ channelId: 'meituan' })
       );
 
       const meituan = resetState.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toContain('【美团搬单】');
+      expect(meituan?.remarkTemplate).toBe('');
       expect(meituan?.protocolSchema?.fields.length).toBe(
         DEFAULT_MEITUAN_PROTOCOL_SCHEMA.fields.length
       );
@@ -221,24 +191,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(persistedField?.enabled).toBe(false);
     });
 
-    it('dispatches updateRemarkTemplate to store and persists template to localStorage', () => {
-      const store = createAppStore();
-
-      store.dispatch(
-        updateRemarkTemplate({
-          channelId: 'meituan',
-          template: '【美团中间件持久化模板】单号:{OTA订单号}',
-        })
-      );
-
-      const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toBe('【美团中间件持久化模板】单号:{OTA订单号}');
-
-      const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
-      expect(saved).toBe('【美团中间件持久化模板】单号:{OTA订单号}');
-    });
-
-    it('dispatches saveRemarkTemplateAsync and successfully updates template in Redux and localStorage', async () => {
+    it('uses the PUT response as the canonical remote-template value in Redux', async () => {
       const store = createAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
@@ -260,7 +213,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
           json: async () => ({
             code: 0,
             msg: '模板已保存成功',
-            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团API保存】客人:{入住人}' },
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【远端规范化】客人:{入住人}' },
           }),
         } as unknown as Response;
       });
@@ -269,7 +222,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
         saveRemarkTemplateAsync({
           channelId: 'meituan',
           otaChannelCode: 'MEITUAN',
-          template: '【美团API保存】客人:{入住人}',
+          template: '【本地提交】客人:{入住人}',
         })
       );
 
@@ -277,12 +230,107 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
 
       // 验证 Redux 状态
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toBe('【美团API保存】客人:{入住人}');
+      expect(meituan?.remarkTemplate).toBe('【远端规范化】客人:{入住人}');
       expect(store.getState().channel.isSavingTemplate).toBe(false);
+      expect(
+        Object.keys(localStorage).filter((key) => key.startsWith('smartlink_template_'))
+      ).toEqual([]);
+    });
 
-      // 验证 Listener 中间件安全写入 localStorage
-      const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
-      expect(saved).toBe('【美团API保存】客人:{入住人}');
+    it('falls back to a single GET when PUT does not return a usable remote template', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const requests: string[] = [];
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        requests.push(`${init?.method || 'GET'} ${url}`);
+        const isPut = init?.method === 'PUT';
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: isPut ? '模板已保存' : 'success',
+            data: isPut
+              ? { otaChannelCode: 'MEITUAN' }
+              : {
+                  otaChannelCode: 'MEITUAN',
+                  remarkTemplate: '【GET 回读规范化】客人:{入住人}',
+                },
+          }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '【本地提交】客人:{入住人}',
+        })
+      );
+
+      expect(saveRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+      expect(requests).toEqual([
+        'PUT https://pms.example.com/toolkit/channel-remark-templates/MEITUAN',
+        'GET https://pms.example.com/toolkit/channel-remark-templates/MEITUAN',
+      ]);
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('【GET 回读规范化】客人:{入住人}');
+    });
+
+    it('keeps an empty template returned by PUT without treating it as a missing value', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: '模板已保存',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '' },
+          }),
+        } as unknown as Response;
+      });
+      globalThis.fetch = fetchMock;
+
+      const result = await store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '',
+        })
+      );
+
+      expect(saveRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('');
     });
 
     it('handles saveRemarkTemplateAsync.rejected when remote API fails', async () => {
@@ -298,8 +346,6 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
         updatedAt: new Date().toISOString(),
       };
       saveTokensToStorage(mockTokens);
-
-      const originalTemplate = store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate;
 
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         return {
@@ -324,14 +370,149 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
 
       expect(saveRemarkTemplateAsync.rejected.match(result)).toBe(true);
       expect(store.getState().channel.isSavingTemplate).toBe(false);
-      expect(store.getState().channel.error).toContain('远端服务异常: 模板保存受限');
+      expect(store.getState().channel.templateSaveError).toContain(
+        '远端服务异常: 模板保存受限'
+      );
+      expect(store.getState().channel.templateLoadError).toBeNull();
 
-      // 验证原始模板未被破坏
+      // 验证保存失败不会把未提交内容写入远端模板投影
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toBe(originalTemplate);
+      expect(meituan?.remarkTemplate).toBe('');
     });
 
-    it('dispatches fetchRemarkTemplateAsync and updates template in Redux and localStorage when remote template exists', async () => {
+    it('rejects illegal PUT remarkTemplate response type without GET fallback or state pollution', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: '模板保存成功',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: 123 },
+          }),
+        } as unknown as Response;
+      });
+      globalThis.fetch = fetchMock;
+
+      const result = await store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '【本地提交】非法响应类型',
+        })
+      );
+
+      expect(saveRemarkTemplateAsync.rejected.match(result)).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(store.getState().channel.templateSaveError).toBe(
+        '保存渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null'
+      );
+      expect(store.getState().channel.isSavingTemplate).toBe(false);
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('');
+      expect(store.getState().channel.templateLoadError).toBeNull();
+    });
+
+    it('keeps save failures separate from loading failures in Redux state', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 500,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ code: 500, msg: '远端模板读取失败' }),
+        } as unknown as Response;
+      });
+
+      const result = await store.dispatch(
+        fetchRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+        })
+      );
+
+      expect(fetchRemarkTemplateAsync.rejected.match(result)).toBe(true);
+      expect(store.getState().channel.templateLoadError).toContain('平台接口调用失败 (500)');
+      expect(store.getState().channel.templateSaveError).toBeNull();
+      expect(store.getState().channel.isLoadingTemplate).toBe(false);
+      expect(store.getState().channel.isSavingTemplate).toBe(false);
+    });
+
+    it('rejects illegal GET remarkTemplate response type without state pollution', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: 'success',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: { invalid: true } },
+          }),
+        } as unknown as Response;
+      });
+      globalThis.fetch = fetchMock;
+
+      const result = await store.dispatch(
+        fetchRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+        })
+      );
+
+      expect(fetchRemarkTemplateAsync.rejected.match(result)).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(store.getState().channel.templateLoadError).toBe(
+        '获取渠道备注模板响应字段类型非法: remarkTemplate 必须为字符串或 null'
+      );
+      expect(store.getState().channel.isLoadingTemplate).toBe(false);
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('');
+      expect(store.getState().channel.templateSaveError).toBeNull();
+    });
+
+    it('dispatches fetchRemarkTemplateAsync and updates the remote-template projection without local persistence', async () => {
       const store = createAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
@@ -374,13 +555,13 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
       expect(meituan?.remarkTemplate).toBe('【美团云端拉取】外部单号:{OTA订单号}');
       expect(store.getState().channel.isLoadingTemplate).toBe(false);
-
-      // 验证 Listener 中间件同步写入 localStorage
-      const saved = localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`);
-      expect(saved).toBe('【美团云端拉取】外部单号:{OTA订单号}');
+      expect(store.getState().channel.templateLoadError).toBeNull();
+      expect(
+        Object.keys(localStorage).filter((key) => key.startsWith('smartlink_template_'))
+      ).toEqual([]);
     });
 
-    it('dispatches fetchRemarkTemplateAsync and handles 404 (null template) by keeping default template', async () => {
+    it('ignores an older channel fetch result after a newer channel request becomes active', async () => {
       const store = createAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
@@ -394,7 +575,151 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       };
       saveTokensToStorage(mockTokens);
 
-      const defaultTemplate = store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate;
+      let resolveMeituan!: (response: Response) => void;
+      let resolveDouyin!: (response: Response) => void;
+      const meituanResponse = new Promise<Response>((resolve) => {
+        resolveMeituan = resolve;
+      });
+      const douyinResponse = new Promise<Response>((resolve) => {
+        resolveDouyin = resolve;
+      });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        return url.includes('/MEITUAN') ? meituanResponse : douyinResponse;
+      });
+
+      const meituanRequest = store.dispatch(
+        fetchRemarkTemplateAsync({ channelId: 'meituan', otaChannelCode: 'MEITUAN' })
+      );
+      const douyinRequest = store.dispatch(
+        fetchRemarkTemplateAsync({ channelId: 'douyin', otaChannelCode: 'DOUYIN' })
+      );
+
+      resolveDouyin({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          code: 0,
+          msg: 'success',
+          data: { otaChannelCode: 'DOUYIN', remarkTemplate: '【抖音最新模板】' },
+        }),
+      } as unknown as Response);
+      await douyinRequest;
+
+      resolveMeituan({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          code: 0,
+          msg: 'success',
+          data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团旧模板】' },
+        }),
+      } as unknown as Response);
+      await meituanRequest;
+
+      expect(store.getState().channel.isLoadingTemplate).toBe(false);
+      expect(store.getState().channel.loadingTemplateChannelId).toBeNull();
+      expect(store.getState().channel.templateLoadError).toBeNull();
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'douyin')?.remarkTemplate
+      ).toBe('【抖音最新模板】');
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('');
+    });
+
+    it('ignores an older channel save result after a newer save request becomes active', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
+
+      let resolveMeituan!: (response: Response) => void;
+      let resolveDouyin!: (response: Response) => void;
+      const meituanResponse = new Promise<Response>((resolve) => {
+        resolveMeituan = resolve;
+      });
+      const douyinResponse = new Promise<Response>((resolve) => {
+        resolveDouyin = resolve;
+      });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        return url.includes('/MEITUAN') ? meituanResponse : douyinResponse;
+      });
+
+      const meituanRequest = store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'meituan',
+          otaChannelCode: 'MEITUAN',
+          template: '【美团旧保存】',
+        })
+      );
+      const douyinRequest = store.dispatch(
+        saveRemarkTemplateAsync({
+          channelId: 'douyin',
+          otaChannelCode: 'DOUYIN',
+          template: '【抖音新保存】',
+        })
+      );
+
+      resolveDouyin({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          code: 0,
+          msg: 'success',
+          data: { otaChannelCode: 'DOUYIN', remarkTemplate: '【抖音最新远端值】' },
+        }),
+      } as unknown as Response);
+      await douyinRequest;
+
+      resolveMeituan({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          code: 0,
+          msg: 'success',
+          data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【美团过期远端值】' },
+        }),
+      } as unknown as Response);
+      await meituanRequest;
+
+      expect(store.getState().channel.isSavingTemplate).toBe(false);
+      expect(store.getState().channel.savingTemplateChannelId).toBeNull();
+      expect(store.getState().channel.templateSaveError).toBeNull();
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'douyin')?.remarkTemplate
+      ).toBe('【抖音最新远端值】');
+      expect(
+        store.getState().channel.channels.find((c) => c.id === 'meituan')?.remarkTemplate
+      ).toBe('');
+    });
+
+    it('dispatches fetchRemarkTemplateAsync and handles 404 (null template) as an explicit empty remote value', async () => {
+      const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
 
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         return {
@@ -420,9 +745,9 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
         expect(result.payload.remarkTemplate).toBeNull();
       }
 
-      // 验证保持原默认模板不被覆盖为 null
+      // 验证远端未配置时，State 显式为空，而不是使用本地默认值伪造结果
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toBe(defaultTemplate);
+      expect(meituan?.remarkTemplate).toBe('');
       expect(store.getState().channel.isLoadingTemplate).toBe(false);
     });
 
@@ -500,18 +825,41 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(saved?.fields[0].key).toBe('customKey');
     });
 
-    it('dispatches resetChannelProtocol to store and cleans up localStorage cache', () => {
+    it('keeps the remote template when resetChannelProtocol only resets protocol schema', async () => {
       const store = createAppStore();
+      const mockTokens: PlatformAuthTokens = {
+        accessToken: 'test-token',
+        refreshToken: 'test-refresh-token',
+        expiresAt: Date.now() + 3600 * 1000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://pms.example.com',
+        tenantId: 'XR-01',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveTokensToStorage(mockTokens);
 
-      // 先通过 dispatch 写入自定义模板与 Schema
-      store.dispatch(
-        updateRemarkTemplate({
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 0,
+            msg: 'success',
+            data: { otaChannelCode: 'MEITUAN', remarkTemplate: '【远端保留模板】' },
+          }),
+        } as unknown as Response;
+      });
+
+      await store.dispatch(
+        fetchRemarkTemplateAsync({
           channelId: 'meituan',
-          template: '待重置的自定义模板',
+          otaChannelCode: 'MEITUAN',
         })
       );
-      expect(localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`)).toBe('待重置的自定义模板');
 
+      // 先通过 dispatch 写入 Schema 缓存
       store.dispatch(
         updateChannelFieldMapping({
           channelId: 'meituan',
@@ -524,13 +872,18 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       // 执行重置
       store.dispatch(resetChannelProtocol({ channelId: 'meituan' }));
 
-      // 验证 state 已恢复
+      // 验证 State 不被本地模板修改
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
-      expect(meituan?.remarkTemplate).toContain('【美团搬单】');
+      expect(meituan?.remarkTemplate).toBe('【远端保留模板】');
+      expect(meituan?.protocolSchema?.fields.find((f) => f.key === 'floorPrice')?.path).toBe(
+        'data.floorPrice'
+      );
 
       // 验证 Listener 中间件已安全清理 localStorage
-      expect(localStorage.getItem(`${TEMPLATE_STORAGE_PREFIX}meituan`)).toBeNull();
       expect(localStorage.getItem(`${SCHEMA_STORAGE_PREFIX}meituan`)).toBeNull();
+      expect(
+        Object.keys(localStorage).filter((key) => key.startsWith('smartlink_template_'))
+      ).toEqual([]);
     });
 
     it('dispatches updateChannelProtocolSchema to store and syncs full schema', () => {
@@ -615,14 +968,6 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(getSavedProtocolSchema('test_chan')).toBeNull();
     });
 
-    it('correctly reads, writes, and removes remark templates from storage', () => {
-      saveRemarkTemplateToStorage('test_chan', '模板内容:{订单号}');
-      expect(getSavedRemarkTemplate('test_chan')).toBe('模板内容:{订单号}');
-
-      removeRemarkTemplateFromStorage('test_chan');
-      expect(getSavedRemarkTemplate('test_chan')).toBeNull();
-    });
-
     it('safely handles corrupted JSON in storage without throwing', () => {
       localStorage.setItem(`${SCHEMA_STORAGE_PREFIX}corrupted`, '{ invalid json');
       expect(getSavedProtocolSchema('corrupted')).toBeNull();
@@ -646,9 +991,6 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(() => getSavedProtocolSchema('any')).not.toThrow();
       expect(getSavedProtocolSchema('any')).toBeNull();
 
-      expect(() => getSavedRemarkTemplate('any')).not.toThrow();
-      expect(getSavedRemarkTemplate('any')).toBeNull();
-
       expect(() =>
         saveProtocolSchemaToStorage('any', {
           channelId: 'any',
@@ -659,9 +1001,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
         })
       ).not.toThrow();
 
-      expect(() => saveRemarkTemplateToStorage('any', 'template')).not.toThrow();
       expect(() => removeProtocolSchemaFromStorage('any')).not.toThrow();
-      expect(() => removeRemarkTemplateFromStorage('any')).not.toThrow();
     });
   });
 });

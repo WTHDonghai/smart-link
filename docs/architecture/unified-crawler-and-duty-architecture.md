@@ -1,108 +1,135 @@
 # 全栈统一采集与值守架构设计规范 (Unified Crawler & Duty Architecture)
 
-> 文档状态：已确立并全面实施于 `feat/store-collection` 分支  
+> 文档状态：已确立并全面实施于 Electron-Only 架构基线
 > 适用范围：所有涉及外部 OTA 渠道自动化（门店采集、商品采集、订单值守、会话维持）与文旅中台通信的模块
 
 ---
 
 ## 1. 架构定位与设计哲学
 
-在企业级控制台应用中，既存在面向外部 SaaS/中台的标准化 HTTP 请求，又存在面向底层浏览器自动化（Playwright/CDP）的原生能力调度。
-为彻底消除跨层认知混淆并恪守 **KISS 原则** 与 **AGENTS.md 刚性约束**，系统确立了**五层同心圆统一架构**：
+本系统定位为**纯正的跨平台桌面端控制台应用 (Electron-Only)**，全面废除任何形式的独立 Web 宿主与双模（Electron/Web）降级分支。
+系统以“**职责严格隔离、直接优于抽象、零技术暴露**”为核心原则，确立了五层同心圆原生桌面架构：
 
 ```mermaid
 flowchart TD
     subgraph ViewLayer["1. 表现呈现层 (src/components/)"]
       HotelView["HotelSyncView (酒店映射)"]
       OrderView["OrderGuardianView (订单值守)"]
+      LogsView["SystemLogsView (日志中枢)"]
       CommonUI["ChannelBadge / TableRowActions"]
     end
 
     subgraph StoreLayer["2. 全局状态层 (src/store/slices/)"]
       HotelSlice["hotelSlice"]
       OrderSlice["orderGuardianSlice"]
+      LogSlice["systemLogSlice"]
+      LogMiddleware["logPersistenceMiddleware\n(唯一持久化入口)"]
     end
 
-    subgraph ServiceLayer["3. 客户端服务与网关层 (src/services/)"]
+    subgraph ServiceLayer["3. 客户端服务与 IPC 网关层 (src/services/)"]
       subgraph ClientSDK["Client SDK (*Api.ts)"]
-        HotelApi["hotelApi.ts"]
-        CrawlerApi["crawlerApi.ts"]
-        ToolkitOrderApi["toolkitOrderApi.ts"]
-        DutyRuntimeApi["dutyRuntimeApi.ts"]
+        HotelApi["hotelApi.ts (文旅酒店接口)"]
+        ChannelApi["channelApi.ts (渠道配置接口)"]
+        ToolkitOrderApi["toolkitOrderApi.ts (中台订单接口)"]
       end
-      subgraph DualModeBridge["双模抹平网关 (*Bridge.ts)"]
+      subgraph DesktopBridge["桌面 IPC 网关 (*Bridge.ts)"]
         CrawlerBridge["crawlerBridge.ts\n(collectHotelsByChannel)"]
-        DutyBridge["dutyBridge.ts\n(channelDutyControl)"]
+        DutyBridge["dutyBridge.ts\n(startDuty / stopDuty / queryDutyStatus)"]
+      end
+      subgraph LogStorageService["渲染层本地存储"]
+        LogStorage["logStorage.ts\n(IndexedDB: SmartLink_LogDB)"]
       end
     end
 
-    subgraph HostLayer["4. 本地服务与中间件宿主层 (src/server/ & electron/)"]
-      ViteMiddleware["crawlerMiddleware.ts / dutyMiddleware.ts\n(Vite 开发环境 HTTP 中间件)"]
-      ElectronMain["electron/main.ts + preload.ts\n(Electron 生产桌面原生 IPC)"]
+    subgraph PreloadLayer["4. 安全隔离与预加载桥接 (electron/preload.ts)"]
+      ContextBridge["contextBridge.exposeInMainWorld('host', ...)"]
+      HostApis["crawler / duty / env (强类型契约)"]
     end
 
-    subgraph EngineLayer["5. 自动化引擎层 (src/crawler/)"]
-      EngineCore["HotelCollectionEngine / DutyOrchestrationEngine"]
-      BrowserMgr["browserManager.ts (Playwright + 反爬规避 + 独立 Profile)"]
-      Registry["hotelCollectorRegistry / dutyCollectorRegistry"]
-      Collectors["Meituan / Douyin / Ctrip 业务采集器"]
+    subgraph HostLayer["5. Electron 主进程与自动化引擎 (electron/main.ts & src/crawler/)"]
+      MainProcess["electron/main.ts\n(单实例锁 / 窗口生命周期 / 安全防御)"]
+      IpcHandlers["ipcMain.handle / webContents.send\n('crawler:*' / 'duty:*' / 'host:*')"]
+      subgraph EngineLayer["自动化与值守引擎 (src/crawler/)"]
+        EngineCore["HotelCollectionEngine / DutyOrchestrationEngine"]
+        BrowserMgr["browserManager.ts (Playwright + 反爬规避 + 独立 Profile)"]
+        DutyDispatcher["dutyTaskDispatcher.ts (任务派发与状态流转)"]
+        DutyRuntime["src/services/dutyRuntimeApi.ts (中台任务认领与回执)"]
+        Collectors["Meituan / Douyin / Ctrip 采集与执行器"]
+      end
     end
 
     HotelView --> HotelSlice
     OrderView --> OrderSlice
+    LogsView --> LogSlice
+
     HotelSlice --> HotelApi
     HotelSlice --> CrawlerBridge
     OrderSlice --> ToolkitOrderApi
     OrderSlice --> DutyBridge
 
-    CrawlerBridge -->|"Electron 模式"| ElectronMain
-    CrawlerBridge -->|"Web/Vite 模式"| CrawlerApi --> ViteMiddleware
+    LogSlice --> LogMiddleware --> LogStorage
 
-    DutyBridge -->|"Electron 模式"| ElectronMain
-    DutyBridge -->|"Web/Vite 模式"| DutyRuntimeApi --> ViteMiddleware
+    CrawlerBridge -->|"window.host.crawler"| ContextBridge
+    DutyBridge -->|"window.host.duty"| ContextBridge
 
-    ElectronMain --> EngineCore
-    ViteMiddleware --> EngineCore
+    ContextBridge --> HostApis --> IpcHandlers
+    IpcHandlers --> EngineCore
+    MainProcess --> IpcHandlers
 
     EngineCore --> BrowserMgr
-    EngineCore --> Registry --> Collectors
+    EngineCore --> DutyDispatcher --> DutyRuntime
+    EngineCore --> Collectors
+
+    IpcHandlers -.->|"主进程日志: host:pending-logs & host:log-entry"| ContextBridge -.-> DutyBridge -.-> LogSlice
 ```
 
 ---
 
 ## 2. 端层职责与文件命名刚性契约
 
-为杜绝跨目录同名冲突（如 `server/crawlerApi.ts` vs `services/crawlerApi.ts`），分层命名后缀具有严格语义：
+为杜绝跨目录同名冲突与职责混淆，各分层命名后缀具有严格的语义约束：
 
 | 分层定位 | 目录路径 | 命名规范 | 职责边界 | 规范示例 |
 | :--- | :--- | :--- | :--- | :--- |
-| **客户端 SDK** | `src/services/` | `*Api.ts` | 承载向外部中台网络或本地 HTTP 网关的请求，直接返回 Promise 数据。 | `hotelApi.ts`, `toolkitOrderApi.ts`, `crawlerApi.ts` |
-| **双模抹平网关** | `src/services/` | `*Bridge.ts` | 探测 `window.electron`，自动路由原生 IPC 或回退本地 HTTP，抹平端环境差异。 | `crawlerBridge.ts`, `dutyBridge.ts` |
-| **本地服务中间件** | `src/server/` | `*Middleware.ts` | 承载 Vite 开发/预览服务器的 Node.js 中间件，直接调用内部引擎。 | `crawlerMiddleware.ts`, `dutyMiddleware.ts` |
-| **原生宿主层** | `electron/` | `main.ts`, `preload.ts` | 桌面端主进程生命周期与安全上下文隔离注入。 | `ipcMain.handle('crawler:collect-hotels')` |
-| **自动化引擎与采集器** | `src/crawler/` | `*Engine.ts`, `*Collector.ts` | 调度 Playwright、管理 CDP 会话、执行页面操作与数据清洗。 | `engine.ts`, `meituanCollector.ts` |
+| **客户端 SDK** | `src/services/` | `*Api.ts` | 承载渲染层向外部文旅中台网络的异步请求，返回 Promise 数据。 | `hotelApi.ts`, `channelApi.ts`, `toolkitOrderApi.ts` |
+| **桌面 IPC 网关** | `src/services/` | `*Bridge.ts` | 封装 `window.host`，提供强类型 IPC 调用，Electron 环境缺失时立即 Fail-Fast 阻断。 | `crawlerBridge.ts`, `dutyBridge.ts` |
+| **预加载脚本** | `electron/` | `preload.ts` | 通过 `contextBridge.exposeInMainWorld('host', ...)` 安全注入白名单 API，杜绝 Node 原生对象泄露。 | `preload.ts` |
+| **主进程宿主** | `electron/` | `main.ts` | 负责应用单实例锁、生命周期调度、窗口安全策略与原生 IPC 监听器注册。 | `main.ts` |
+| **自动化引擎与采集器** | `src/crawler/` | `*Engine.ts`, `*Collector.ts`, `*Runner.ts` | 运行于主进程，负责 Playwright 驱动、会话维持、任务认领与执行回执。 | `engine.ts`, `dutyOrchestrationEngine.ts`, `meituanDutyRunner.ts` |
+| **持久化与日志中间件** | `src/store/`, `src/services/` | `*Middleware.ts`, `*Storage.ts` | 统一管理 Redux 日志流与 IndexedDB (`SmartLink_LogDB`) 唯一持久化落库。 | `logPersistenceMiddleware.ts`, `logStorage.ts` |
 
 ---
 
-## 3. 核心设计规范
+## 3. 核心设计规范与机制
 
 ### 3.1 渠道身份标识全链路大写归一化 (`channelCode`)
-- 历史代码中存在 `channelId` 与 `channelCode` 混用（如 `meituan` vs `MEITUAN`）。
-- **统一准则**：系统全面废除松散的 `channelId`，全链路（UI、Store、Bridge、IPC、Collector）统一以**大写 `channelCode`** 作为唯一法定凭证：
-  - 美团：`MEITUAN`
+- 全链路（UI、Store、Bridge、IPC、Runner、Collector）统一以**大写 `channelCode`** 作为唯一法定凭证：
+  - 美团酒店：`MEITUAN`
   - 美团商旅：`MEITUAN_BIZ`
-  - 抖音：`DOUYIN`
+  - 抖音生活服务：`DOUYIN`
   - 携程：`CTRIP`
   - 飞猪：`FLIGGY`
-- 工具函数 `src/utils/channelMeta.ts` 集中提供渠道中文名称、徽章底色、简称等元数据，禁止在各业务视图分散硬编码。
+  - 同程：`TONGCHENG`
+  - 去哪儿：`QUNAR`
+  - 小红书：`RED`
+- 元数据统一由 `src/utils/channelMeta.ts` 集中管理，严禁在业务组件中分散硬编码。
 
-### 3.2 浏览器会话管理与反爬规避 (`browserManager.ts`)
-- **独立持久化 Profile**：按渠道隔离存储在 `.chrome-profile/<channelCode>`，确保各 OTA 平台登录态互不污染。
-- **反爬指纹篡改 (Stealth)**：通过 `injectStealthScripts` 抹除 `navigator.webdriver`、伪造 Chrome 运行时与插件列表。
-- **双模可视化体验**：
-  - 默认以 **Headed (可视化窗口)** 运行，注入 AI Agent 风格的高亮操作轨迹与 HUD 悬浮指示器，提供绝对操作掌控感；
-  - 仅在显式配置 `headless: true` 或 `PLAYWRIGHT_HEADLESS === 'true'` 时静默后台运行。
+### 3.2 唯一日志数据源流水线 (Single Source of Truth for Logs)
+1. **单一数据源边界**：Electron 渲染进程的 IndexedDB（库名 `SmartLink_LogDB`）是全系统**唯一**的日志持久化存储。
+2. **主进程日志回流机制**：
+   - 主进程生命周期与调度异常通过 `publishMainLog` 暂存至环形缓冲区（上限 50 条）；
+   - 渲染层挂载时通过 `dutyBridge.takePendingMainLogs()` 一次性取回冷启动日志；
+   - 运行期间通过 IPC 事件 `'host:log-entry'` 实时推送至渲染进程；
+   - 渲染进程统一 dispatch `addLog` / `addLogs`，经由 `logPersistenceMiddleware` 幂等落库，彻底消除“界面可见重启丢失”与“主进程日志黑洞”。
 
-### 3.3 并发保护与 Fail-Fast 阻断
-- 自动化引擎（`HotelCollectionEngine` 等）内部维护 `activeChannelJobs = new Set<string>()`。
-- 当某一渠道正在采集或值守时，重复请求立即 Fail-Fast 抛出异常阻断，并在 UI 呈现人性化提示，杜绝并发竞争与脏数据。
+### 3.3 浏览器会话管理与反爬规避 (`browserManager.ts`)
+- **独立持久化 Profile**：按渠道隔离存储在 `~/.../profiles/<channelCode>`，杜绝各 OTA 平台登录态与 Cookie 互串。
+- **物理锁清理防护**：启动前与关闭后自动清理 `SingletonLock`、`SingletonSocket` 等锁文件，杜绝崩溃残留引发的 `Profile in use` 异常。
+- **反爬规避 (Stealth)**：通过 `injectStealthScripts` 抹除 `navigator.webdriver` 等自动化特征。
+- **可视化操作与 HUD**：默认以可视化窗口 (Headed) 启动，并注入大模型操作风格的视觉跟踪与状态 HUD，保障操作透明可控。
+
+### 3.4 桌面端安全纵深防御
+1. **沙箱与隔离**：严格开启 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
+2. **内容安全策略 (CSP)**：通过 `index.html` 限制仅允许本地脚本与受信任字体/连接。
+3. **导航拦截保护**：主进程监听 `will-navigate`，非白名单或非本地构建主页的跳转一律拦截，防止拖拽文件或恶意重定向导致界面状态丢失。
+4. **外链与权限**：新窗口统一由系统默认浏览器打开 (`shell.openExternal`)，静默拒绝所有未授权原生系统权限。

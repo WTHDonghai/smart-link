@@ -9,11 +9,11 @@ import {
   clearTokensFromStorage,
   subscribeTokenChange,
   getPlatformBaseUrl,
-  getEnvironmentMode,
   TERMINAL_STATUS_CODES,
   TERMINAL_OAUTH_ERRORS,
 } from '../../src/services/platformAuth';
-import { PlatformAuthTokens } from '../../src/types';
+import { APP_ENV_KEYS } from '../../src/types/env';
+import type { HostBridgeApi, PlatformAuthTokens } from '../../src/types';
 
 describe('platformAuth - 动态提前刷新计算 (calculateRefreshTiming)', () => {
   it('应当对 10 分钟生命周期的 Token 提前 60 秒刷新 (10% 规则)', () => {
@@ -160,29 +160,105 @@ describe('platformAuth - 环境变量单一性与 Fail-Fast 刚性验证', () =>
     process.env = originalProcessEnv;
   });
 
-  it('环境变量未配置 VITE_PLATFORM_BASE_URL 时坚决不隐式兜底，立即 Fail-Fast 抛出异常', () => {
-    delete process.env.VITE_PLATFORM_BASE_URL;
+  it('平台网关未配置时坚决不隐式兜底，立即 Fail-Fast 抛出异常', () => {
+    delete process.env[APP_ENV_KEYS.platformBaseUrl];
     expect(() => getPlatformBaseUrl()).toThrow(
-      '未配置平台接口基础地址，请在环境变量中配置 VITE_PLATFORM_BASE_URL'
+      `未配置平台接口基础地址，请在环境变量中配置 ${APP_ENV_KEYS.platformBaseUrl}`
     );
   });
 
   it('当环境变量配置有效时正确读取并格式化', () => {
-    process.env.VITE_PLATFORM_BASE_URL = '  https://custom-env.hotel.com///  ';
+    process.env[APP_ENV_KEYS.platformBaseUrl] = '  https://custom-env.hotel.com///  ';
     const url = getPlatformBaseUrl();
     expect(url).toBe('https://custom-env.hotel.com');
   });
 
-  it('正确识别环境模式对象 (mode, isDev, isProd)', () => {
-    process.env.NODE_ENV = 'development';
-    const devMode = getEnvironmentMode();
-    expect(devMode.isDev).toBe(true);
-    expect(devMode.isProd).toBe(false);
+});
 
-    process.env.NODE_ENV = 'production';
-    const prodMode = getEnvironmentMode();
-    expect(prodMode.isProd).toBe(true);
-    expect(prodMode.isDev).toBe(false);
+describe('platformAuth - 本地凭证存储失败路径', () => {
+  beforeEach(() => {
+    clearTokensFromStorage();
+  });
+
+  it('缺失存储代表未登录，不伪造错误', () => {
+    expect(loadTokensFromStorage()).toBeNull();
+  });
+
+  it('JSON 解析失败立即抛出并保留原始错误上下文', () => {
+    localStorage.setItem('smartlink_platform_tokens', '{broken-json');
+
+    expect(() => loadTokensFromStorage()).toThrow('本地平台登录凭证无效');
+    expect(() => loadTokensFromStorage()).toThrow("Expected property name or '}' in JSON");
+  });
+
+  it('凭证字段不完整视为损坏数据，立即失败而不是回退内存', () => {
+    localStorage.setItem(
+      'smartlink_platform_tokens',
+      JSON.stringify({ accessToken: 'only-access' })
+    );
+
+    expect(() => loadTokensFromStorage()).toThrow('凭证结构缺少 accessToken、refreshToken 或 expiresAt');
+  });
+
+  it('写入失败立即抛出，不把内存伪装成持久化成功', () => {
+    const setItemSpy = vi.spyOn(globalThis.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('storage quota exceeded');
+    });
+
+    expect(() =>
+      saveTokensToStorage({
+        accessToken: 'save-access',
+        refreshToken: 'save-refresh',
+        expiresAt: Date.now() + 60000,
+        tokenType: 'bearer',
+        platformBaseUrl: 'https://test-pms.hotel.com',
+        tenantId: 'SAVE_FAIL',
+        authenticatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+    ).toThrow('保存平台登录凭证失败: storage quota exceeded');
+
+    expect(loadTokensFromStorage()).toBeNull();
+    setItemSpy.mockRestore();
+  });
+
+  it('读取失败立即抛出，不静默回退内存', () => {
+    const getItemSpy = vi.spyOn(globalThis.localStorage, 'getItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+
+    expect(() => loadTokensFromStorage()).toThrow('本地平台登录凭证无效: storage unavailable');
+    getItemSpy.mockRestore();
+  });
+});
+
+describe('platformAuth - OAuth 独立浏览器宿主防护', () => {
+  let service: PlatformAuthService;
+  let originalHost: HostBridgeApi | undefined;
+
+  beforeEach(() => {
+    service = new PlatformAuthService();
+    originalHost = window.host;
+    delete window.host;
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    window.host = originalHost;
+  });
+
+  it('requestDeviceCode 在浏览器缺失桌面桥接时立即拒绝', async () => {
+    await expect(service.requestDeviceCode('https://test-pms.hotel.com')).rejects.toThrow(
+      '平台登录仅支持桌面端'
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('pollDeviceToken 在浏览器缺失桌面桥接时立即拒绝', async () => {
+    await expect(
+      service.pollDeviceToken('https://test-pms.hotel.com', 'device-code', { interval: 2 })
+    ).rejects.toThrow('平台登录仅支持桌面端');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -199,12 +275,12 @@ describe('platformAuth - 全局统一 getPlatformBaseUrl', () => {
   });
 
   it('未登录时 getPlatformBaseUrl 严格读取环境变量', () => {
-    process.env.VITE_PLATFORM_BASE_URL = 'https://xctp-api.devops.foxhis.com';
+    process.env[APP_ENV_KEYS.platformBaseUrl] = 'https://xctp-api.devops.foxhis.com';
     expect(getPlatformBaseUrl()).toBe('https://xctp-api.devops.foxhis.com');
   });
 
   it('已登录且存在 platformBaseUrl 时 getPlatformBaseUrl 优先锁定登录会话地址 (会话亲和)', () => {
-    process.env.VITE_PLATFORM_BASE_URL = 'https://other-gateway.com';
+    process.env[APP_ENV_KEYS.platformBaseUrl] = 'https://other-gateway.com';
     saveTokensToStorage({
       accessToken: 'test-token',
       refreshToken: 'test-refresh',
@@ -225,7 +301,7 @@ describe('platformAuth - PlatformAuthService 核心流程与并发单飞', () =>
 
   beforeEach(() => {
     clearTokensFromStorage();
-    vi.stubEnv('VITE_PLATFORM_BASE_URL', 'https://test-pms.hotel.com');
+    vi.stubEnv(APP_ENV_KEYS.platformBaseUrl, 'https://test-pms.hotel.com');
     service = new PlatformAuthService();
     vi.restoreAllMocks();
   });
@@ -534,7 +610,7 @@ describe('platformAuth - 调度器容错与即时唤醒续期', () => {
 
   beforeEach(() => {
     clearTokensFromStorage();
-    vi.stubEnv('VITE_PLATFORM_BASE_URL', 'https://test-pms.hotel.com');
+    vi.stubEnv(APP_ENV_KEYS.platformBaseUrl, 'https://test-pms.hotel.com');
     service = new PlatformAuthService();
     vi.restoreAllMocks();
   });

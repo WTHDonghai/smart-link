@@ -1,10 +1,19 @@
-import type { DutyClaimedTask, ImportPayload, ImportOrderPricing } from '../../types';
+import type { DutyClaimedTask, SystemLogEntry } from '../../types';
 import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
   ExtractedOrderDetail,
 } from './dutyContracts';
+import { parseDutyTaskContext, isRiskControlError, type ParsedDutyTaskContext } from './dutyTaskContext';
+import { createTaskLogger } from './dutyTaskLogger';
 import { importToolkitOrder } from '../../services/dutyRuntimeApi';
+import { fetchChannelRemarkTemplate } from '../../services/channelApi';
+import { alignOrderToProtocol } from '../../utils/template/orderProtocolNormalizer';
+import {
+  renderRemarkFromProtocol,
+  buildImportPayloadFromProtocol,
+} from '../../utils/template/orderPayloadTransformer';
+import { logger } from '../../services/logger';
 
 /**
  * 顶层任务生命周期通用编排调度器 (Top-Level Duty Task Dispatcher)
@@ -17,7 +26,8 @@ import { importToolkitOrder } from '../../services/dutyRuntimeApi';
  */
 export async function dispatchDutyTask(
   task: DutyClaimedTask,
-  runner: ChannelDutyRunner
+  runner: ChannelDutyRunner,
+  onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
 ): Promise<DutyTaskExecutionResult> {
   if (!runner.isRunning()) {
     return {
@@ -27,15 +37,50 @@ export async function dispatchDutyTask(
     };
   }
 
-  let taskData: Record<string, unknown> = {};
-  if (task.data) {
-    try {
-      const rawDecoded = Buffer.from(task.data, 'base64').toString('utf-8');
-      taskData = JSON.parse(rawDecoded) as Record<string, unknown>;
-    } catch {
-      taskData = {};
+  const recordLog = (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => {
+    if (onLog) {
+      onLog(entry);
+    } else {
+      logger.track(entry.event || 'DUTY_LOG', {
+        level: entry.level,
+        module: entry.module || 'DUTY_TASK',
+        message: entry.message,
+        details: entry.details,
+        channelId: entry.channelId,
+        orderNo: entry.orderNo,
+        durationMs: entry.durationMs,
+        meta: entry.meta,
+        taskId: entry.taskId,
+        msgType: entry.msgType,
+        taskActionStage: entry.taskActionStage,
+        taskStatus: entry.taskStatus,
+        taskResult: entry.taskResult,
+        apiUrl: entry.apiUrl,
+        apiMethod: entry.apiMethod,
+        apiParams: entry.apiParams,
+        apiResponse: entry.apiResponse,
+        httpStatus: entry.httpStatus,
+      });
     }
+  };
+
+  let context: ParsedDutyTaskContext;
+  try {
+    context = parseDutyTaskContext(task);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return {
+      status: 'FAILED',
+      errorCode: 'TASK_PAYLOAD_INVALID',
+      errorMessage: `任务载荷解析失败: ${errMsg}`,
+    };
   }
+
+  const taskLogger = createTaskLogger(
+    task,
+    { channelCode: runner.channelCode, orderNo: context.orderNo },
+    recordLog
+  );
 
   switch (task.msgType) {
     case 'OTA_COLLECT_ORDER': {
@@ -51,7 +96,7 @@ export async function dispatchDutyTask(
         };
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        const isRisk = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha|RISK_VERIFICATION_REQUIRED/i.test(errMsg);
+        const isRisk = isRiskControlError(err);
         return {
           status: 'FAILED',
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'COLLECT_FAILED',
@@ -61,11 +106,7 @@ export async function dispatchDutyTask(
     }
 
     case 'OTA_IMPORT_ORDER': {
-      const orderInArray =
-        Array.isArray(taskData.orders) && taskData.orders[0] && typeof taskData.orders[0] === 'object'
-          ? (taskData.orders[0] as Record<string, unknown>).otaOrderId
-          : undefined;
-      const otaOrderId = String(orderInArray || taskData.otaOrderId || task.businessId || '').trim();
+      const otaOrderId = context.orderNo || '';
       if (!otaOrderId) {
         return {
           status: 'FAILED',
@@ -80,7 +121,7 @@ export async function dispatchDutyTask(
         detail = await runner.inspectOrderDetail(otaOrderId);
       } catch (inspectErr) {
         const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
-        const isRisk = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|yoda|captcha|RISK_VERIFICATION_REQUIRED/i.test(errMsg);
+        const isRisk = isRiskControlError(inspectErr);
         return {
           status: 'FAILED',
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'ORDER_DETAIL_FETCH_FAILED',
@@ -97,79 +138,52 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 3. 统一组装符合中台线缆契约的入单请求 (ImportPayload)
+      // 3. 提取 extUnitCode
       const extUnitCode =
-        (typeof taskData.extUnitCode === 'string' && taskData.extUnitCode.trim())
-          ? taskData.extUnitCode.trim()
-          : (typeof taskData.unitId === 'string' && taskData.unitId.trim())
-            ? taskData.unitId.trim()
+        (typeof context.payload.extUnitCode === 'string' && context.payload.extUnitCode.trim())
+          ? context.payload.extUnitCode.trim()
+          : (typeof context.payload.unitId === 'string' && context.payload.unitId.trim())
+            ? context.payload.unitId.trim()
             : (task.unitId || detail.unitId || null);
 
-      const arrivalDate = detail.arrival;
-      const stayNights = Math.max(1, detail.nights || 1);
-      const rawPricing = Array.isArray((detail.raw as Record<string, unknown> | undefined)?.pricing)
-        ? ((detail.raw as Record<string, unknown>).pricing as Array<{ date?: string; price?: number }>)
-        : [];
+      // 4. 数据清洗 -> 对齐程序内部统一订单协议
+      const protocolData = alignOrderToProtocol(detail, runner.channelCode);
 
-      let pricing: ImportOrderPricing[] = [];
-      if (rawPricing.length === stayNights && rawPricing.every((p) => p.date && typeof p.price === 'number')) {
-        pricing = rawPricing.map((p) => ({
-          date: String(p.date),
-          price: Number(p.price),
-        }));
-      } else {
-        const nightlyPrice = Math.round((detail.totalPrice / stayNights) * 100) / 100;
-        pricing = Array.from({ length: stayNights }, (_, i) => {
-          const d = new Date(`${arrivalDate}T00:00:00.000Z`);
-          d.setUTCDate(d.getUTCDate() + i);
-          return {
-            date: d.toISOString().slice(0, 10),
-            price: nightlyPrice,
-          };
-        });
+      // 5. 拉取远端模版 -> 基于订单协议渲染 Remark
+      let template: string | null = null;
+      try {
+        const templateRes = await fetchChannelRemarkTemplate(protocolData.otaChannel);
+        template = templateRes.remarkTemplate;
+      } catch {
+        // 网络/服务异常时保持 template = null，触发协议原始备注兜底
       }
+      const remark = renderRemarkFromProtocol(protocolData, template);
 
-      const rawGoodsId = (detail.raw as Record<string, unknown> | undefined)?.goodsId ||
-                         (detail.raw as Record<string, unknown> | undefined)?.roomTypeId;
-      const roomTypeId = rawGoodsId ? String(rawGoodsId).trim() : 'ROOM_DEFAULT';
-
-      const rawPaytype = (detail.raw as Record<string, unknown> | undefined)?.paymentType ||
-                         (detail.raw as Record<string, unknown> | undefined)?.paytype;
-      const paytype = rawPaytype ? String(rawPaytype).trim() : '预付';
-
-      const importPayload: ImportPayload = {
-        extUnitCode,
-        orders: [
-          {
-            otaOrderId: detail.otaOrderId,
-            otaChannel: detail.otaChannel || runner.channelCode,
-            contact: {
-              name: detail.guestName,
-              mobile: detail.guestMobile || '',
-            },
-            booking: {
-              roomType: detail.roomTypeName,
-              originRoomType: detail.roomTypeName,
-              rateCode: detail.ratePlanName || 'OTA',
-              arrival: detail.arrival,
-              departure: detail.departure,
-              roomTypeId,
-              nights: stayNights,
-              quantity: detail.quantity || 1,
-              totalPrice: detail.totalPrice,
-              paytype,
-              pricing,
-            },
-            remark: String((detail.raw as Record<string, unknown> | undefined)?.remark || ''),
-          },
-        ],
-      };
+      // 6. 订单协议 -> 转换为中台入单请求 (ImportPayload)
+      const importPayload = buildImportPayloadFromProtocol(protocolData, extUnitCode, remark);
 
       try {
-        // 4. 调用统一中台入单接口
+        // 7. 调用统一中台入单接口
+        const importStartTime = Date.now();
         const importRes = await importToolkitOrder(importPayload);
+        const importDurationMs = Date.now() - importStartTime;
 
-        // 5. 调度渠道关闭详情弹窗以保持页面整洁就绪
+        taskLogger.log({
+          level: 'INFO',
+          event: 'DUTY_TASK_ORDER_IMPORT_SUBMIT',
+          taskActionStage: 'order-import-submit',
+          taskStatus: 'SUCCEEDED',
+          apiUrl: '/toolkit/orders/import',
+          apiMethod: 'POST',
+          apiParams: importPayload,
+          apiResponse: importRes,
+          durationMs: importDurationMs,
+          httpStatus: 200,
+          message: `[入单提交 order-import-submit] 订单 ${otaOrderId} 成功提交中台导入 (ID: ${task.id})`,
+          details: `PMS单号: ${importRes.pmsOrderId || '-'} | 确认号: ${importRes.confirmationNo || '-'} | 批次: ${importRes.batchId || '-'} | 耗时: ${importDurationMs}ms`,
+        });
+
+        // 8. 调度渠道关闭详情弹窗以保持页面整洁就绪
         try {
           await runner.closeOrderDetail?.();
         } catch {
@@ -179,26 +193,66 @@ export async function dispatchDutyTask(
         return {
           status: 'SUCCEEDED',
           result: {
+            imported: true,
             otaOrderId,
             pmsOrderId: importRes.pmsOrderId,
             confirmationNo: importRes.confirmationNo,
-            imported: true,
+            batchId: importRes.batchId,
           },
         };
       } catch (importErr) {
+        const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
+        const isRisk = isRiskControlError(importErr);
+
+        taskLogger.log({
+          level: 'ERROR',
+          event: 'DUTY_TASK_ORDER_IMPORT_SUBMIT_FAILED',
+          taskActionStage: 'order-import-submit',
+          taskStatus: 'FAILED',
+          apiUrl: '/toolkit/orders/import',
+          apiMethod: 'POST',
+          apiParams: importPayload,
+          apiResponse: { error: errMsg },
+          message: `[入单提交失败 order-import-submit] 订单 ${otaOrderId} 提交中台导入异常: ${errMsg} (ID: ${task.id})`,
+          details: errMsg,
+        });
+
         return {
           status: 'FAILED',
-          errorCode: 'IMPORT_FAILED',
-          errorMessage: importErr instanceof Error ? importErr.message : String(importErr),
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'IMPORT_FAILED',
+          errorMessage: errMsg,
         };
       }
     }
 
     case 'OTA_CONFIRM_IMPORT': {
-      const confirmNo = String(taskData.confirmNo || '').trim();
-      const otaOrderId = String(taskData.otaOrderId || task.businessId || '').trim();
+      const confirmNo = String(context.payload.confirmNo || '').trim();
+      const otaOrderId = context.orderNo || '';
+
+      if (!confirmNo) {
+        return {
+          status: 'FAILED',
+          errorCode: 'CONFIRM_NO_MISSING',
+          errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的确认号 (confirmNo)',
+        };
+      }
+      if (!otaOrderId) {
+        return {
+          status: 'FAILED',
+          errorCode: 'ORDER_ID_MISSING',
+          errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的订单号 (otaOrderId)',
+        };
+      }
+      if (typeof runner.confirmImport !== 'function') {
+        return {
+          status: 'FAILED',
+          errorCode: 'METHOD_NOT_IMPLEMENTED',
+          errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmImport 方法`,
+        };
+      }
+
       try {
-        await runner.confirmImport?.(confirmNo, otaOrderId);
+        await runner.confirmImport(confirmNo, otaOrderId);
         return {
           status: 'SUCCEEDED',
           result: {
@@ -207,18 +261,34 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRisk = isRiskControlError(err);
         return {
           status: 'FAILED',
-          errorCode: 'CONFIRM_IMPORT_FAILED',
-          errorMessage: err instanceof Error ? err.message : String(err),
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'CONFIRM_IMPORT_FAILED',
+          errorMessage: errMsg,
         };
       }
     }
 
     case 'OTA_CONFIRM_CANCEL': {
-      const otaOrderId = String(taskData.otaOrderId || task.businessId || '').trim();
+      const otaOrderId = context.orderNo || '';
+      if (!otaOrderId) {
+        return {
+          status: 'FAILED',
+          errorCode: 'ORDER_ID_MISSING',
+          errorMessage: 'OTA_CONFIRM_CANCEL 任务缺失有效的订单号 (otaOrderId)',
+        };
+      }
+      if (typeof runner.confirmCancel !== 'function') {
+        return {
+          status: 'FAILED',
+          errorCode: 'METHOD_NOT_IMPLEMENTED',
+          errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmCancel 方法`,
+        };
+      }
       try {
-        await runner.confirmCancel?.(otaOrderId);
+        await runner.confirmCancel(otaOrderId);
         return {
           status: 'SUCCEEDED',
           result: {
@@ -226,10 +296,12 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRisk = isRiskControlError(err);
         return {
           status: 'FAILED',
-          errorCode: 'CONFIRM_CANCEL_FAILED',
-          errorMessage: err instanceof Error ? err.message : String(err),
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'CONFIRM_CANCEL_FAILED',
+          errorMessage: errMsg,
         };
       }
     }
