@@ -1,4 +1,5 @@
 import type { HostBridgeApi } from '../types';
+import { startApp } from './AppBootstrap';
 
 export type ApplicationLaunchResult = 'blocked' | 'started';
 
@@ -28,7 +29,6 @@ export async function mountApplication(
     return 'blocked';
   }
 
-  const { startApp } = await import('./AppBootstrap');
   startApp(root);
   return 'started';
 }

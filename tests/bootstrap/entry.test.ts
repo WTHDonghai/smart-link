@@ -17,7 +17,7 @@ describe('application entry host guard', () => {
     startAppMock.mockClear();
   });
 
-  it('renders a blocker without importing the application bootstrap', async () => {
+  it('renders a blocker and does not start the application bootstrap when host is missing', async () => {
     const result = await mountApplication(root, undefined);
 
     expect(result).toBe('blocked');
