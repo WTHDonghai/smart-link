@@ -62,12 +62,12 @@ npm run build:package
 # 构建 Windows x64 目录包（安装形态检查）
 npm run desktop:pack:win
 
-# 构建 Windows x64 NSIS 发布包；更新目录必须以 / 结尾
-SMARTLINK_UPDATE_FEED_URL="https://updates.example.com/smart-link/1.0.1/" npm run desktop:dist:win
+# 构建 Windows x64 NSIS 发布包
+npm run desktop:dist:win
 ```
 
 安装包与更新元数据输出到 `release/desktop/`。打包版应用启动时立即检查更新，运行中每小时检查一次。侧边栏无更新时只显示版本号；发现新版本后显示更新入口并展示下载进度；安装前会先停止值守任务并关闭浏览器会话，再通过 NSIS 安装器重启。未签名的本地产物不能视为正式 Windows 升级验收结果。
-打包版版本发现优先走文旅中台平台更新描述符接口，并通过注册工位身份携带 `stationId` 与当前版本；接口返回的 HTTPS 版本目录必须包含配套 `latest.yml`。
+打包版版本发现走文旅中台平台更新描述符接口，并通过注册工位身份携带 `stationId` 与当前版本；接口返回的 HTTPS 版本目录必须包含配套 `latest.yml`。构建只使用 `https://updates.invalid/` 生成元数据，真实更新地址由平台描述符在运行时提供。
 
 ---
 

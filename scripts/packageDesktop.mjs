@@ -25,17 +25,8 @@ function assertSupportedPackagingHost(builderArgs) {
   ].join(' '));
 }
 
-function assertUpdateFeed(builderArgs) {
-  if (builderArgs.includes('--dir') || process.env.SMARTLINK_UPDATE_FEED_URL?.trim()) {
-    return;
-  }
-
-  throw new Error('正式发布包必须配置 SMARTLINK_UPDATE_FEED_URL，并指向 HTTPS 更新目录。');
-}
-
 const builderArgs = process.argv.slice(2);
 assertSupportedPackagingHost(builderArgs);
-assertUpdateFeed(builderArgs);
 
 const child = spawn(process.execPath, [
   electronBuilderCli,
