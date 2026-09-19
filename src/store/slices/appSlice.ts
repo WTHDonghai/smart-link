@@ -1,14 +1,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { NavTab } from '../../types';
+import type { AppUpdateState } from '../../types/update';
 
 export interface AppState {
   currentTab: NavTab;
   sidebarCollapsed: boolean;
-  version: string;
-  hasUpdate: boolean;
-  latestVersion: string;
-  isUpdating: boolean;
-  updateProgress: number;
+  update: AppUpdateState;
   toast: {
     visible: boolean;
     title: string;
@@ -20,11 +17,14 @@ export interface AppState {
 const initialState: AppState = {
   currentTab: 'channel-mapping',
   sidebarCollapsed: false,
-  version: 'v2.4.1',
-  hasUpdate: true,
-  latestVersion: 'v2.5.0',
-  isUpdating: false,
-  updateProgress: 0,
+  update: {
+    canUpdate: false,
+    status: 'unavailable',
+    currentVersion: '',
+    targetVersion: '',
+    progressPercent: null,
+    message: '',
+  },
   toast: null,
 };
 
@@ -38,24 +38,8 @@ export const appSlice = createSlice({
     toggleSidebar: (state) => {
       state.sidebarCollapsed = !state.sidebarCollapsed;
     },
-    startAutoUpdate: (state) => {
-      state.isUpdating = true;
-      state.updateProgress = 0;
-    },
-    setUpdateProgress: (state, action: PayloadAction<number>) => {
-      state.updateProgress = action.payload;
-    },
-    finishAutoUpdate: (state) => {
-      state.isUpdating = false;
-      state.hasUpdate = false;
-      state.version = state.latestVersion;
-      state.updateProgress = 100;
-    },
-    resetUpdateDemo: (state) => {
-      state.hasUpdate = true;
-      state.version = 'v2.4.1';
-      state.isUpdating = false;
-      state.updateProgress = 0;
+    setUpdateState: (state, action: PayloadAction<AppUpdateState>) => {
+      state.update = action.payload;
     },
     showToast: (state, action: PayloadAction<{ title: string; description?: string; type?: 'success' | 'info' | 'error' }>) => {
       state.toast = { visible: true, ...action.payload };
@@ -69,10 +53,7 @@ export const appSlice = createSlice({
 export const {
   setCurrentTab,
   toggleSidebar,
-  startAutoUpdate,
-  setUpdateProgress,
-  finishAutoUpdate,
-  resetUpdateDemo,
+  setUpdateState,
   showToast,
   clearToast
 } = appSlice.actions;

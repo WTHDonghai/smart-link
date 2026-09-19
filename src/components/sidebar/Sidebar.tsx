@@ -1,16 +1,8 @@
 import React from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { 
-  setCurrentTab, 
-  toggleSidebar,
-  startAutoUpdate,
-  setUpdateProgress,
-  finishAutoUpdate,
-  resetUpdateDemo,
-  showToast
-} from '../../store/slices/appSlice';
+import { setCurrentTab, toggleSidebar, showToast } from '../../store/slices/appSlice';
+import { useAppUpdate } from '../../hooks/useAppUpdate';
 import { logout } from '../../store/slices/authSlice';
-import { logger } from '../../services/logger';
 import { selectGuardianStats } from '../../store/slices/orderGuardianSlice';
 import { NavTab } from '../../types';
 import { 
@@ -22,7 +14,6 @@ import {
   Menu,
   Download,
   RefreshCw,
-  CheckCircle2,
   LogOut
 } from 'lucide-react';
 import { XiruanLogoMark } from '../common/XiruanLogo';
@@ -40,16 +31,20 @@ export const Sidebar: React.FC = () => {
   const collapsed = useAppSelector((state) => state.app.sidebarCollapsed);
   const guardianStats = useAppSelector(selectGuardianStats);
   const pendingManualOrders = guardianStats.pendingManual ?? 0;
+  const {
+    update,
+    hasUpdate,
+    isUpdating,
+    requestUpdate,
+  } = useAppUpdate();
   
   // Tenant and version state
   const tenantId = useAppSelector(
     (state) => state.auth.tenantId || state.auth.tokens?.tenantId || ''
   );
-  const version = useAppSelector((state) => state.app.version);
-  const hasUpdate = useAppSelector((state) => state.app.hasUpdate);
-  const latestVersion = useAppSelector((state) => state.app.latestVersion);
-  const isUpdating = useAppSelector((state) => state.app.isUpdating);
-  const updateProgress = useAppSelector((state) => state.app.updateProgress);
+  const version = update.currentVersion;
+  const latestVersion = update.targetVersion;
+  const updateProgress = update.progressPercent ?? 0;
   const [tenantMenuOpen, setTenantMenuOpen] = React.useState(false);
   const tenantMenuRef = React.useRef<HTMLDivElement>(null);
   const tenantTriggerRef = React.useRef<HTMLDivElement>(null);
@@ -95,39 +90,9 @@ export const Sidebar: React.FC = () => {
     );
   };
 
-  // Trigger automated update
   const handleTriggerAutoUpdate = () => {
     if (isUpdating) return;
-    dispatch(startAutoUpdate());
-    dispatch(showToast({
-      title: '开始自动更新',
-      description: `正在获取并下载最新补丁 (${latestVersion})...`,
-      type: 'info'
-    }));
-
-    let progress = 0;
-    const timer = setInterval(() => {
-      progress += Math.floor(Math.random() * 16) + 14;
-      if (progress >= 100) {
-        clearInterval(timer);
-        dispatch(setUpdateProgress(100));
-        dispatch(finishAutoUpdate());
-        logger.track('SYS_NETWORK_ONLINE', {
-          module: 'SYSTEM',
-          level: 'SUCCESS',
-          message: `[AutoUpdater] 客户端自动升级完成，版本由 ${version} 成功更新至最新 ${latestVersion}`,
-          details: `租户: ${tenantId} | 补丁哈希已通过完整性校验并热生效。`,
-          meta: { oldVersion: version, newVersion: latestVersion, tenantId }
-        });
-        dispatch(showToast({
-          title: '系统更新成功',
-          description: `客户端已顺利升级至最新版本 ${latestVersion}！`,
-          type: 'success'
-        }));
-      } else {
-        dispatch(setUpdateProgress(progress));
-      }
-    }, 220);
+    requestUpdate();
   };
 
   const navItems: NavItem[] = [
@@ -285,15 +250,26 @@ export const Sidebar: React.FC = () => {
         )}
 
         {collapsed ? (
-          /* Collapsed Mode: Avatar with tooltip and update icon if present */
+          /* Collapsed Mode: keep account access visible beside update progress */
           <div className="flex flex-col items-center gap-2">
-            {hasUpdate ? (
+            <div ref={tenantTriggerRef}>
+              <button
+                type="button"
+                onClick={() => setTenantMenuOpen((prev) => !prev)}
+                className="w-8 h-8 rounded-lg bg-[#eff4ff] hover:bg-[#dbeafe] active:bg-[#d5e3fc] text-[#004ac6] border border-[#dce9ff] flex items-center justify-center font-mono font-bold text-[10px] cursor-pointer transition-colors shadow-2xs"
+                title={`点击租户号 ${tenantId || '未登录'} 查看退出选项`}
+              >
+                {tenantId ? (tenantId.length > 4 ? tenantId.slice(0, 4) : tenantId) : 'XR'}
+              </button>
+            </div>
+            {(hasUpdate || isUpdating) && (
               <button
                 type="button"
                 onClick={handleTriggerAutoUpdate}
                 disabled={isUpdating}
                 className="w-8 h-8 rounded-lg bg-[#eff4ff] hover:bg-[#dbeafe] text-[#004ac6] border border-[#bfdbfe] flex items-center justify-center cursor-pointer transition-all relative shadow-2xs group"
-                title={`租户: ${tenantId || '未登录'} | 发现新版本 ${latestVersion}，点击自动更新`}
+                aria-label={isUpdating ? `系统更新进度 ${updateProgress}%` : `安装系统更新 ${latestVersion}`}
+                title={isUpdating ? `系统更新进度 ${updateProgress}%` : `发现新版本 ${latestVersion}，点击自动更新`}
               >
                 {isUpdating ? (
                   <RefreshCw className="w-4 h-4 animate-spin text-[#004ac6]" />
@@ -304,17 +280,6 @@ export const Sidebar: React.FC = () => {
                   </>
                 )}
               </button>
-            ) : (
-              <div ref={tenantTriggerRef}>
-                <button
-                  type="button"
-                  onClick={() => setTenantMenuOpen((prev) => !prev)}
-                  className="w-8 h-8 rounded-lg bg-[#eff4ff] hover:bg-[#dbeafe] active:bg-[#d5e3fc] text-[#004ac6] border border-[#dce9ff] flex items-center justify-center font-mono font-bold text-[10px] cursor-pointer transition-colors shadow-2xs"
-                  title={`点击租户号 ${tenantId || '未登录'} 查看退出选项`}
-                >
-                  {tenantId ? (tenantId.length > 4 ? tenantId.slice(0, 4) : tenantId) : 'XR'}
-                </button>
-              </div>
             )}
           </div>
         ) : (
@@ -345,13 +310,14 @@ export const Sidebar: React.FC = () => {
 
               {/* 版本号 / 更新下载动作 */}
               <div className="flex items-center gap-1.5 shrink-0">
-                {hasUpdate ? (
+                {(hasUpdate || isUpdating) ? (
                   <button
                     type="button"
                     onClick={handleTriggerAutoUpdate}
                     disabled={isUpdating}
                     className="inline-flex items-center gap-1 px-1.5 py-1 rounded bg-[#eff4ff] hover:bg-[#dbeafe] active:bg-[#bfdbfe] text-[#004ac6] border border-[#bfdbfe] transition-all cursor-pointer group shadow-2xs"
-                    title={`当前 ${version}，发现新版本 ${latestVersion}，点击立即自动更新`}
+                    aria-label={isUpdating ? `系统更新进度 ${updateProgress}%` : `安装系统更新 ${latestVersion}`}
+                    title={isUpdating ? `系统更新进度 ${updateProgress}%` : `当前 ${version}，发现新版本 ${latestVersion}，点击立即自动更新`}
                   >
                     {isUpdating ? (
                       <>
@@ -368,14 +334,6 @@ export const Sidebar: React.FC = () => {
                 ) : (
                   <div className="inline-flex items-center gap-1 text-[11px] font-mono text-[#737686]">
                     <span>{version}</span>
-                    <button
-                      type="button"
-                      onClick={() => dispatch(resetUpdateDemo())}
-                      className="text-[#94a3b8] hover:text-[#004ac6] p-0.5 rounded transition-colors cursor-pointer"
-                      title="已是最新 (点击可模拟发现新版本)"
-                    >
-                      <CheckCircle2 className="w-3 h-3 text-[#10b981]" />
-                    </button>
                   </div>
                 )}
               </div>

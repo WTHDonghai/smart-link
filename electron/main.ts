@@ -5,8 +5,11 @@ import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeProfile } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
+import { getOrRegisterStationIdentity } from '../src/crawler/duty/stationIdentity';
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
+import { getPlatformBaseUrl } from '../src/services/platformAuth';
+import { findPlatformAppUpdateDescriptor, type PlatformUpdatePlatform } from '../src/services/platformUpdateApi';
 import {
   initNodePlatformTokens,
   savePlatformTokenFile,
@@ -22,6 +25,10 @@ import type {
 import { loadProjectEnv } from '../src/config/envLoader';
 import rendererServerConfig from '../src/config/rendererServer.json';
 import { PROCESS_ENV_KEYS } from '../src/types/env';
+import {
+  DesktopUpdateService,
+} from './desktopUpdateService';
+import type { AppUpdateState } from '../src/types/update';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +40,7 @@ const MAX_PENDING_MAIN_LOGS = 50;
 
 const pendingMainLogs = new Map<string, SystemLogEntry>();
 let mainLogStreamDrained = false;
+let desktopUpdateService: DesktopUpdateService | null = null;
 
 function publishMainLog(entry: SystemLogEntry): void {
   if (!mainLogStreamDrained) {
@@ -60,6 +68,63 @@ function registerMainLogIpcHandlers(): void {
     return entries;
   });
 
+}
+
+function publishDesktopUpdateState(state: AppUpdateState): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('host:update-state', state);
+  }
+}
+
+function createDesktopUpdateService(): DesktopUpdateService {
+  const updateMetadataPath = path.join(process.resourcesPath, 'app-update.yml');
+  const canUpdate = app.isPackaged && fs.existsSync(updateMetadataPath);
+  if (!canUpdate) {
+    logger.info('[系统更新] 当前运行环境不支持应用内更新', {
+      module: 'SYSTEM',
+      details: app.isPackaged ? '缺少更新元数据文件 app-update.yml' : '仅打包安装版支持应用内更新',
+      meta: {
+        isPackaged: app.isPackaged,
+        hasUpdateMetadata: fs.existsSync(updateMetadataPath),
+      },
+    });
+  }
+
+  return new DesktopUpdateService({
+    canUpdate,
+    currentVersion: app.getVersion(),
+    teardownApplicationResources,
+    onState: publishDesktopUpdateState,
+    readDescriptor: readPlatformUpdateDescriptor,
+  });
+}
+
+function desktopUpdatePlatform(): PlatformUpdatePlatform {
+  if (process.platform === 'win32') return 'windows';
+  if (process.platform === 'darwin') return 'mac';
+  return 'linux';
+}
+
+async function readPlatformUpdateDescriptor() {
+  const identity = await getOrRegisterStationIdentity(
+    'smart-link',
+    undefined,
+    getPlatformBaseUrl()
+  );
+
+  return findPlatformAppUpdateDescriptor({
+    appId: identity.appId,
+    stationId: identity.stationId,
+    platform: desktopUpdatePlatform(),
+    currentVersion: app.getVersion(),
+  });
+}
+
+export function registerDesktopUpdateIpcHandlers(service: DesktopUpdateService): void {
+  desktopUpdateService = service;
+  ipcMain.handle('app-update:get-state', () => service.state());
+  ipcMain.handle('app-update:check', () => service.check());
+  ipcMain.handle('app-update:install', () => service.install());
 }
 
 if (process.type === 'browser') {
@@ -206,7 +271,6 @@ export function registerCrawlerIpcHandlers(): void {
         const result = syncChromeProfile({ channelCode: code });
         return result;
       } catch (error) {
-        const code = (channelCode || 'MEITUAN').trim().toUpperCase();
         return {
           success: false,
           sourceDir: '',
@@ -492,6 +556,9 @@ export async function createMainWindow(): Promise<BrowserWindow> {
   try {
     const startupMode = process.env[PROCESS_ENV_KEYS.startupMode] === 'built' ? 'built' : 'dev';
     configureWindowSecurity(mainWindow, startupMode, builtIndexPath);
+    if (desktopUpdateService) {
+      publishDesktopUpdateState(desktopUpdateService.state());
+    }
     await loadWindowContent(mainWindow, startupMode);
   } catch (error) {
     logger.error('[Smart-Link] 加载主视窗内容异常', {
@@ -520,6 +587,7 @@ if (process.type === 'browser') {
     }
     event.preventDefault();
     isAppQuitting = true;
+    desktopUpdateService?.stopPeriodicChecks();
     void teardownApplicationResources().finally(() => {
       app.exit(0);
     });
@@ -548,7 +616,10 @@ if (process.type === 'browser') {
     registerMainLogIpcHandlers();
     registerCrawlerIpcHandlers();
     registerDutyIpcHandlers();
+    registerDesktopUpdateIpcHandlers(createDesktopUpdateService());
     await createMainWindow();
+    void desktopUpdateService?.check();
+    desktopUpdateService?.startPeriodicChecks();
 
     app.on('activate', async () => {
       if (BrowserWindow.getAllWindows().length === 0) {

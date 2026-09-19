@@ -158,4 +158,13 @@ if (!gotSingleInstanceLock) {
 | **`npm run build:electron`** | 使用 `esbuild` 快速编译 `electron/main.ts` (ESM) 与 `electron/preload.ts` (CJS)。 |
 | **`npm run build`** | 使用 `vite build` 打包渲染进程纯静态前端产物至 `dist/`。 |
 | **`npm run start:built`** | 完整构建后以生产打包态 (`--start-mode=built --mode=production`) 启动 Electron，直接加载本地 `dist/index.html`。 |
+| **`npm run build:package`** | 构建渲染层静态产物与 Electron 主进程/预加载脚本，是桌面打包前的统一入口。 |
+| **`npm run desktop:pack:win`** | 构建 Windows x64 目录包，用于检查安装形态；不要求配置更新源，因此不生成可用更新元数据。 |
+| **`npm run desktop:dist:win`** | 构建 Windows x64 NSIS 安装器、`.blockmap` 与 `latest.yml`；必须提供 `SMARTLINK_UPDATE_FEED_URL`。 |
 | **`npm run lint`** | 双环境严格类型检查：同时执行根目录 `tsc --noEmit` 与主进程 `tsc -p electron/tsconfig.json --noEmit`。 |
+
+### 5.1 桌面安装与更新边界
+
+正式发布包是 Windows x64 NSIS 安装器，不使用直接替换 `app.asar` 的更新方式。发布构建必须提供以 `/` 结尾的 HTTPS 目录地址 `SMARTLINK_UPDATE_FEED_URL`；该目录需要同时存放安装器、`.blockmap` 和 `latest.yml`。构建始终使用 `--publish never`，上传发布产物是独立的发布动作。
+
+运行时更新由主进程 `DesktopUpdateService` 统一编排：打包态且存在 `app-update.yml` 才允许应用内更新；应用启动后立即检查一次，随后每 60 分钟检查一次。版本发现继承文旅中台平台更新描述符接口 `GET /toolkit/toolbox/apps/{appId}/updates`，使用注册工位 `stationId`、平台授权和当前版本请求 `platform/windows/currentVersion` 等参数；仅接受 `updateType=NSIS`、`latestVersion` 高于当前版本且 `downloadDirectory` 为以版本目录结尾的无凭证 HTTPS 目录。服务随后动态切换 generic feed，并校验 `latest.yml` 版本与平台描述符一致。状态经 IPC 单向同步到 Redux；安装前必须完成值守任务和浏览器会话回收。开发态、缺少更新元数据、检查失败或资源回收失败都会显式呈现失败或不可用，不进入假进度流程。侧边栏在检查中和无更新时只显示版本号，发现更新或进入下载/安装阶段后才显示更新图标。

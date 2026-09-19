@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
 import type {
+  HostBridgeApi,
   CrawlerBridgeApi,
   DutyBridgeApi,
   PlatformAuthTokens,
   SystemLogEntry,
 } from '../src/types';
+import type { AppUpdateState } from '../src/types/update';
 import { selectAppEnv } from '../src/types/env';
 
 const HOST_LOG_CHANNEL = 'host:log-entry';
@@ -55,9 +57,23 @@ const dutyApi: DutyBridgeApi = {
 
 const exposedEnv = selectAppEnv(process.env);
 
+const updateApi: HostBridgeApi['update'] = {
+  getState: () => ipcRenderer.invoke('app-update:get-state'),
+  checkForUpdate: () => ipcRenderer.invoke('app-update:check'),
+  installUpdate: () => ipcRenderer.invoke('app-update:install'),
+  onUpdateState: (callback: (state: AppUpdateState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => callback(state);
+    ipcRenderer.on('host:update-state', listener);
+    return () => {
+      ipcRenderer.removeListener('host:update-state', listener);
+    };
+  },
+};
+
 // 安全隔离注入至渲染进程主世界
 contextBridge.exposeInMainWorld('host', {
   crawler: crawlerApi,
   duty: dutyApi,
+  update: updateApi,
   env: exposedEnv,
 });

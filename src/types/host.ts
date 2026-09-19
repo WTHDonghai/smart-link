@@ -6,6 +6,7 @@ import type {
   StationIdentity,
   SystemLogEntry,
 } from './index';
+import type { AppUpdateBridgeApi } from './update';
 import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../crawler/types';
 
 export interface CrawlerBridgeApi {
@@ -33,6 +34,7 @@ export interface DutyBridgeApi {
 export interface HostBridgeApi {
   crawler: CrawlerBridgeApi;
   duty: DutyBridgeApi;
+  update: AppUpdateBridgeApi;
   env: AppEnvSnapshot;
 }
 

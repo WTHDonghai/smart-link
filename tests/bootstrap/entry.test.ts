@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mountApplication } from '../../src/bootstrap/entry';
 import { startApp } from '../../src/bootstrap/AppBootstrap';
 import type { HostBridgeApi } from '../../src/types';
+import type { AppUpdateBridgeApi } from '../../src/types/update';
 
 vi.mock('../../src/bootstrap/AppBootstrap', () => ({
   startApp: vi.fn(),
@@ -40,6 +41,12 @@ describe('application entry host guard', () => {
         takePendingLogs: () => Promise.resolve([]),
         onLog: () => () => undefined,
       },
+      update: {
+        getState: () => Promise.reject(new Error('not called')),
+        checkForUpdate: () => Promise.reject(new Error('not called')),
+        installUpdate: () => Promise.reject(new Error('not called')),
+        onUpdateState: () => () => undefined,
+      } satisfies AppUpdateBridgeApi,
       env: {},
     };
 
