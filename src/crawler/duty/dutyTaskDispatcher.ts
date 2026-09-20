@@ -243,13 +243,6 @@ export async function dispatchDutyTask(
           details: `PMS单号: ${importRes.pmsOrderId || '-'} | 确认号: ${importRes.confirmationNo || '-'} | 批次: ${importRes.batchId || '-'} | 耗时: ${importDurationMs}ms`,
         });
 
-        // 8. 调度渠道收起详情以保持页面整洁就绪
-        try {
-          await runner.closeOrderDetail?.();
-        } catch {
-          // 容错收起动作
-        }
-
         return {
           status: 'SUCCEEDED',
           result: {

@@ -100,13 +100,12 @@ flowchart TD
       D2["OTA_COLLECT_ORDER -> runner.collectUnhandledOrders()"]
       D3["OTA_IMPORT_ORDER -> runner.inspectOrderDetail(orderId)"]
       D4["对齐统一协议 -> 拉取模板 -> 渲染备注 -> 调用中台 importToolkitOrder"]
-      D5["调度卡片收起 -> runner.closeOrderDetail()"]
       D6["OTA_CONFIRM_IMPORT -> runner.confirmImport(confirmNo, orderId)"]
       D7["捕获异常: 提取 err.errorCode 与 err.retryable 完整透传"]
       
       D1 --> D2
       D1 --> D3
-      D3 --> D4 --> D5
+      D3 --> D4
       D1 --> D6
       D2 -.->|异常| D7
       D3 -.->|异常| D7
@@ -214,10 +213,7 @@ flowchart TD
    - Dispatcher 执行统一订单协议规范化（`alignOrderToProtocol`）；
    - 拉取远端渠道备注模板（`fetchChannelRemarkTemplate`）并渲染备注（`renderRemarkFromProtocol`）；
    - 转换为中台入单请求载荷（`buildImportPayloadFromProtocol`）；
-   - 调用统一中台入单接口（`importToolkitOrder`）并记录审计日志；
-9. **收尾温和收起**：
-   - 入单完成后（无论成功还是失败），Dispatcher 调度 `runner.closeOrderDetail()`；
-   - 执行器尝试点击当前卡片上的“收起”按钮；若卡片无收起按钮或已折叠，直接返回，不影响后续流转。
+   - 调用统一中台入单接口（`importToolkitOrder`）并记录审计日志；详情保持当前展开状态，无需亦无单独“关闭详情”操作。
 
 ---
 
@@ -466,8 +462,7 @@ export interface ChannelDutyInfo {
    - 引入在途请求合并门禁 (`inFlightListPromise`) 与任务互斥锁（Mutex）；
    - 实现带 3 秒防抖等待补偿的 `collectUnhandledOrders`；
    - 实现基于订单卡片内联展开的 `inspectOrderDetail`（含智能跳过电话解密）；
-   - 实现基于订单卡片作用域的 `confirmImport`（含当前值核对与读回比对）；
-   - 实现温和卡片折叠 `closeOrderDetail`。
+   - 实现基于订单卡片作用域的 `confirmImport`（含当前值核对与读回比对）。
 
 ### Phase 3：调度协同与重试透传闭环 (Day 3)
 1. 重构 `src/crawler/duty/dutyTaskDispatcher.ts` 中的异常捕获分支，提取底层 Runner 抛出的 `errorCode` 与 `retryable` 并透传至 `DutyTaskExecutionResult`；

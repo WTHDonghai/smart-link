@@ -1556,8 +1556,6 @@ describe('meituanDutyRunner', () => {
         totalPrice: 998,
       });
 
-      const closeSpy = vi.spyOn(runner, 'closeOrderDetail').mockResolvedValue(undefined);
-
       const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
         success: true,
         pmsOrderId: 'PMS-ORDER-888',
@@ -1582,7 +1580,6 @@ describe('meituanDutyRunner', () => {
       expect(execResult.result?.pmsOrderId).toBe('PMS-ORDER-888');
       expect(execResult.result?.otaOrderId).toBe('MT-998877');
       expect(inspectSpy).toHaveBeenCalledWith('MT-998877');
-      expect(closeSpy).toHaveBeenCalledTimes(1);
 
       // 验证调用中台 importToolkitOrder 时传入的是页面实际提取的真实字段，绝对没有虚构默认值
       expect(importSpy).toHaveBeenCalledTimes(1);

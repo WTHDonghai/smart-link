@@ -65,9 +65,6 @@ export interface ChannelDutyRunner {
   /** 页面操作：在当前渠道后台点击打开订单详情并抓取原始数据（回写明文客人姓名） */
   inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 
-  /** 页面操作：关闭详情视图（弹窗/抽屉）以保持页面就绪 */
-  closeOrderDetail?(): Promise<void>;
-
   /** 页面操作：在渠道后台页面执行确认号回填 */
   confirmImport?(confirmNo: string, otaOrderId: string): Promise<void>;
 

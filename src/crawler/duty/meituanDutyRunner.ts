@@ -930,29 +930,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       await visualClickLocator(page, dialogConfirmBtn, `点击弹窗「确认接受」按钮确认订单「${otaOrderId}」`);
-      await confirmResponsePromise;
+      // [TODO]: 暂时不需要监听确认提交的网络
+      // await confirmResponsePromise;
       await humanDelay(page, 400, 600);
     });
-  }
-
-  /**
-   * 页面操作：关闭/折叠订单详情（流式排布温和收起，绝不按 Escape，不抛出阻断异常）
-   */
-  public async closeOrderDetail(): Promise<void> {
-    if (!this.session) return;
-    const page = this.session.page;
-    try {
-      const scope = this.getOrderScope(page);
-      const collapseBtn = scope.locator(
-        'button:has-text("收起"), a:has-text("收起"), .collapse-btn, [data-test="collapse-order"]'
-      ).first();
-      if (await collapseBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await visualClickLocator(page, collapseBtn, '收起美团订单详情');
-        await page.waitForTimeout(300);
-      }
-    } catch {
-      // 温和收起，绝不引发阻断异常
-    }
   }
 
   /**

@@ -28,7 +28,6 @@ class MockDutyRunner implements ChannelDutyRunner {
 
   public collectCalls = 0;
   public inspectCalls: string[] = [];
-  public closeCalls = 0;
   public confirmImportCalls: Array<{ confirmNo: string; otaOrderId: string }> = [];
   public confirmCancelCalls: string[] = [];
 
@@ -48,9 +47,6 @@ class MockDutyRunner implements ChannelDutyRunner {
   public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     this.inspectCalls.push(otaOrderId);
     return this.detailResult as unknown as Record<string, unknown>;
-  }
-  public async closeOrderDetail(): Promise<void> {
-    this.closeCalls++;
   }
   public async confirmImport(confirmNo: string, otaOrderId: string): Promise<void> {
     this.confirmImportCalls.push({ confirmNo, otaOrderId });
@@ -142,7 +138,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.errorCode).toBe('MISSING_ORDER_ID');
     });
 
-    it('should route to runner.inspectOrderDetail, call importToolkitOrder with real fields, and close detail modal', async () => {
+    it('should route to runner.inspectOrderDetail and call importToolkitOrder with real fields', async () => {
       const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
         success: true,
         pmsOrderId: 'PMS-SUCCESS-100',
@@ -163,7 +159,6 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('SUCCEEDED');
       expect(result.result?.pmsOrderId).toBe('PMS-SUCCESS-100');
       expect(runner.inspectCalls).toEqual(['OTA-IMPORT-99']);
-      expect(runner.closeCalls).toBe(1);
 
       // 验证传入中台 importToolkitOrder 的参数绝对来自 inspectOrderDetail，未夹带假数据
       expect(importSpy).toHaveBeenCalledTimes(1);
