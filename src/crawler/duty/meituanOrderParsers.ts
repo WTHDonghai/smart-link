@@ -581,6 +581,25 @@ export function parseMeituanOrderDetailResponse(
     String(orderObj.poiName || orderObj.hotelName || data.poiName || data.hotelName || '').trim() ||
     undefined;
 
+  const remark =
+    String(
+      orderObj.remark ||
+        orderObj.memo ||
+        orderObj.specialRequirement ||
+        orderObj.comment ||
+        orderObj.customerRemark ||
+        orderObj.userRemark ||
+        data.remark ||
+        data.memo ||
+        data.specialRequirement ||
+        data.comment ||
+        data.customerRemark ||
+        data.userRemark ||
+        root.remark ||
+        root.memo ||
+        ''
+    ).trim() || undefined;
+
   return {
     otaOrderId: orderId || targetOrderId,
     otaChannel: 'MEITUAN',
@@ -595,6 +614,7 @@ export function parseMeituanOrderDetailResponse(
     nights,
     quantity,
     totalPrice,
+    remark,
     raw: (orderObj || data) as Record<string, unknown>,
   };
 }

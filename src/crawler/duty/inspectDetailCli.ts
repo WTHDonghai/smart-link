@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from './meituanDutyRunner';
 import { parseMeituanOrderDetailResponse } from './meituanOrderParsers';
+import type { ExtractedOrderDetail } from './dutyContracts';
 import { PROCESS_ENV_KEYS } from '../../types/env';
+import { alignOrderToProtocol } from '../../utils/template/orderProtocolNormalizer';
+import { fetchChannelRemarkTemplate } from '../../services/channelApi';
+import { renderRemarkFromProtocol } from '../../utils/template/orderPayloadTransformer';
 
 function parseArgs(argv: string[]) {
   let orderId: string | undefined;
@@ -62,10 +66,40 @@ async function main() {
     try {
       console.log(`[DutyInspectDetail:CLI] 正在执行 inspectOrderDetail(otaOrderId: 「${targetOrderId}」)...`);
       const rawDetail = await runner.inspectOrderDetail(targetOrderId);
-      const detail = parseMeituanOrderDetailResponse(rawDetail, targetOrderId);
-      if (!detail) {
+      const parsed = parseMeituanOrderDetailResponse(rawDetail, targetOrderId);
+      if (!parsed) {
         throw new Error(`美团订单「${targetOrderId}」详情原始报文解析失败`);
       }
+      const detail: ExtractedOrderDetail = {
+        otaOrderId: parsed.otaOrderId || targetOrderId,
+        otaChannel: 'MEITUAN',
+        unitId: parsed.unitId,
+        unitName: parsed.unitName,
+        guestName: parsed.guestName || '',
+        guestMobile: parsed.guestMobile || '',
+        roomTypeName: parsed.roomTypeName || '',
+        ratePlanName: parsed.ratePlanName || '',
+        arrival: parsed.arrival || '',
+        departure: parsed.departure || '',
+        nights: parsed.nights || 1,
+        quantity: parsed.quantity || 1,
+        totalPrice: parsed.totalPrice ?? 0,
+        remark: parsed.remark,
+        raw: rawDetail,
+      };
+
+      // 3. 对齐统一订单协议并驱动模版引擎求值渲染备注
+      const protocolData = alignOrderToProtocol(detail, detail.otaChannel);
+      let template: string | null = null;
+      try {
+        const templateRes = await fetchChannelRemarkTemplate(protocolData.otaChannel);
+        template = templateRes.remarkTemplate;
+      } catch (tmplErr) {
+        const errMsg = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
+        console.warn(`[DutyInspectDetail:CLI] 未能拉取到渠道「${protocolData.otaChannel}」远程备注模板 (将使用原备注兜底): ${errMsg}`);
+      }
+      const renderedRemark = renderRemarkFromProtocol(protocolData, template);
+
       console.log('\n================ 美团订单详情提取结果 ================\n');
       console.log(`  OTA 渠道:      ${detail.otaChannel}`);
       console.log(`  美团订单号:    ${detail.otaOrderId}`);
@@ -79,9 +113,13 @@ async function main() {
       console.log(`  离店日期:      ${detail.departure}`);
       console.log(`  入住间夜:      ${detail.nights} 晚 / ${detail.quantity || 1} 间`);
       console.log(`  订单总额:      ¥${detail.totalPrice}`);
+      console.log(`  客人原始备注:  ${detail.remark || protocolData.rawRemark || '(无)'}`);
+      console.log(`  渠道备注模版:  ${template ? `「${template}」` : '(未配置或未能获取，使用原备注兜底)'}`);
+      console.log(`  模版渲染备注:  ${renderedRemark || '(空)'}`);
       console.log('\n======================================================\n');
       console.log('[DutyInspectDetail:CLI] 接口原始返回 JSON (已回写姓名):\n', JSON.stringify(rawDetail, null, 2));
       console.log('\n[DutyInspectDetail:CLI] 结构化详情 JSON:\n', JSON.stringify(detail, null, 2));
+      console.log('\n[DutyInspectDetail:CLI] 最终提交入单备注 (Remark):\n', renderedRemark || '(空)');
     } catch (error) {
       if (waitManualClose) {
         console.error('[DutyInspectDetail:CLI] 执行失败；可继续检查页面，手动关闭浏览器窗口后退出。');

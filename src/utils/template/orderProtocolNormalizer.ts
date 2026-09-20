@@ -32,7 +32,12 @@ export function alignOrderToProtocol(
 ): OrderProtocolData {
   const otaChannel = (detail.otaChannel || channelCode || 'OTA').trim().toUpperCase();
   const stayNights = Math.max(1, detail.nights || 1);
-  const rawRemark = String((detail.raw as Record<string, unknown> | undefined)?.remark || '');
+  const rawRemark = String(
+    detail.remark ||
+      (detail.raw as Record<string, unknown> | undefined)?.remark ||
+      (detail.raw as Record<string, unknown> | undefined)?.memo ||
+      ''
+  );
 
   // 1. 解析按日价格明细 (Pricing)
   const rawPricing = Array.isArray((detail.raw as Record<string, unknown> | undefined)?.pricing)

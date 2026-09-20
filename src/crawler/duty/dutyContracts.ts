@@ -30,6 +30,7 @@ export interface ExtractedOrderDetail {
   nights: number;
   quantity: number;
   totalPrice: number;
+  remark?: string;
   raw?: Record<string, unknown>;
 }
 

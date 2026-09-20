@@ -58,6 +58,7 @@ function parseOrderDetailFromRaw(
       nights: parsed.nights || 1,
       quantity: parsed.quantity || 1,
       totalPrice: parsed.totalPrice ?? 0,
+      remark: parsed.remark,
       raw: rawOrExtracted,
     };
   }

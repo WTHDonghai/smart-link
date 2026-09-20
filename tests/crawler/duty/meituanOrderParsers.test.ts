@@ -248,6 +248,26 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(detail?.departure).toBe('2026-10-03');
       expect(detail?.nights).toBe(2);
     });
+
+    it('should extract guest remarks from orderObj.remark, memo, or specialRequirement', () => {
+      const payloadWithRemark = {
+        data: {
+          orderDetail: {
+            orderId: 'MT-8888',
+            roomName: '大床房',
+            checkInDateString: '2026-10-01',
+            checkOutDateString: '2026-10-02',
+            nights: 1,
+            totalPrice: 200,
+            guestName: '李四',
+            specialRequirement: '需要高楼层且无烟房',
+          },
+        },
+      };
+
+      const detail = parseMeituanOrderDetailResponse(payloadWithRemark);
+      expect(detail?.remark).toBe('需要高楼层且无烟房');
+    });
   });
 
   describe('parseMeituanSensitiveResponse', () => {
