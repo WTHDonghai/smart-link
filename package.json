@@ -17,6 +17,8 @@
     "crawl:hotels:mock": "vite-node --mode mock src/crawler/cli.ts",
     "duty:refresh-list": "vite-node src/crawler/duty/refreshListCli.ts --wait-manual-close",
     "duty:refresh-list:mock": "vite-node --mode mock src/crawler/duty/refreshListCli.ts",
+    "duty:inspect-detail": "vite-node src/crawler/duty/inspectDetailCli.ts --wait-manual-close",
+    "duty:inspect-detail:mock": "vite-node --mode mock src/crawler/duty/inspectDetailCli.ts",
     "profile:list": "vite-node src/crawler/syncCli.ts --list",
     "profile:sync": "vite-node src/crawler/syncCli.ts",
     "test": "vitest run"
