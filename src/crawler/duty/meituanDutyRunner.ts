@@ -267,9 +267,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         // 3. 通过受控 Tab 切换触发刷新，并等待最终的待确认列表响应
         const listResponse = await this.refreshOrderList(page);
         const text = await listResponse.text().catch(() => '');
-        if (!text) {
-          throw new DutyExecutionError('美团列表响应报文为空', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
-        }
         let parsedPayload: unknown;
         try {
           parsedPayload = JSON.parse(text);

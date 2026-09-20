@@ -178,54 +178,50 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(rawOrders[1].nights).toBe(1);
     });
 
-    it('should extract orders when root.data is an array directly', () => {
-      const payload = {
-        code: 0,
-        data: [
-          {
-            orderId: 'MT-DIRECT-ARRAY-1',
-            poiId: 'HOTEL-DIRECT',
-            poiName: '直连度假村',
-            status: 'NEW',
-            roomName: '大床房',
-            checkInDate: '2026-09-20',
-            checkOutDate: '2026-09-21',
-            totalFee: 50000,
-          },
-        ],
-      };
-
-      const summaries = parseMeituanOrderListResponse(payload);
-      expect(summaries).toHaveLength(1);
-      expect(summaries[0].orderId).toBe('MT-DIRECT-ARRAY-1');
-      expect(summaries[0].hotelName).toBe('直连度假村');
-    });
-
-    it('should extract orders when wrapped inside taskList and orderInfo', () => {
-      const payload = {
-        code: 0,
+    it('should parse real Meituan E-booking data.results structure', () => {
+      const realPayload = {
         data: {
-          taskList: [
+          results: [
             {
-              taskId: 'TASK-001',
-              orderInfo: {
-                bizOrderId: 'MT-TASK-ORDER-888',
-                hotelId: 'HOTEL-888',
-                hotelName: '任务酒店',
-                roomTypeName: '行政房',
-                checkInDateString: '2026-10-01',
-                checkOutDateString: '2026-10-03',
-                totalPrice: 1688,
-              },
+              orderId: '5035036069802774638',
+              poiId: 781913923,
+              poiName: '成都安得天馨Wellness Resort酒店',
+              status: 'NEW_ORDER',
+              orderDisplayLabel: '新订',
+              roomName: '安澜大床客房[错峰出游]',
+              rpInfo: '【不含早】2026-09-29 18:00:00前可取消',
+              checkInDateString: '2026-09-29 00:00:00',
+              checkOutDateString: '2026-09-30 00:00:00',
+              totalFee: 29548,
+              roomCount: 1,
+              cancelOrder: false,
+              contacts: [{ name: '王***', phone: '' }],
             },
           ],
+          total: 1,
         },
+        message: '成功',
+        status: 0,
       };
 
-      const summaries = parseMeituanOrderListResponse(payload);
+      const summaries = parseMeituanOrderListResponse(realPayload);
       expect(summaries).toHaveLength(1);
-      expect(summaries[0].orderId).toBe('MT-TASK-ORDER-888');
-      expect(summaries[0].hotelName).toBe('任务酒店');
+      expect(summaries[0]).toEqual({
+        orderId: '5035036069802774638',
+        hotelId: '781913923',
+        hotelName: '成都安得天馨Wellness Resort酒店',
+        cancelOrder: false,
+        orderDisplayLabel: '新订',
+      });
+
+      const rawOrders = extractMeituanOrdersFromPayload(realPayload);
+      expect(rawOrders).toHaveLength(1);
+      expect(rawOrders[0].orderId).toBe('5035036069802774638');
+      expect(rawOrders[0].checkInDate).toBe('2026-09-29');
+      expect(rawOrders[0].checkOutDate).toBe('2026-09-30');
+      expect(rawOrders[0].nights).toBe(1);
+      expect(rawOrders[0].totalAmount).toBe(295.48);
+      expect(rawOrders[0].ratePlanName).toBe('【不含早】2026-09-29 18:00:00前可取消');
     });
   });
 
