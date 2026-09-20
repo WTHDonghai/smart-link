@@ -202,6 +202,97 @@ export function parseMeituanSensitiveResponse(
 export const extractMeituanSensitiveDataFromPayload = parseMeituanSensitiveResponse;
 
 /**
+ * 将敏感解密数据（明文客人姓名、明文电话）反向融合/替换到美团原始详情报文中。
+ * 遵循极简与单一真实源原则，直接更新原始响应中的客人与联系人字段，
+ * 避免执行器自行拆解字段或重复校验，交由后续解析器与清洗流水线统一处理。
+ */
+export function mergeSensitiveDataIntoRawDetail(
+  rawPayload: unknown,
+  sensitive: { guestName?: string; guestMobile?: string } | null
+): unknown {
+  if (!rawPayload || typeof rawPayload !== 'object' || !sensitive) {
+    return rawPayload;
+  }
+
+  const plainName =
+    sensitive.guestName && !sensitive.guestName.includes('*')
+      ? sensitive.guestName.trim()
+      : '';
+  const plainPhone =
+    sensitive.guestMobile && !sensitive.guestMobile.includes('*')
+      ? sensitive.guestMobile.trim()
+      : '';
+
+  if (!plainName && !plainPhone) {
+    return rawPayload;
+  }
+
+  // 浅拷贝 root 及其 data 层
+  const root = { ...(rawPayload as Record<string, unknown>) };
+  const data =
+    root.data && typeof root.data === 'object'
+      ? { ...(root.data as Record<string, unknown>) }
+      : null;
+  if (data) {
+    root.data = data;
+  }
+
+  // 收集所有需要更新的订单层级对象
+  const targetContainers: Record<string, unknown>[] = [];
+  if (data) {
+    if (data.orderDetail && typeof data.orderDetail === 'object') {
+      data.orderDetail = { ...(data.orderDetail as Record<string, unknown>) };
+      targetContainers.push(data.orderDetail as Record<string, unknown>);
+    }
+    if (data.order && typeof data.order === 'object') {
+      data.order = { ...(data.order as Record<string, unknown>) };
+      targetContainers.push(data.order as Record<string, unknown>);
+    }
+    targetContainers.push(data);
+  }
+  if (root.orderDetail && typeof root.orderDetail === 'object') {
+    root.orderDetail = { ...(root.orderDetail as Record<string, unknown>) };
+    targetContainers.push(root.orderDetail as Record<string, unknown>);
+  }
+  targetContainers.push(root);
+
+  for (const container of targetContainers) {
+    if (plainName) {
+      container.guestName = plainName;
+      if ('customerName' in container) container.customerName = plainName;
+      if ('contactName' in container) container.contactName = plainName;
+    }
+    if (plainPhone) {
+      container.guestMobile = plainPhone;
+      if ('customerMobile' in container) container.customerMobile = plainPhone;
+      if ('contactPhone' in container) container.contactPhone = plainPhone;
+      if ('phone' in container) container.phone = plainPhone;
+      if ('mobile' in container) container.mobile = plainPhone;
+    }
+
+    // 同步更新 contacts / guests 列表首位
+    for (const key of ['contacts', 'guests']) {
+      if (Array.isArray(container[key])) {
+        container[key] = (container[key] as unknown[]).map((c, idx) => {
+          if (c && typeof c === 'object' && idx === 0) {
+            const updated = { ...(c as Record<string, unknown>) };
+            if (plainName) updated.name = plainName;
+            if (plainPhone) {
+              updated.phone = plainPhone;
+              if ('mobile' in updated) updated.mobile = plainPhone;
+            }
+            return updated;
+          }
+          return c;
+        });
+      }
+    }
+  }
+
+  return root;
+}
+
+/**
  * 从美团订单列表 API 报文中解析出 RawMeituanDutyOrder 列表
  */
 export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDutyOrder[] {

@@ -795,7 +795,7 @@ describe('meituanDutyRunner', () => {
       await expect(runner.inspectOrderDetail('MT-123')).rejects.toThrow('未运行');
     });
 
-    it('inspectOrderDetail should fail fast when critical fields (guestName, roomTypeName, arrival, departure) are missing', async () => {
+    it('inspectOrderDetail should delegate parsing to parser and return parsed fields with raw payload without premature field validation', async () => {
       (runner as unknown as { running: boolean }).running = true;
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
@@ -831,9 +831,13 @@ describe('meituanDutyRunner', () => {
         },
       };
 
-      await expect(runner.inspectOrderDetail('MT-EMPTY-FIELDS')).rejects.toThrow(
-        'ORDER_DETAIL_FIELD_MISSING'
-      );
+      const detail = await runner.inspectOrderDetail('MT-EMPTY-FIELDS');
+      expect(detail.otaOrderId).toBe('MT-EMPTY-FIELDS');
+      expect(detail.guestName).toBe('');
+      expect(detail.roomTypeName).toBe('');
+      expect(detail.arrival).toBe('');
+      expect(detail.departure).toBe('');
+      expect(detail.raw).toBeDefined();
     });
 
     it('inspectOrderDetail should extract valid fields from network response and return ExtractedOrderDetail', async () => {
@@ -1126,6 +1130,11 @@ describe('meituanDutyRunner', () => {
       expect(detail.guestName).toBe('李小龙');
       expect(detail.guestMobile).toBe('13812345678');
       expect(detail.totalPrice).toBe(298);
+
+      const rawDetailData = ((detail.raw as Record<string, unknown>)?.data as Record<string, unknown>)
+        ?.orderDetail as Record<string, unknown>;
+      expect(rawDetailData?.guestName).toBe('李小龙');
+      expect(rawDetailData?.guestMobile).toBe('13812345678');
 
       expect(offSpy).toHaveBeenCalledWith('response', expect.any(Function));
     });

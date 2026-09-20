@@ -9,6 +9,7 @@ import {
   extractMeituanOrdersFromPayload,
   parseMeituanOrderDetailResponse,
   parseMeituanSensitiveResponse,
+  mergeSensitiveDataIntoRawDetail,
   isMeituanRiskControlText,
 } from '../../../src/crawler/duty/meituanOrderParsers';
 
@@ -330,4 +331,71 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(isMeituanRiskControlText(null as unknown as string)).toBe(false);
     });
   });
+
+  describe('mergeSensitiveDataIntoRawDetail', () => {
+    it('should return rawPayload directly when rawPayload or sensitive is invalid/empty', () => {
+      expect(mergeSensitiveDataIntoRawDetail(null, { guestName: '张三' })).toBeNull();
+      expect(mergeSensitiveDataIntoRawDetail('not-object', { guestName: '张三' })).toBe('not-object');
+
+      const original = { data: { orderDetail: { guestName: '张*' } } };
+      expect(mergeSensitiveDataIntoRawDetail(original, null)).toBe(original);
+      expect(mergeSensitiveDataIntoRawDetail(original, { guestName: '张*' })).toBe(original);
+      expect(mergeSensitiveDataIntoRawDetail(original, {})).toBe(original);
+    });
+
+    it('should replace masked guestName and guestMobile in data.orderDetail and contacts', () => {
+      const rawPayload = {
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: 'MT-RAW-001',
+            guestName: '李*',
+            guestMobile: '138****8888',
+            roomName: '豪华江景房',
+            contacts: [
+              { name: '李*', phone: '138****8888' },
+            ],
+          },
+        },
+      };
+
+      const merged = mergeSensitiveDataIntoRawDetail(rawPayload, {
+        guestName: '李小龙',
+        guestMobile: '13812345678',
+      }) as typeof rawPayload;
+
+      expect(merged.data.orderDetail.guestName).toBe('李小龙');
+      expect(merged.data.orderDetail.guestMobile).toBe('13812345678');
+      expect(merged.data.orderDetail.contacts[0].name).toBe('李小龙');
+      expect(merged.data.orderDetail.contacts[0].phone).toBe('13812345678');
+
+      // 验证交给 parseMeituanOrderDetailResponse 解析时能成功产出明文
+      const parsed = parseMeituanOrderDetailResponse(merged, 'MT-RAW-001');
+      expect(parsed?.guestName).toBe('李小龙');
+      expect(parsed?.guestMobile).toBe('13812345678');
+    });
+
+    it('should replace sensitive data across multiple possible container shapes (order, root)', () => {
+      const payloadOrder = {
+        data: {
+          order: {
+            orderId: 'MT-ORD-002',
+            customerName: '王*',
+            customerMobile: '139****0000',
+            guests: [{ name: '王*' }],
+          },
+        },
+      };
+
+      const mergedOrder = mergeSensitiveDataIntoRawDetail(payloadOrder, {
+        guestName: '王大拿',
+        guestMobile: '13900001111',
+      }) as { data: { order: { guestName: string; guestMobile: string; guests: Array<{ name: string }> } } };
+
+      expect(mergedOrder.data.order.guestName).toBe('王大拿');
+      expect(mergedOrder.data.order.guestMobile).toBe('13900001111');
+      expect(mergedOrder.data.order.guests[0].name).toBe('王大拿');
+    });
+  });
 });
+

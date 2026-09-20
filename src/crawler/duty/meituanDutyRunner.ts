@@ -13,7 +13,6 @@ import {
   DutyExecutionError,
 } from './meituanDutyContracts';
 import {
-  fmtDate,
   isMeituanListUrl,
   isMeituanOrderTabListUrl,
   isMeituanDetailUrl,
@@ -22,7 +21,7 @@ import {
   parseMeituanOrderListResponse,
   parseMeituanOrderDetailResponse,
   parseMeituanSensitiveResponse,
-  extractMeituanSensitiveDataFromPayload,
+  mergeSensitiveDataIntoRawDetail,
 } from './meituanOrderParsers';
 import { getMeituanOrderUrl } from '../../config/otaUrls';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
@@ -616,10 +615,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
       // 2. 挂载本次查看详情专属的单次网络响应监听
       const capturedRef: {
-        detail: Partial<ExtractedOrderDetail> | null;
+        rawDetail: unknown | null;
         sensitive: { guestName?: string; guestMobile?: string } | null;
       } = {
-        detail: null,
+        rawDetail: null,
         sensitive: null,
       };
 
@@ -630,22 +629,26 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
             if (isMeituanDetailUrl(url, otaOrderId)) {
               const text = await res.text().catch(() => '');
               if (text) {
-                const parsed = JSON.parse(text);
-                const parsedDetail = parseMeituanOrderDetailResponse(parsed, otaOrderId);
-                if (parsedDetail) {
-                  capturedRef.detail = parsedDetail;
+                try {
+                  capturedRef.rawDetail = JSON.parse(text);
+                } catch {
+                  // 忽略非合法 JSON
                 }
               }
             } else if (isMeituanSensitiveUrl(url)) {
               const text = await res.text().catch(() => '');
               if (text) {
-                const parsed = JSON.parse(text);
-                const sensitive = parseMeituanSensitiveResponse(parsed);
-                if (sensitive) {
-                  capturedRef.sensitive = {
-                    guestName: sensitive.guestName || capturedRef.sensitive?.guestName,
-                    guestMobile: sensitive.guestMobile || capturedRef.sensitive?.guestMobile,
-                  };
+                try {
+                  const parsed = JSON.parse(text);
+                  const sensitive = parseMeituanSensitiveResponse(parsed);
+                  if (sensitive) {
+                    capturedRef.sensitive = {
+                      guestName: sensitive.guestName || capturedRef.sensitive?.guestName,
+                      guestMobile: sensitive.guestMobile || capturedRef.sensitive?.guestMobile,
+                    };
+                  }
+                } catch {
+                  // 忽略非合法 JSON
                 }
               }
             }
@@ -674,8 +677,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
             .then(async (res) => {
               try {
                 const text = await res.text();
-                const parsed = JSON.parse(text);
-                return parseMeituanOrderDetailResponse(parsed, otaOrderId);
+                return JSON.parse(text);
               } catch {
                 return null;
               }
@@ -720,9 +722,16 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
         // 5. 智能跳过电话解密 (Smart Skip Phone Privacy)
         // 若姓名解密报文或原始详情已同步包含明文手机号，强制跳过点击“查看电话”，规避 1 秒双重敏感解密风控！
+        const rawPayloadTemp = (capturedRef.rawDetail || {}) as Record<string, unknown>;
+        const rawDataObj = ((rawPayloadTemp.data && typeof rawPayloadTemp.data === 'object')
+          ? ((rawPayloadTemp.data as Record<string, unknown>).orderDetail ||
+             (rawPayloadTemp.data as Record<string, unknown>).order ||
+             rawPayloadTemp.data)
+          : rawPayloadTemp) as Record<string, unknown>;
+        const rawMobile = String(rawDataObj.guestMobile || rawDataObj.phone || rawDataObj.mobile || '');
         const resolvedPhone = Boolean(
           (capturedRef.sensitive?.guestMobile && !capturedRef.sensitive.guestMobile.includes('*')) ||
-          (capturedRef.detail?.guestMobile && !capturedRef.detail.guestMobile.includes('*'))
+          (rawMobile && !rawMobile.includes('*'))
         );
 
         if (!resolvedPhone) {
@@ -744,9 +753,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           }
         }
 
-        // 6. 等待网络详情拦截与数据提取 (100% 权威网络源，零 DOM 业务数据拼接)
-        const networkDetail = (await detailResponsePromise) || capturedRef.detail;
-        if (!networkDetail) {
+        // 6. 等待网络详情拦截 (100% 权威网络源，零 DOM 业务数据拼接)
+        const rawDetail = (await detailResponsePromise) || capturedRef.rawDetail;
+        if (!rawDetail) {
           if (await checkMeituanPageRisk(page)) {
             await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
             throw new DutyExecutionError(
@@ -762,64 +771,33 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           );
         }
 
-        const sensitiveData = capturedRef.sensitive;
-        const plainSensitiveName =
-          sensitiveData?.guestName && !sensitiveData.guestName.includes('*')
-            ? sensitiveData.guestName
-            : '';
-        const plainSensitivePhone =
-          sensitiveData?.guestMobile && !sensitiveData.guestMobile.includes('*')
-            ? sensitiveData.guestMobile
-            : '';
+        // 7. 将解密敏感信息（明文客人姓名/电话）融合回原始报文，由纯函数解析模块统一解析
+        const mergedRaw = mergeSensitiveDataIntoRawDetail(rawDetail, capturedRef.sensitive);
+        const parsedDetail = parseMeituanOrderDetailResponse(mergedRaw, otaOrderId);
 
-        const guestName = (plainSensitiveName || networkDetail.guestName || '').trim();
-        const guestMobile = (plainSensitivePhone || networkDetail.guestMobile || '').trim();
-        const roomTypeName = (networkDetail.roomTypeName || '').trim();
-        const ratePlanName = (networkDetail.ratePlanName || '').trim();
-        const arrival = fmtDate(networkDetail.arrival);
-        const departure = fmtDate(networkDetail.departure);
-        const quantity = networkDetail.quantity || 1;
-        const totalPrice = networkDetail.totalPrice ?? 0;
-        const unitId = networkDetail.unitId;
-        const unitName = networkDetail.unitName;
-
-        let nights = networkDetail.nights || 0;
-        if (!nights && arrival && departure) {
-          const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
-          nights = diff > 0 ? diff : 1;
-        }
-        if (!nights) nights = 1;
-
-        // 7. Fail-Fast 严格校验：确保关键字段非空，绝不兜底任何假数据
-        const missingFields: string[] = [];
-        if (!guestName) missingFields.push('guestName(入住人)');
-        if (!roomTypeName) missingFields.push('roomTypeName(房型)');
-        if (!arrival) missingFields.push('arrival(入住日期)');
-        if (!departure) missingFields.push('departure(离店日期)');
-
-        if (missingFields.length > 0) {
+        if (!parsedDetail) {
           throw new DutyExecutionError(
-            `美团订单「${otaOrderId}」详情提取失败：接口未返回关键业务字段 (${missingFields.join(', ')})`,
-            MeituanDutyErrorCode.ORDER_DETAIL_FIELD_MISSING,
-            false
+            `美团订单「${otaOrderId}」详情解析失败：未返回有效的订单数据结构`,
+            MeituanDutyErrorCode.ORDER_DETAIL_TIMEOUT,
+            true
           );
         }
 
         return {
-          otaOrderId,
+          otaOrderId: parsedDetail.otaOrderId || otaOrderId,
           otaChannel: this.channelCode,
-          unitId,
-          unitName,
-          guestName,
-          guestMobile,
-          roomTypeName,
-          ratePlanName,
-          arrival,
-          departure,
-          nights,
-          quantity,
-          totalPrice,
-          raw: networkDetail.raw as Record<string, unknown> | undefined,
+          unitId: parsedDetail.unitId,
+          unitName: parsedDetail.unitName,
+          guestName: parsedDetail.guestName || '',
+          guestMobile: parsedDetail.guestMobile || '',
+          roomTypeName: parsedDetail.roomTypeName || '',
+          ratePlanName: parsedDetail.ratePlanName || '',
+          arrival: parsedDetail.arrival || '',
+          departure: parsedDetail.departure || '',
+          nights: parsedDetail.nights || 1,
+          quantity: parsedDetail.quantity || 1,
+          totalPrice: parsedDetail.totalPrice ?? 0,
+          raw: mergedRaw as Record<string, unknown>,
         };
       } finally {
         if (typeof offFn === 'function') {
