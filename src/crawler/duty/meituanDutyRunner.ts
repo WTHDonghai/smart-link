@@ -119,7 +119,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   private getOrderScope(page: Page) {
-    if (page.url().includes('/ebooking/merchant/ebIframe')) {
+    if (typeof page.url === 'function' && page.url().includes('/ebooking/merchant/ebIframe')) {
       return page.frameLocator('#me-iframe-container');
     }
     return page;
@@ -470,7 +470,8 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   /**
-   * 页面操作：在美团后台页面定位订单卡片并内联展开，抓取详情真实字段
+   * 页面操作：在美团后台页面定位订单卡片并内联展开/点击，抓取详情真实字段
+   * 前置条件：待确认订单列表就绪（通过 refreshOrderList 刷新确保停留在「待确认订单」Tab 且渲染最新 DOM）
    * 遵循 Fail-Fast 原则：100% 权威网络接口为源，智能跳过电话解密，零 DOM 业务数据拼接！
    */
   public async inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail> {
@@ -495,14 +496,32 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         );
       }
 
-      await updateVisualTrackerStatus(page, `🔍 正在定位订单「${otaOrderId}」卡片并内联展开...`, 'action');
+      await updateVisualTrackerStatus(page, `🔍 正在定位订单「${otaOrderId}」卡片并展示详情...`, 'action');
 
-      // 定位目标订单卡片容器 (orderCard)
-      const orderCard = page.locator(
-        `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"], .list-item-wrap:has-text("${otaOrderId}"), .order-card:has-text("${otaOrderId}")`
+      const scope = this.getOrderScope(page);
+      const getItemLocator = (targetId: string) => scope.locator(
+        `.mtd-list-item.list-item-container:has-text("${targetId}"), ` +
+        `.list-item-container:has-text("${targetId}"), ` +
+        `.mtd-list-item:has-text("${targetId}"), ` +
+        `.list-item-wrap:has-text("${targetId}"), ` +
+        `tr:has-text("${targetId}"), ` +
+        `.order-item:has-text("${targetId}"), ` +
+        `[data-order-id="${targetId}"]`
       ).first();
 
-      if (!await orderCard.isVisible({ timeout: 2500 }).catch(() => false)) {
+      // 1. 前置就绪校验：若订单卡片未在当前页面直接可见，先执行待确认列表刷新确保停留在「待确认订单」Tab 且渲染最新列表
+      let orderCard = getItemLocator(otaOrderId);
+      let isCardVisible = await orderCard.isVisible({ timeout: 1200 }).catch(() => false);
+
+      if (!isCardVisible) {
+        await updateVisualTrackerStatus(page, `🔄 待确认列表中未直接发现订单「${otaOrderId}」，正在刷新待确认列表...`, 'action');
+        await this.refreshOrderList(page);
+        await humanDelay(page, 400, 800);
+        orderCard = getItemLocator(otaOrderId);
+        isCardVisible = await orderCard.isVisible({ timeout: 2500 }).catch(() => false);
+      }
+
+      if (!isCardVisible) {
         if (await checkMeituanPageRisk(page)) {
           await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
           throw new DutyExecutionError(
@@ -512,13 +531,13 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           );
         }
         throw new DutyExecutionError(
-          `列表中未找到美团订单「${otaOrderId}」卡片，订单可能已被处理或取消`,
+          `待确认列表中未找到美团订单「${otaOrderId}」卡片，订单可能已被处理或取消`,
           MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND,
           false
         );
       }
 
-      // 3. 挂载本次查看详情专属的单次网络响应监听
+      // 2. 挂载本次查看详情专属的单次网络响应监听
       const capturedRef: {
         detail: Partial<ExtractedOrderDetail> | null;
         sensitive: { guestName?: string; guestMobile?: string } | null;
@@ -588,7 +607,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         : Promise.resolve(null);
 
       try {
-        // 4. 触发订单卡片内联展开 (Inline Expand)
+        // 3. 点击订单卡片触发详情展示与网络拦截
         const detailBtn = orderCard.locator(
           'button:has-text("详情"), a:has-text("详情"), button:has-text("查看"), a:has-text("查看"), .detail-btn, [data-test="order-detail"]'
         ).first();
@@ -596,15 +615,14 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         if (await detailBtn.isVisible({ timeout: 800 }).catch(() => false)) {
           await visualClickLocator(page, detailBtn, `点击订单「${otaOrderId}」详情`);
         } else {
-          // 直接点击订单卡片行自身触发展开
           await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片`);
         }
 
         await humanDelay(page, 500, 800);
 
-        // 5. 姓名脱敏解除交互（“查看姓名”）
+        // 4. 姓名脱敏解除交互（“查看姓名”）
         try {
-          const revealNameBtn = orderCard.locator(
+          const revealNameBtn = scope.locator(
             'button:has-text("查看姓名"), a:has-text("查看姓名"), ' +
             'button:has-text("获取姓名"), a:has-text("获取姓名"), ' +
             'button:has-text("显示姓名"), a:has-text("显示姓名"), ' +
@@ -615,12 +633,14 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
             await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
             await humanDelay(page, 400, 700);
 
-            // 点击平台二次确认框（如“我已知晓”、“确认”、“确定”）
-            const confirmDialogBtn = page.locator(
+            // 点击平台二次确认框（支持 MtdUI, AntD, Element 及通用对话框）
+            const confirmDialogBtn = scope.locator(
+              '.mtd-modal button:has-text("我已知晓"), .mtd-modal button:has-text("确定"), .mtd-modal button:has-text("确认"), ' +
+              '.mtd-confirm button:has-text("我已知晓"), .mtd-confirm button:has-text("确定"), .mtd-confirm button:has-text("确认"), ' +
               '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), .ant-modal button:has-text("确认"), ' +
               '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), .el-dialog button:has-text("确认"), ' +
               '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), [role="dialog"] button:has-text("确认"), ' +
-              'button:has-text("我知道了"), button:has-text("继续查看")'
+              'button:has-text("我已知晓"), button:has-text("我知道了"), button:has-text("继续查看")'
             ).first();
 
             if (await confirmDialogBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -632,7 +652,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           // 容错姓名脱敏交互
         }
 
-        // 6. 智能跳过电话解密 (Smart Skip Phone Privacy)
+        // 5. 智能跳过电话解密 (Smart Skip Phone Privacy)
         // 若姓名解密报文或原始详情已同步包含明文手机号，强制跳过点击“查看电话”，规避 1 秒双重敏感解密风控！
         const resolvedPhone = Boolean(
           (capturedRef.sensitive?.guestMobile && !capturedRef.sensitive.guestMobile.includes('*')) ||
@@ -641,7 +661,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
         if (!resolvedPhone) {
           try {
-            const revealPhoneBtn = orderCard.locator(
+            const revealPhoneBtn = scope.locator(
               'button:has-text("查看电话"), a:has-text("查看电话"), ' +
               'button:has-text("获取电话"), a:has-text("获取电话"), ' +
               'button:has-text("查看手机"), a:has-text("查看手机"), ' +
@@ -652,10 +672,13 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
               await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
               await humanDelay(page, 400, 700);
 
-              const confirmPhoneDialogBtn = page.locator(
+              const confirmPhoneDialogBtn = scope.locator(
+                '.mtd-modal button:has-text("我已知晓"), .mtd-modal button:has-text("确定"), ' +
+                '.mtd-confirm button:has-text("我已知晓"), .mtd-confirm button:has-text("确定"), ' +
                 '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
                 '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
-                '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定")'
+                '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), ' +
+                'button:has-text("我已知晓"), button:has-text("确定")'
               ).first();
 
               if (await confirmPhoneDialogBtn.isVisible({ timeout: 800 }).catch(() => false)) {
@@ -668,7 +691,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           }
         }
 
-        // 7. 等待网络详情拦截与数据提取 (100% 权威网络源，零 DOM 业务数据拼接)
+        // 6. 等待网络详情拦截与数据提取 (100% 权威网络源，零 DOM 业务数据拼接)
         const networkDetail = (await detailResponsePromise) || capturedRef.detail;
         if (!networkDetail) {
           if (await checkMeituanPageRisk(page)) {
@@ -714,7 +737,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         }
         if (!nights) nights = 1;
 
-        // 8. Fail-Fast 严格校验：确保关键字段非空，绝不兜底任何假数据
+        // 7. Fail-Fast 严格校验：确保关键字段非空，绝不兜底任何假数据
         const missingFields: string[] = [];
         if (!guestName) missingFields.push('guestName(入住人)');
         if (!roomTypeName) missingFields.push('roomTypeName(房型)');
@@ -756,7 +779,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   /**
-   * 页面操作：在美团后台回填确认号（基于订单卡片内联流式交互，防串单严格校验）
+   * 页面操作：在美团后台回填确认号（基于订单卡片/详情内联交互，防串单严格校验）
    */
   public async confirmImport(confirmNo: string, otaOrderId: string): Promise<void> {
     const page = this.getActivePage('回填确认号');
@@ -787,10 +810,24 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
       await updateVisualTrackerStatus(page, `📝 正在订单「${otaOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`, 'action');
 
-      // 1. 定位目标订单卡片
-      const orderCard = page.locator(
-        `tr:has-text("${otaOrderId}"), .order-item:has-text("${otaOrderId}"), [data-order-id="${otaOrderId}"], .list-item-wrap:has-text("${otaOrderId}"), .order-card:has-text("${otaOrderId}")`
+      const scope = this.getOrderScope(page);
+      const getItemLocator = (targetId: string) => scope.locator(
+        `.mtd-list-item.list-item-container:has-text("${targetId}"), ` +
+        `.list-item-container:has-text("${targetId}"), ` +
+        `.mtd-list-item:has-text("${targetId}"), ` +
+        `.list-item-wrap:has-text("${targetId}"), ` +
+        `tr:has-text("${targetId}"), ` +
+        `.order-item:has-text("${targetId}"), ` +
+        `[data-order-id="${targetId}"]`
       ).first();
+
+      // 1. 定位目标订单卡片，若不可见先刷新待确认列表
+      let orderCard = getItemLocator(otaOrderId);
+      if (!await orderCard.isVisible({ timeout: 1500 }).catch(() => false)) {
+        await this.refreshOrderList(page);
+        await humanDelay(page, 400, 800);
+        orderCard = getItemLocator(otaOrderId);
+      }
 
       if (!await orderCard.isVisible({ timeout: 2500 }).catch(() => false)) {
         if (await checkMeituanPageRisk(page)) {
@@ -808,25 +845,24 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         );
       }
 
-      // 2. 检查卡片内确认号输入框是否可见；若未展开，先点击卡片展开
+      // 2. 检查卡片内或右侧详情中的确认号输入框是否可见；若未展开/选定，先点击卡片
       let input = orderCard.locator(
-        'input[name="confirmNo"], input[placeholder*="确认号"], [data-test="confirm-no-input"]'
+        'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .mtd-input'
       ).first();
 
       if (!await input.isVisible({ timeout: 800 }).catch(() => false)) {
-        // 点击卡片执行内联展开
         await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片触发展开回填表单`);
         await humanDelay(page, 400, 700);
 
         input = orderCard.locator(
-          'input[name="confirmNo"], input[placeholder*="确认号"], [data-test="confirm-no-input"]'
+          'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .mtd-input'
         ).first();
       }
 
-      // 若在卡片作用域内未找到，在当前页面上下文兜底寻找
+      // 若在卡片作用域内未找到，在 scope 作用域（右侧详情面板等）中寻找
       const targetInput = (await input.isVisible({ timeout: 1500 }).catch(() => false))
         ? input
-        : page.locator('input[name="confirmNo"], input[placeholder*="确认号"], [data-test="confirm-no-input"]').first();
+        : scope.locator('input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .confirm-input input').first();
 
       if (!await targetInput.isVisible({ timeout: 1500 }).catch(() => false)) {
         if (await checkMeituanPageRisk(page)) {
@@ -838,7 +874,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           );
         }
         throw new DutyExecutionError(
-          `订单「${otaOrderId}」卡片内未找到确认号输入框`,
+          `订单「${otaOrderId}」未找到确认号输入框`,
           MeituanDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
           false
         );
@@ -868,9 +904,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       // 5. 定位提交按钮并注册网络响应监听
-      const submitBtn = (await orderCard.isVisible().catch(() => false))
-        ? orderCard.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("保存"), button:has-text("确认")').first()
-        : page.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("保存"), button:has-text("确认")').first();
+      const submitBtn = (await orderCard.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first().isVisible().catch(() => false))
+        ? orderCard.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first()
+        : scope.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first();
 
       if (!await submitBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
         throw new DutyExecutionError(
@@ -904,7 +940,8 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     if (!this.session) return;
     const page = this.session.page;
     try {
-      const collapseBtn = page.locator(
+      const scope = this.getOrderScope(page);
+      const collapseBtn = scope.locator(
         'button:has-text("收起"), a:has-text("收起"), .collapse-btn, [data-test="collapse-order"]'
       ).first();
       if (await collapseBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -925,7 +962,8 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     return this.runWithMutex(async () => {
       await updateVisualTrackerStatus(page, `🛑 在美团后台确认取消订单「${otaOrderId}」（我已知晓）...`, 'action');
       try {
-        const ackBtn = page.locator('button:has-text("我已知晓")').first();
+        const scope = this.getOrderScope(page);
+        const ackBtn = scope.locator('button:has-text("我已知晓")').first();
         if (await ackBtn.isVisible({ timeout: 2000 })) {
           await visualClickLocator(page, ackBtn, '点击我已知晓');
         }

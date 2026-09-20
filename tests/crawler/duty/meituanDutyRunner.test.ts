@@ -892,6 +892,68 @@ describe('meituanDutyRunner', () => {
       expect(detail.unitName).toBe('江景国际大饭店');
     });
 
+    it('inspectOrderDetail should trigger refreshOrderList pre-requisite when order card is not initially visible', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const refreshSpy = vi.spyOn(runner, 'refreshOrderList').mockImplementation(async () => {
+        return {
+          status: () => 200,
+          text: async () => JSON.stringify({ code: 0, data: { list: [] } }),
+        } as unknown as Parameters<typeof runner.refreshOrderList>[0] extends never ? never : any;
+      });
+
+      let callCount = 0;
+      const cardLocator = {
+        isVisible: vi.fn().mockImplementation(async () => {
+          callCount++;
+          // First check returns false, after refresh returns true
+          return callCount > 1;
+        }),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+        locator: () => ({
+          first: () => ({
+            isVisible: vi.fn().mockResolvedValue(false),
+            click: vi.fn().mockResolvedValue(undefined),
+          }),
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: () => ({
+            first: () => cardLocator,
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({
+            url: () => 'https://eb.meituan.com/api/v1/ebooking/orders/MT-REFRESH-001',
+            status: () => 200,
+            text: vi.fn().mockResolvedValue(
+              JSON.stringify({
+                data: {
+                  orderId: 'MT-REFRESH-001',
+                  guestName: '张三',
+                  guestMobile: '13900001111',
+                  roomTypeName: '标准双人间',
+                  ratePlanName: '标准价',
+                  arrival: '2026-09-25',
+                  departure: '2026-09-26',
+                  nights: 1,
+                  totalPrice: 300,
+                  hotelName: '阳光商务酒店',
+                },
+              })
+            ),
+          }),
+        },
+      };
+
+      const detail = await runner.inspectOrderDetail('MT-REFRESH-001');
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(detail.otaOrderId).toBe('MT-REFRESH-001');
+      expect(detail.guestName).toBe('张三');
+      expect(detail.roomTypeName).toBe('标准双人间');
+    });
+
     it('inspectOrderDetail should prioritize and merge intercepted network detail when available', async () => {
       (runner as unknown as { running: boolean }).running = true;
       const cardLocator = {
