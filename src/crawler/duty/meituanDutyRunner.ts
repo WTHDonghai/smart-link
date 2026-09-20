@@ -697,12 +697,25 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
         await humanDelay(page, 500, 800);
 
-        // 4. 姓名脱敏解除交互（“查看姓名”）
+        // 4. 姓名脱敏解除交互（基于美团详情页 DOM 结构与样式精准定位）
+        // 真实 DOM 结构:
+        // <p class="detail-info-item">
+        //   <span class="info-key">客人姓名</span>
+        //   <span class="info-content">
+        //     <span class="guest-name">
+        //       <span class="display-name">王***</span>
+        //       <span class="btn-text" style="cursor: pointer;">查看姓名</span>
+        //     </span>
+        //   </span>
+        // </p>
         try {
           const revealNameBtn = scope.locator(
-            'button:has-text("查看姓名"), a:has-text("查看姓名"), span:has-text("查看姓名"), ' +
-            'button:has-text("获取姓名"), a:has-text("获取姓名"), ' +
-            'button:has-text("显示姓名"), a:has-text("显示姓名"), ' +
+            '.detail-info-item .guest-name .btn-text, ' +
+            '.guest-name .btn-text, ' +
+            '.display-name + .btn-text, ' +
+            'p.detail-info-item:has(.info-key:has-text("客人姓名")) .btn-text, ' +
+            'p.detail-info-item:has(.info-key:has-text("客人姓名")) span.btn-text, ' +
+            '.guest-name [class*="btn"], ' +
             '[data-test="reveal-guest-name"], .reveal-name-btn'
           ).first();
 
@@ -710,14 +723,15 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
             await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
             await humanDelay(page, 400, 700);
 
-            // 点击平台二次确认框（支持 MtdUI, AntD, Element 及通用对话框）
+            // 点击平台二次确认框（支持 MtdUI 模态框: .mtd-modal / .mtd-confirm 及通用对话框）
             const confirmDialogBtn = scope.locator(
-              '.mtd-modal button:has-text("我已知晓"), .mtd-modal button:has-text("确定"), .mtd-modal button:has-text("确认"), ' +
-              '.mtd-confirm button:has-text("我已知晓"), .mtd-confirm button:has-text("确定"), .mtd-confirm button:has-text("确认"), ' +
-              '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), .ant-modal button:has-text("确认"), ' +
-              '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), .el-dialog button:has-text("确认"), ' +
-              '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), [role="dialog"] button:has-text("确认"), ' +
-              'button:has-text("我已知晓"), button:has-text("我知道了"), button:has-text("继续查看")'
+              '.mtd-modal .mtd-btn:has-text("我已知晓"), .mtd-confirm .mtd-btn:has-text("我已知晓"), ' +
+              '.mtd-modal button:has-text("我已知晓"), .mtd-confirm button:has-text("我已知晓"), ' +
+              '.mtd-modal button:has-text("确定"), .mtd-confirm button:has-text("确定"), ' +
+              '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
+              '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
+              '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), ' +
+              'button:has-text("我已知晓"), button:has-text("我知道了")'
             ).first();
 
             if (await confirmDialogBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -738,11 +752,12 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
         if (!resolvedPhone) {
           try {
+            // 真实 DOM 结构: p.detail-info-item:has(.info-key:has-text("联系客人")) a[href="javascript:;"]
             const revealPhoneBtn = scope.locator(
-              'button:has-text("查看电话"), a:has-text("查看电话"), span:has-text("查看电话"), ' +
-              'button:has-text("获取电话"), a:has-text("获取电话"), ' +
-              'button:has-text("查看手机"), a:has-text("查看手机"), ' +
-              'button:has-text("查看完整号码"), a:has-text("查看完整号码")'
+              'p.detail-info-item:has(.info-key:has-text("联系客人")) a, ' +
+              '.detail-info-item:has(.info-key:has-text("联系客人")) a, ' +
+              '.detail-info-item:has(.info-key:has-text("联系客人")) [class*="btn"], ' +
+              '[data-test="reveal-guest-phone"]'
             ).first();
 
             if (await revealPhoneBtn.isVisible({ timeout: 800 }).catch(() => false)) {
@@ -750,10 +765,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
               await humanDelay(page, 400, 700);
 
               const confirmPhoneDialogBtn = scope.locator(
-                '.mtd-modal button:has-text("我已知晓"), .mtd-modal button:has-text("确定"), ' +
-                '.mtd-confirm button:has-text("我已知晓"), .mtd-confirm button:has-text("确定"), ' +
+                '.mtd-modal .mtd-btn:has-text("我已知晓"), .mtd-confirm .mtd-btn:has-text("我已知晓"), ' +
+                '.mtd-modal button:has-text("我已知晓"), .mtd-confirm button:has-text("我已知晓"), ' +
+                '.mtd-modal button:has-text("确定"), .mtd-confirm button:has-text("确定"), ' +
                 '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
-                '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
                 '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), ' +
                 'button:has-text("我已知晓"), button:has-text("确定")'
               ).first();

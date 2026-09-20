@@ -1047,7 +1047,7 @@ describe('meituanDutyRunner', () => {
           off: offSpy,
           locator: (selector: string) => ({
             first: () => {
-              if (selector.includes('查看姓名')) return revealBtn;
+              if (selector.includes('查看姓名') || selector.includes('btn-text') || selector.includes('guest-name')) return revealBtn;
               if (selector.includes('我已知晓') || selector.includes('确定')) return confirmDialogBtn;
               return cardLocator;
             },
