@@ -12,6 +12,7 @@ import {
   setIsScraping,
   upsertDiscoveredHotels,
 } from '../../src/store/slices/hotelSlice';
+import { addChannelById } from '../../src/store/slices/channelSlice';
 import type { DiscoveredHotelCandidate } from '../../src/crawler/types';
 
 describe('resolveChannelMeta 渠道徽标解析引擎', () => {
@@ -104,6 +105,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('选中美团渠道后：采集按钮变为激活状态，文案动态切换为「启动「美团」门店采集」', () => {
     const store = createAppStore();
+    store.dispatch(addChannelById('meituan'));
     store.dispatch(setSelectedCrawlChannel('MEITUAN'));
 
     const html = renderToStaticMarkup(
@@ -122,6 +124,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('选中美团商旅渠道后：文案动态切换为「启动「美团商旅」门店采集」', () => {
     const store = createAppStore();
+    store.dispatch(addChannelById('meituanbiz'));
     store.dispatch(setSelectedCrawlChannel('MEITUAN_BIZ'));
 
     const html = renderToStaticMarkup(
@@ -136,6 +139,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
 
   it('采集中状态时：按钮禁用并展示转圈 Loading 与「正在采集「美团」门店...」', () => {
     const store = createAppStore();
+    store.dispatch(addChannelById('meituan'));
     store.dispatch(setSelectedCrawlChannel('MEITUAN'));
     store.dispatch(setIsScraping(true));
 

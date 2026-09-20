@@ -12,11 +12,12 @@ import channelReducer, {
 } from '../../../src/store/slices/channelSlice';
 
 describe('channelSlice', () => {
-  it('initializes with default 3 active channels and null template selection', () => {
+  it('initializes with empty channels and null template selection', () => {
     const state = channelReducer(undefined, { type: '@@INIT' });
     expect(state.selectedChannelForTemplate).toBeNull();
-    expect(state.channels.length).toBe(3);
-    expect(state.channels.map((c) => c.id)).toEqual(['meituan', 'meituanbiz', 'douyin']);
+    expect(state.channels.length).toBe(0);
+    expect(state.culturalTourismChannels).toEqual([]);
+    expect(state.mappings).toEqual([]);
   });
 
   describe('addChannelById', () => {
@@ -24,7 +25,7 @@ describe('channelSlice', () => {
       const initialState = channelReducer(undefined, { type: '@@INIT' });
       const nextState = channelReducer(initialState, addChannelById('ctrip'));
 
-      expect(nextState.channels.length).toBe(4);
+      expect(nextState.channels.length).toBe(1);
       const addedChannel = nextState.channels.find((c) => c.id === 'ctrip');
       expect(addedChannel).toBeDefined();
       expect(addedChannel?.name).toBe('携程旅行');
@@ -32,14 +33,16 @@ describe('channelSlice', () => {
       expect(addedChannel?.todayOrders).toBe(0);
       expect(addedChannel?.lastSyncTime).toBe('刚刚初始化');
       expect(addedChannel?.targetSystem).toBe('ctrip_direct');
+      expect(addedChannel?.isMapped).toBe(false);
     });
 
     it('enforces deduplication and does not add duplicate channel if already present', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      expect(initialState.channels.some((c) => c.id === 'meituan')).toBe(true);
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      expect(stateWithMeituan.channels.some((c) => c.id === 'meituan')).toBe(true);
+      expect(stateWithMeituan.channels.length).toBe(1);
 
-      const nextState = channelReducer(initialState, addChannelById('meituan'));
-      expect(nextState.channels.length).toBe(3);
+      const nextState = channelReducer(stateWithMeituan, addChannelById('meituan'));
+      expect(nextState.channels.length).toBe(1);
       expect(nextState.channels.filter((c) => c.id === 'meituan').length).toBe(1);
     });
 
@@ -47,7 +50,7 @@ describe('channelSlice', () => {
       const initialState = channelReducer(undefined, { type: '@@INIT' });
       const nextState = channelReducer(initialState, addChannelById('non_existent_channel_id'));
 
-      expect(nextState.channels.length).toBe(3);
+      expect(nextState.channels.length).toBe(0);
       expect(nextState.channels).toEqual(initialState.channels);
     });
 
@@ -75,17 +78,25 @@ describe('channelSlice', () => {
 
   describe('removeChannel', () => {
     it('removes target channel from channels array', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, removeChannel('meituanbiz'));
+      const stateWithTwo = channelReducer(
+        channelReducer(undefined, addChannelById('meituan')),
+        addChannelById('douyin')
+      );
+      expect(stateWithTwo.channels.length).toBe(2);
 
-      expect(nextState.channels.length).toBe(2);
-      expect(nextState.channels.find((c) => c.id === 'meituanbiz')).toBeUndefined();
-      expect(nextState.channels.map((c) => c.id)).toEqual(['meituan', 'douyin']);
+      const nextState = channelReducer(stateWithTwo, removeChannel('meituan'));
+      expect(nextState.channels.length).toBe(1);
+      expect(nextState.channels.find((c) => c.id === 'meituan')).toBeUndefined();
+      expect(nextState.channels.map((c) => c.id)).toEqual(['douyin']);
     });
 
     it('removes target channel from channels array and synchronizes removal from mappings cache', () => {
+      const stateWithChannels = channelReducer(
+        channelReducer(undefined, addChannelById('meituan')),
+        addChannelById('douyin')
+      );
       const initialState = {
-        ...channelReducer(undefined, { type: '@@INIT' }),
+        ...stateWithChannels,
         mappings: [
           {
             id: 'map-meituan',
@@ -118,19 +129,22 @@ describe('channelSlice', () => {
     });
 
     it('handles removing non-existent channel without side effects', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, removeChannel('not_in_list'));
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, removeChannel('not_in_list'));
 
-      expect(nextState.channels.length).toBe(3);
-      expect(nextState.channels).toEqual(initialState.channels);
+      expect(nextState.channels.length).toBe(1);
+      expect(nextState.channels).toEqual(stateWithMeituan.channels);
     });
   });
 
   describe('updateChannelTargetSystem', () => {
     it('updates the target system route for specified channel', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
+      const stateWithTwo = channelReducer(
+        channelReducer(undefined, addChannelById('meituan')),
+        addChannelById('douyin')
+      );
       const nextState = channelReducer(
-        initialState,
+        stateWithTwo,
         updateChannelTargetSystem({ channelId: 'meituan', targetSystem: 'meituan_sub_01' })
       );
 
@@ -143,13 +157,13 @@ describe('channelSlice', () => {
     });
 
     it('ignores update for unknown channel id', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
       const nextState = channelReducer(
-        initialState,
+        stateWithMeituan,
         updateChannelTargetSystem({ channelId: 'unknown', targetSystem: 'xyz' })
       );
 
-      expect(nextState.channels).toEqual(initialState.channels);
+      expect(nextState.channels).toEqual(stateWithMeituan.channels);
     });
   });
 
@@ -168,9 +182,9 @@ describe('channelSlice', () => {
 
   describe('selectCulturalTourismChannel & clearChannelError', () => {
     it('selectCulturalTourismChannel updates channelId, channelCode and targetSystem for target channel', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
       const nextState = channelReducer(
-        initialState,
+        stateWithMeituan,
         selectCulturalTourismChannel({
           channelId: 'meituan',
           pmsChannelId: '99',
@@ -187,8 +201,9 @@ describe('channelSlice', () => {
     });
 
     it('selectCulturalTourismChannel supports resetting fields when pmsChannelId is empty', () => {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
       const stateWithSelection = channelReducer(
-        undefined,
+        stateWithMeituan,
         selectCulturalTourismChannel({
           channelId: 'meituan',
           pmsChannelId: '99',
@@ -216,8 +231,9 @@ describe('channelSlice', () => {
     });
 
     it('selectCulturalTourismChannel sets isMapped to true if selected pmsChannelId matches saved mapping, else false', () => {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
       const initialState = {
-        ...channelReducer(undefined, { type: '@@INIT' }),
+        ...stateWithMeituan,
         mappings: [
           {
             id: 'map-meituan',
@@ -259,19 +275,24 @@ describe('channelSlice', () => {
       expect(targetChanged?.isMapped).toBe(false);
     });
 
-    it('clearChannelError clears error message', () => {
+    it('clearChannelError resets error to null', () => {
       const stateWithError = {
         ...channelReducer(undefined, { type: '@@INIT' }),
-        error: '发生网络错误',
+        error: 'Network Timeout',
       };
-      const cleared = channelReducer(stateWithError, clearChannelError());
-      expect(cleared.error).toBeNull();
+
+      const nextState = channelReducer(stateWithError, clearChannelError());
+      expect(nextState.error).toBeNull();
     });
   });
 
   describe('fetchChannelMappingData extraReducers', () => {
-    it('handles pending state', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
+    it('handles pending state and resets error', () => {
+      const initialState = {
+        ...channelReducer(undefined, { type: '@@INIT' }),
+        error: 'Previous error',
+      };
+
       const nextState = channelReducer(initialState, {
         type: fetchChannelMappingData.pending.type,
       });
@@ -280,7 +301,7 @@ describe('channelSlice', () => {
       expect(nextState.error).toBeNull();
     });
 
-    it('handles fulfilled state and merges remote mappings to channels', () => {
+    it('handles fulfilled state and populates ONLY remote mapped channels when no drafts exist', () => {
       const initialState = channelReducer(undefined, { type: '@@INIT' });
       const mockPayload = {
         culturalTourismChannels: [
@@ -288,8 +309,8 @@ describe('channelSlice', () => {
         ],
         mappings: [
           {
-            id: 'map-1',
-            mappingId: 'map-1',
+            id: 'map-mt',
+            mappingId: 'map-mt',
             otaChannelCode: 'MEITUAN',
             otaChannelName: '美团',
             channelId: '1',
@@ -308,6 +329,8 @@ describe('channelSlice', () => {
       expect(nextState.isLoading).toBe(false);
       expect(nextState.culturalTourismChannels.length).toBe(1);
       expect(nextState.mappings.length).toBe(1);
+      // 仅生成远程真实映射的美团，且绝不包含未映射的抖音或商旅
+      expect(nextState.channels.length).toBe(1);
 
       const meituanChannel = nextState.channels.find((c) => c.code === 'MEITUAN');
       expect(meituanChannel?.isMapped).toBe(true);
@@ -315,16 +338,13 @@ describe('channelSlice', () => {
       expect(meituanChannel?.channelCode).toBe('MT');
       expect(meituanChannel?.channelName).toBe('美团直连');
 
-      const douyinChannel = nextState.channels.find((c) => c.code === 'DOUYIN');
-      expect(douyinChannel?.isMapped).toBe(false);
-      expect(douyinChannel?.channelId).toBe('');
-      expect(douyinChannel?.channelCode).toBe('');
-      expect(douyinChannel?.targetSystem).toBe('');
+      expect(nextState.channels.some((c) => c.code === 'DOUYIN')).toBe(false);
     });
 
-    it('dynamically populates remote mapped channels not in current list (catalog channels and custom channels)', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      expect(initialState.channels.length).toBe(3);
+    it('dynamically populates remote mapped channels (catalog channels and custom channels) and preserves local drafts', () => {
+      // 模拟用户本地手动点击「添加渠道」新增了同程（草稿状态，未保存）
+      const stateWithDraft = channelReducer(undefined, addChannelById('tongcheng'));
+      expect(stateWithDraft.channels.length).toBe(1);
 
       const mockPayload = {
         culturalTourismChannels: [
@@ -355,13 +375,13 @@ describe('channelSlice', () => {
         ],
       };
 
-      const nextState = channelReducer(initialState, {
+      const nextState = channelReducer(stateWithDraft, {
         type: fetchChannelMappingData.fulfilled.type,
         payload: mockPayload,
       });
 
-      // 3 initial + 2 new remote mapped = 5
-      expect(nextState.channels.length).toBe(5);
+      // 2 个远程映射 + 1 个本地草稿 = 3
+      expect(nextState.channels.length).toBe(3);
 
       const ctrip = nextState.channels.find((c) => c.code === 'CTRIP');
       expect(ctrip).toBeDefined();
@@ -378,6 +398,10 @@ describe('channelSlice', () => {
       expect(custom?.channelId).toBe('3');
       expect(custom?.channelCode).toBe('XY_PMS');
       expect(custom?.targetSystem).toBe('XY_PMS');
+
+      const draft = nextState.channels.find((c) => c.code === 'TONGCHENG');
+      expect(draft).toBeDefined();
+      expect(draft?.isMapped).toBe(false);
     });
 
     it('handles rejected state and captures error', () => {
@@ -394,8 +418,8 @@ describe('channelSlice', () => {
 
   describe('saveChannelMapping extraReducers', () => {
     it('handles pending state and marks savingChannelId', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, {
         type: saveChannelMapping.pending.type,
         meta: { arg: { channelId: 'meituan' } },
       });
@@ -406,8 +430,8 @@ describe('channelSlice', () => {
     });
 
     it('handles fulfilled state, marks channel as isMapped and updates mappings cache', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, {
         type: saveChannelMapping.fulfilled.type,
         payload: {
           channelId: 'meituan',
@@ -434,8 +458,8 @@ describe('channelSlice', () => {
     });
 
     it('handles fulfilled state with explicit pmsChannelName and guarantees channelName consistency without reverting to channelCode', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, {
         type: saveChannelMapping.fulfilled.type,
         payload: {
           channelId: 'meituan',
@@ -451,9 +475,6 @@ describe('channelSlice', () => {
         meta: {
           arg: {
             channelId: 'meituan',
-            otaChannelCode: 'MEITUAN',
-            pmsChannelId: '201',
-            channelCode: 'MT_PMS',
             pmsChannelName: '美团直连文旅云通道',
           },
         },
@@ -463,16 +484,11 @@ describe('channelSlice', () => {
       expect(target?.isMapped).toBe(true);
       expect(target?.channelName).toBe('美团直连文旅云通道');
       expect(target?.channelCode).toBe('MT_PMS');
-
-      const mappingRecord = nextState.mappings.find((m) => m.otaChannelCode === 'MEITUAN');
-      expect(mappingRecord).toBeDefined();
-      expect(mappingRecord?.channelName).toBe('美团直连文旅云通道');
-      expect(mappingRecord?.channelCode).toBe('MT_PMS');
     });
 
     it('handles fulfilled state with server-returned mappingId, prioritizing server key into channel and mappings cache', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, {
         type: saveChannelMapping.fulfilled.type,
         payload: {
           channelId: 'meituan',
@@ -480,7 +496,7 @@ describe('channelSlice', () => {
           savedPayload: {
             otaChannelCode: 'MEITUAN',
             otaChannelName: '美团',
-            channelCode: 'MT_PMS',
+            channelCode: 'MT_NEW',
             channelId: '301',
             status: 'A',
           },
@@ -493,24 +509,21 @@ describe('channelSlice', () => {
       expect(target?.mappingId).toBe('server-mapping-id-9988');
       expect(target?.channelId).toBe('301');
 
-      const mappingRecord = nextState.mappings.find((m) => m.otaChannelCode === 'MEITUAN');
-      expect(mappingRecord).toBeDefined();
-      expect(mappingRecord?.mappingId).toBe('server-mapping-id-9988');
-      expect(mappingRecord?.id).toBe('server-mapping-id-9988');
+      const mappingInCache = nextState.mappings.find((m) => m.otaChannelCode === 'MEITUAN');
+      expect(mappingInCache?.mappingId).toBe('server-mapping-id-9988');
     });
 
-
-    it('handles rejected state', () => {
-      const initialState = channelReducer(undefined, { type: '@@INIT' });
-      const nextState = channelReducer(initialState, {
+    it('handles rejected state and captures error', () => {
+      const stateWithMeituan = channelReducer(undefined, addChannelById('meituan'));
+      const nextState = channelReducer(stateWithMeituan, {
         type: saveChannelMapping.rejected.type,
-        payload: '保存失败: 接口超时',
         meta: { arg: { channelId: 'meituan' } },
+        payload: '文旅平台接口网络超时',
       });
 
       expect(nextState.isSaving).toBe(false);
       expect(nextState.savingChannelId).toBeNull();
-      expect(nextState.error).toBe('保存失败: 接口超时');
+      expect(nextState.error).toBe('文旅平台接口网络超时');
     });
   });
 });

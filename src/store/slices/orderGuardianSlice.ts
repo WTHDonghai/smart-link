@@ -68,12 +68,7 @@ const initialStatistics: ToolkitOrderStatistics = {
   failed: 0,
 };
 
-const initialChannelDuty: Record<string, ChannelDutyInfo> = {
-  MEITUAN: { channelCode: 'MEITUAN', status: 'STOPPED' },
-  MEITUAN_BIZ: { channelCode: 'MEITUAN_BIZ', status: 'STOPPED' },
-  DOUYIN: { channelCode: 'DOUYIN', status: 'STOPPED' },
-  CTRIP: { channelCode: 'CTRIP', status: 'STOPPED' },
-};
+const initialChannelDuty: Record<string, ChannelDutyInfo> = {};
 
 const initialState: OrderGuardianState = {
   orders: [],
@@ -411,9 +406,13 @@ export const orderGuardianSlice = createSlice({
       })
       .addCase(toggleChannelDutyThunk.rejected, (state, action) => {
         const payload = action.payload as { channelCode?: string; error?: string } | undefined;
-        if (payload?.channelCode && state.channelDuty[payload.channelCode]) {
-          state.channelDuty[payload.channelCode].status = 'DEGRADED';
-          state.channelDuty[payload.channelCode].error = payload.error;
+        if (payload?.channelCode) {
+          const prev = state.channelDuty[payload.channelCode] || { channelCode: payload.channelCode, status: 'DEGRADED' };
+          state.channelDuty[payload.channelCode] = {
+            ...prev,
+            status: 'DEGRADED',
+            error: payload.error,
+          };
         }
       });
 

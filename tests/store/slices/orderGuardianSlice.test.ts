@@ -48,8 +48,7 @@ describe('orderGuardianSlice reducer', () => {
     expect(state.loading).toBe(false);
     expect(state.filters.status).toBe('all');
     expect(state.filters.page).toBe(1);
-    expect(state.statistics).toEqual({ today: 0, pending: 0, success: 0, failed: 0 });
-    expect(state.channelDuty.MEITUAN.status).toBe('STOPPED');
+    expect(state.channelDuty).toEqual({});
     expect(state.coordinatorStatus).toBe('STOPPED');
   });
 

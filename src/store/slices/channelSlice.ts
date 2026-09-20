@@ -252,37 +252,7 @@ export interface ChannelState {
   templateLoadError: string | null;
 }
 
-export const createInitialChannels = (): OTAChannel[] => {
-  const initialBase = [
-    {
-      ...BASE_CHANNELS_CATALOG[0],
-      todayOrders: 428,
-      lastSyncTime: '3秒前',
-      isMapped: false,
-    },
-    {
-      ...BASE_CHANNELS_CATALOG[1],
-      todayOrders: 215,
-      lastSyncTime: '5秒前',
-      isMapped: false,
-    },
-    {
-      ...BASE_CHANNELS_CATALOG[2],
-      todayOrders: 362,
-      lastSyncTime: '1秒前',
-      isMapped: false,
-    }
-  ];
-
-  return initialBase.map((ch) => {
-    const savedSchema = getSavedProtocolSchema(ch.id);
-    return {
-      ...ch,
-      remarkTemplate: '',
-      protocolSchema: savedSchema !== null ? savedSchema : ch.protocolSchema,
-    };
-  });
-};
+export const createInitialChannels = (): OTAChannel[] => [];
 
 const initialState: ChannelState = {
   selectedChannelForTemplate: null,
@@ -626,82 +596,90 @@ export const channelSlice = createSlice({
         state.culturalTourismChannels = action.payload.culturalTourismChannels;
         state.mappings = action.payload.mappings;
 
-        // 1. 若远程已配置某些渠道映射（如携程、同程等）且未在当前列表中，自动补齐展示
+        // 保留用户在界面上通过「添加渠道」新增、正在编辑但尚未保存的草稿渠道
+        const localDrafts = state.channels.filter(
+          (c) => !c.isMapped && (!c.mappingId || c.mappingId === '')
+        );
+
+        const newChannels: OTAChannel[] = [];
+        const seenCodes = new Set<string>();
+
+        // 1. 基于远程真实映射数据构建已映射渠道
         for (const mapping of action.payload.mappings) {
-          const mCode = mapping.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
-          const exists = state.channels.some(
-            c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
-                 c.id.toUpperCase().replace(/[-_]/g, '') === mCode
+          const rawCode = (mapping.otaChannelCode || '').trim().toUpperCase();
+          if (!rawCode) continue;
+          const normalizedCode = rawCode.replace(/[-_]/g, '');
+          if (seenCodes.has(normalizedCode)) continue;
+          seenCodes.add(normalizedCode);
+
+          // 优先复用 state.channels 中已有的对象（保留本地已设置的 remarkTemplate 等状态）
+          const existing = state.channels.find(
+            (c) =>
+              c.code.toUpperCase().replace(/[-_]/g, '') === normalizedCode ||
+              c.id.toUpperCase().replace(/[-_]/g, '') === normalizedCode
           );
-          if (!exists) {
-            const catalogItem = ALL_CHANNELS_CATALOG.find(
-              c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
-                   c.id.toUpperCase().replace(/[-_]/g, '') === mCode
-            );
-            if (catalogItem) {
-              const savedSchema = getSavedProtocolSchema(catalogItem.id);
-              state.channels.push({
-                ...catalogItem,
-                remarkTemplate: '',
-                protocolSchema: savedSchema !== null ? savedSchema : catalogItem.protocolSchema,
-                targetSystem: mapping.channelCode,
-                channelId: mapping.channelId,
-                channelCode: mapping.channelCode,
-                channelName: mapping.channelName,
-                mappingId: mapping.mappingId || mapping.id,
-                isMapped: true,
-                todayOrders: 0,
-                lastSyncTime: '已同步',
-              });
-            } else {
-              state.channels.push({
-                id: mapping.otaChannelCode.toLowerCase(),
-                name: mapping.otaChannelName || mapping.otaChannelCode,
-                code: mapping.otaChannelCode,
-                short: (mapping.otaChannelName || mapping.otaChannelCode).slice(0, 1),
-                bgColor: 'bg-blue-50',
-                textColor: 'text-blue-700',
-                targetSystem: mapping.channelCode,
-                channelId: mapping.channelId,
-                channelCode: mapping.channelCode,
-                channelName: mapping.channelName,
-                mappingId: mapping.mappingId || mapping.id,
-                isMapped: true,
-                remarkTemplate: '',
-                status: 'active',
-                crawlerStatus: 'online',
-                todayOrders: 0,
-                lastSyncTime: '已同步',
-              });
-            }
+
+          const catalogItem = ALL_CHANNELS_CATALOG.find(
+            (c) =>
+              c.code.toUpperCase().replace(/[-_]/g, '') === normalizedCode ||
+              c.id.toUpperCase().replace(/[-_]/g, '') === normalizedCode
+          );
+
+          if (existing) {
+            existing.channelId = mapping.channelId;
+            existing.channelCode = mapping.channelCode;
+            existing.channelName = mapping.channelName;
+            existing.mappingId = mapping.mappingId || mapping.id;
+            existing.targetSystem = mapping.channelCode;
+            existing.isMapped = true;
+            newChannels.push(existing);
+          } else if (catalogItem) {
+            const savedSchema = getSavedProtocolSchema(catalogItem.id);
+            newChannels.push({
+              ...catalogItem,
+              remarkTemplate: '',
+              protocolSchema: savedSchema !== null ? savedSchema : catalogItem.protocolSchema,
+              targetSystem: mapping.channelCode,
+              channelId: mapping.channelId,
+              channelCode: mapping.channelCode,
+              channelName: mapping.channelName,
+              mappingId: mapping.mappingId || mapping.id,
+              isMapped: true,
+              todayOrders: 0,
+              lastSyncTime: '已同步',
+            });
+          } else {
+            newChannels.push({
+              id: mapping.otaChannelCode.toLowerCase(),
+              name: mapping.otaChannelName || mapping.otaChannelCode,
+              code: mapping.otaChannelCode,
+              short: (mapping.otaChannelName || mapping.otaChannelCode).slice(0, 1),
+              bgColor: 'bg-blue-50',
+              textColor: 'text-blue-700',
+              targetSystem: mapping.channelCode,
+              channelId: mapping.channelId,
+              channelCode: mapping.channelCode,
+              channelName: mapping.channelName,
+              mappingId: mapping.mappingId || mapping.id,
+              isMapped: true,
+              remarkTemplate: '',
+              status: 'active',
+              crawlerStatus: 'online',
+              todayOrders: 0,
+              lastSyncTime: '已同步',
+            });
           }
         }
 
-        // 2. 将远程真实映射数据匹配更新到 channels 中
-        for (const ch of state.channels) {
-          const chCode = ch.code.toUpperCase().replace(/[-_]/g, '');
-          const chId = ch.id.toUpperCase().replace(/[-_]/g, '');
-          const mapping = action.payload.mappings.find(
-            m => {
-              const mCode = m.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
-              return mCode === chCode || mCode === chId;
-            }
-          );
-          if (mapping) {
-            ch.channelId = mapping.channelId;
-            ch.channelCode = mapping.channelCode;
-            ch.channelName = mapping.channelName;
-            ch.mappingId = mapping.mappingId || mapping.id;
-            ch.targetSystem = mapping.channelCode;
-            ch.isMapped = true;
-          } else {
-            ch.isMapped = false;
-            ch.channelId = '';
-            ch.channelCode = '';
-            ch.channelName = '';
-            ch.targetSystem = '';
+        // 2. 将用户未保存的本地草稿渠道追加在后面（若远程尚未包含该渠道）
+        for (const draft of localDrafts) {
+          const draftCode = draft.code.toUpperCase().replace(/[-_]/g, '');
+          if (!seenCodes.has(draftCode)) {
+            newChannels.push(draft);
           }
         }
+
+        state.channels = newChannels;
       })
       .addCase(fetchChannelMappingData.rejected, (state, action) => {
         state.isLoading = false;

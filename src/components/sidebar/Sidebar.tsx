@@ -141,11 +141,12 @@ export const Sidebar: React.FC = () => {
       label: '门店采集',
       icon: <Building2 className="w-5 h-5 shrink-0" />
     },
-    {
-      id: 'product-mapping',
-      label: '产品采集',
-      icon: <BedDouble className="w-5 h-5 shrink-0" />
-    },
+    // [TODO]: 待实现
+    // {
+    //   id: 'product-mapping',
+    //   label: '产品采集',
+    //   icon: <BedDouble className="w-5 h-5 shrink-0" />
+    // },
     {
       id: 'order-guardian',
       label: '订单值守',

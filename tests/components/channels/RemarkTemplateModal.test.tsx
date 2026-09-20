@@ -6,6 +6,7 @@ import { RemarkTemplateModal } from '../../../src/components/channels/RemarkTemp
 import {
   saveRemarkTemplateAsync,
   setSelectedChannelForTemplate,
+  addChannelById,
 } from '../../../src/store/slices/channelSlice';
 import { saveTokensToStorage } from '../../../src/services/platformAuth';
 import type { PlatformAuthTokens } from '../../../src/types';
@@ -42,6 +43,7 @@ describe('RemarkTemplateModal 保存按钮加载', () => {
     globalThis.fetch = vi.fn().mockReturnValue(pendingFetch);
 
     const store = createAppStore();
+    store.dispatch(addChannelById('meituan'));
     store.dispatch(setSelectedChannelForTemplate('meituan'));
     const saveRequest = store.dispatch(
       saveRemarkTemplateAsync({
@@ -89,6 +91,7 @@ describe('RemarkTemplateModal 保存按钮加载', () => {
     } as unknown as Response);
 
     const store = createAppStore();
+    store.dispatch(addChannelById('meituan'));
     store.dispatch(setSelectedChannelForTemplate('meituan'));
     await store.dispatch(
       saveRemarkTemplateAsync({

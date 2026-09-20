@@ -12,11 +12,27 @@ import channelReducer, {
   ALL_CHANNELS_CATALOG,
   SCHEMA_STORAGE_PREFIX,
   createInitialChannels,
+  addChannelById,
 } from '../../../src/store/slices/channelSlice';
 import { createAppStore } from '../../../src/store';
 import { DEFAULT_MEITUAN_PROTOCOL_SCHEMA } from '../../../src/services/protocols/meituanProtocol';
 import { ChannelProtocolSchema, PlatformAuthTokens } from '../../../src/types';
 import { saveTokensToStorage } from '../../../src/services/platformAuth';
+
+function createTestState() {
+  let state = channelReducer(undefined, { type: '@@INIT' });
+  state = channelReducer(state, addChannelById('meituan'));
+  state = channelReducer(state, addChannelById('douyin'));
+  return state;
+}
+
+function createTestAppStore() {
+  const store = createAppStore();
+  store.dispatch(addChannelById('meituan'));
+  store.dispatch(addChannelById('douyin'));
+  store.dispatch(addChannelById('ctrip'));
+  return store;
+}
 
 describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Persistence)', () => {
   beforeEach(() => {
@@ -30,7 +46,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
 
   describe('1. Pure Reducer Behavior (Zero Side-Effects, Zero External Mutations)', () => {
     it('initializes Meituan channel with default protocol schema and an empty remote-template projection', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
+      const state = createTestState();
       const meituan = state.channels.find((c) => c.id === 'meituan');
       expect(meituan).toBeDefined();
       expect(meituan?.protocolSchema).toBeDefined();
@@ -48,7 +64,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('updateChannelFieldMapping updates state purely without touching localStorage or mutating ALL_CHANNELS_CATALOG', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
+      const state = createTestState();
       const originalCatalogTemplate = ALL_CHANNELS_CATALOG.find((c) => c.id === 'meituan')?.remarkTemplate;
 
       const nextState = channelReducer(
@@ -78,7 +94,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('toggleChannelField updates field enabled status purely in-memory', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
+      const state = createTestState();
       const nextState = channelReducer(
         state,
         toggleChannelField({
@@ -99,7 +115,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('resetChannelProtocol restores protocol defaults without replacing remote template state', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
+      const state = createTestState();
       const resetState = channelReducer(
         state,
         resetChannelProtocol({ channelId: 'meituan' })
@@ -113,7 +129,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('updateChannelProtocolSchema updates schema purely in-memory', () => {
-      const state = channelReducer(undefined, { type: '@@INIT' });
+      const state = createTestState();
       const customSchema: ChannelProtocolSchema = {
         channelId: 'meituan',
         channelCode: 'MEITUAN_CUSTOM',
@@ -139,7 +155,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
 
   describe('2. Redux Store & Listener Middleware Persistence Integration', () => {
     it('dispatches updateChannelFieldMapping to store and persists to localStorage via listener', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
 
       store.dispatch(
         updateChannelFieldMapping({
@@ -169,7 +185,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('dispatches toggleChannelField to store and syncs pruned schema to localStorage', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
 
       store.dispatch(
         toggleChannelField({
@@ -192,7 +208,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('uses the PUT response as the canonical remote-template value in Redux', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -238,7 +254,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('falls back to a single GET when PUT does not return a usable remote template', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -291,7 +307,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('keeps an empty template returned by PUT without treating it as a missing value', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -334,7 +350,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('handles saveRemarkTemplateAsync.rejected when remote API fails', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -381,7 +397,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('rejects illegal PUT remarkTemplate response type without GET fallback or state pollution', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -429,7 +445,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('keeps save failures separate from loading failures in Redux state', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -466,7 +482,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('rejects illegal GET remarkTemplate response type without state pollution', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -513,7 +529,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('dispatches fetchRemarkTemplateAsync and updates the remote-template projection without local persistence', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -562,7 +578,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('ignores an older channel fetch result after a newer channel request becomes active', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -631,7 +647,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('ignores an older channel save result after a newer save request becomes active', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -708,7 +724,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('dispatches fetchRemarkTemplateAsync and handles 404 (null template) as an explicit empty remote value', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -752,7 +768,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('auto-initializes protocolSchema when updating a channel that initially lacked protocolSchema', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
 
       // Ctrip initially has protocolSchema === undefined
       const initialCtrip = store.getState().channel.channels.find((c) => c.id === 'ctrip');
@@ -785,7 +801,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('persists entire updated schema via updateChannelProtocolSchema when clicking finish management', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const customSchema: ChannelProtocolSchema = {
         channelId: 'meituan',
         channelCode: 'MEITUAN',
@@ -826,7 +842,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('keeps the remote template when resetChannelProtocol only resets protocol schema', async () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const mockTokens: PlatformAuthTokens = {
         accessToken: 'test-token',
         refreshToken: 'test-refresh-token',
@@ -887,7 +903,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('dispatches updateChannelProtocolSchema to store and syncs full schema', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
       const customSchema: ChannelProtocolSchema = {
         channelId: 'douyin',
         channelCode: 'DOUYIN_V3',
@@ -913,7 +929,7 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
     });
 
     it('ensures protocol schema modifications survive modal reopen and page refresh', () => {
-      const store = createAppStore();
+      const store = createTestAppStore();
 
       // 1. 用户打开美团“管理协议字段”，调整了结算底价路径并点击“完成管理”
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');
@@ -938,9 +954,9 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       expect(reopenedField?.path).toBe('data.myCustomFloorPrice');
       expect(reopenedField?.label).toBe('自定义底价字段');
 
-      // 3. 模拟用户刷新页面 (F5/Reload)：Redux store 重新从 createInitialChannels 初始化
-      const freshChannels = createInitialChannels();
-      const reloadedMeituan = freshChannels.find((c) => c.id === 'meituan');
+      // 3. 模拟用户刷新页面 (F5/Reload) 后重新加载渠道：从 localStorage 自动恢复自定义协议
+      const freshStore = createTestAppStore();
+      const reloadedMeituan = freshStore.getState().channel.channels.find((c) => c.id === 'meituan');
       const reloadedField = reloadedMeituan?.protocolSchema?.fields.find((f) => f.key === 'floorPrice');
 
       expect(reloadedMeituan?.protocolSchema).toBeDefined();
