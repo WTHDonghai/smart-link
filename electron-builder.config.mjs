@@ -8,6 +8,7 @@ export default {
   files: [
     'dist/**/*',
     'dist-electron/**/*',
+    '.env.production',
     'package.json',
   ],
   afterPack: 'scripts/prepareDesktopUpdateMetadata.mjs',
