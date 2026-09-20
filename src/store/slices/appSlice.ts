@@ -13,7 +13,7 @@ export interface AppState {
     visible: boolean;
     title: string;
     description?: string;
-    type?: 'success' | 'info' | 'error';
+    type?: 'success' | 'info' | 'warning' | 'error';
   } | null;
 }
 
@@ -57,7 +57,7 @@ export const appSlice = createSlice({
       state.isUpdating = false;
       state.updateProgress = 0;
     },
-    showToast: (state, action: PayloadAction<{ title: string; description?: string; type?: 'success' | 'info' | 'error' }>) => {
+    showToast: (state, action: PayloadAction<{ title: string; description?: string; type?: 'success' | 'info' | 'warning' | 'error' }>) => {
       state.toast = { visible: true, ...action.payload };
     },
     clearToast: (state) => {

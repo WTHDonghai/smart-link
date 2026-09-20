@@ -176,7 +176,7 @@ export async function updateVisualTrackerStatus(
   type: TrackerStatusType = 'info'
 ): Promise<void> {
   try {
-    if (page.isClosed()) return;
+    if (page.isClosed?.()) return;
     await page.evaluate(
       ({ text, type }) => {
         const tracker = (window as unknown as { __SMARTLINK_TRACKER__?: { setStatus: (t: string, s: string) => void } }).__SMARTLINK_TRACKER__;
@@ -194,7 +194,7 @@ export async function updateVisualTrackerStatus(
  */
 export async function visualMoveMouse(page: Page, x: number, y: number): Promise<void> {
   try {
-    if (page.isClosed()) return;
+    if (page.isClosed?.()) return;
     await page.evaluate(
       ({ x, y }) => {
         const tracker = (window as unknown as { __SMARTLINK_TRACKER__?: { setCursor: (x: number, y: number, c?: boolean) => void } }).__SMARTLINK_TRACKER__;
@@ -217,15 +217,15 @@ export async function visualClickLocator(
   actionText?: string
 ): Promise<void> {
   try {
-    if (page.isClosed()) return;
+    if (page.isClosed?.()) return;
 
     if (actionText) {
       await updateVisualTrackerStatus(page, `🖱️ ${actionText}`, 'action');
     }
 
     // 确保元素在视口内
-    await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-    const box = await locator.boundingBox();
+    await locator.scrollIntoViewIfNeeded?.({ timeout: 3000 }).catch(() => {});
+    const box = typeof locator.boundingBox === 'function' ? await locator.boundingBox().catch(() => null) : null;
 
     if (box) {
       const targetX = Math.round(box.x + box.width / 2);
@@ -291,7 +291,7 @@ export async function visualScroll(
   actionText?: string
 ): Promise<void> {
   try {
-    if (page.isClosed()) return;
+    if (page.isClosed?.()) return;
     if (actionText) {
       await updateVisualTrackerStatus(page, `📜 ${actionText}`, 'action');
     }

@@ -740,7 +740,11 @@ export class DutyOrchestrationEngine {
           result: execRes.result,
           errorCode: execRes.errorCode || (isSuccess ? undefined : 'TASK_EXECUTION_FAILED'),
           errorMessage: execRes.errorMessage,
-          retryable: isSuccess ? undefined : (isRiskIntercepted ? false : true),
+          retryable: isSuccess
+            ? undefined
+            : (typeof execRes.retryable === 'boolean'
+                ? execRes.retryable
+                : (isRiskIntercepted ? false : true)),
         });
 
         if (isRiskIntercepted) {

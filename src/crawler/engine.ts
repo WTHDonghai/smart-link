@@ -1,7 +1,7 @@
 import type { HotelCrawlRequest, HotelCrawlResult, CollectorLogPayload } from './types';
 import { PROCESS_ENV_KEYS } from '../types/env';
 import { hotelCollectorRegistry } from './registry';
-import { createPersistentBrowserSession, type BrowserSession } from './browserManager';
+import { createPersistentBrowserSession } from './browserManager';
 
 export class HotelCollectionEngine {
   private activeChannelJobs = new Set<string>();
@@ -56,7 +56,6 @@ export class HotelCollectionEngine {
       message: `[CrawlerEngine] 采集目标地址: ${targetUrl}`,
     });
 
-    let session: BrowserSession | undefined;
     try {
       const isHeadless = request.headless ?? (process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true');
       log({
@@ -64,7 +63,7 @@ export class HotelCollectionEngine {
         message: `[CrawlerEngine] 唤起${isHeadless ? '后台无头' : '可视化前台'}浏览器窗口，启动自动化操作流程...`,
       });
 
-      session = await createPersistentBrowserSession({
+      const session = await createPersistentBrowserSession({
         channelCode: code,
         headless: request.headless,
       });
@@ -133,13 +132,6 @@ export class HotelCollectionEngine {
       };
     } finally {
       this.activeChannelJobs.delete(code);
-      if (session) {
-        log({
-          level: 'PLAYWRIGHT',
-          message: '[CrawlerEngine] 释放浏览器上下文与会话资源。',
-        });
-        await session.close();
-      }
     }
   }
 }

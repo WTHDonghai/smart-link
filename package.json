@@ -15,6 +15,8 @@
     "lint:lsp": "node .agents/skills/ts-lsp-diagnostics/scripts/lsp_diagnostics.cjs",
     "crawl:hotels": "vite-node src/crawler/cli.ts",
     "crawl:hotels:mock": "vite-node --mode mock src/crawler/cli.ts",
+    "duty:refresh-list": "vite-node src/crawler/duty/refreshListCli.ts --wait-manual-close",
+    "duty:refresh-list:mock": "vite-node --mode mock src/crawler/duty/refreshListCli.ts",
     "profile:sync": "vite-node src/crawler/syncCli.ts",
     "test": "vitest run"
   },

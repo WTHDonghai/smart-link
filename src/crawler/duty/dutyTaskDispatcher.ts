@@ -97,10 +97,13 @@ export async function dispatchDutyTask(
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const customCode = (err as { errorCode?: string })?.errorCode;
+        const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {
           status: 'FAILED',
-          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'COLLECT_FAILED',
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'COLLECT_FAILED'),
           errorMessage: errMsg,
+          retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
         };
       }
     }
@@ -115,17 +118,20 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 1. 路由至对应渠道专属页面操作：点击打开详情弹窗并抓取结构化字段
+      // 1. 路由至对应渠道专属页面操作：点击打开详情卡片并抓取结构化字段
       let detail: ExtractedOrderDetail;
       try {
         detail = await runner.inspectOrderDetail(otaOrderId);
       } catch (inspectErr) {
         const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
         const isRisk = isRiskControlError(inspectErr);
+        const customCode = (inspectErr as { errorCode?: string })?.errorCode;
+        const customRetryable = (inspectErr as { retryable?: boolean })?.retryable;
         return {
           status: 'FAILED',
-          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'ORDER_DETAIL_FETCH_FAILED',
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'ORDER_DETAIL_FETCH_FAILED'),
           errorMessage: errMsg,
+          retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
         };
       }
 
@@ -135,6 +141,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_INVALID',
           errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
+          retryable: false,
         };
       }
 
@@ -183,11 +190,11 @@ export async function dispatchDutyTask(
           details: `PMS单号: ${importRes.pmsOrderId || '-'} | 确认号: ${importRes.confirmationNo || '-'} | 批次: ${importRes.batchId || '-'} | 耗时: ${importDurationMs}ms`,
         });
 
-        // 8. 调度渠道关闭详情弹窗以保持页面整洁就绪
+        // 8. 调度渠道收起详情以保持页面整洁就绪
         try {
           await runner.closeOrderDetail?.();
         } catch {
-          // 容错关闭动作
+          // 容错收起动作
         }
 
         return {
@@ -203,6 +210,8 @@ export async function dispatchDutyTask(
       } catch (importErr) {
         const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
         const isRisk = isRiskControlError(importErr);
+        const customCode = (importErr as { errorCode?: string })?.errorCode;
+        const customRetryable = (importErr as { retryable?: boolean })?.retryable;
 
         taskLogger.log({
           level: 'ERROR',
@@ -219,8 +228,9 @@ export async function dispatchDutyTask(
 
         return {
           status: 'FAILED',
-          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'IMPORT_FAILED',
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'IMPORT_FAILED'),
           errorMessage: errMsg,
+          retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
         };
       }
     }
@@ -234,6 +244,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'CONFIRM_NO_MISSING',
           errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的确认号 (confirmNo)',
+          retryable: false,
         };
       }
       if (!otaOrderId) {
@@ -241,6 +252,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'ORDER_ID_MISSING',
           errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的订单号 (otaOrderId)',
+          retryable: false,
         };
       }
       if (typeof runner.confirmImport !== 'function') {
@@ -248,6 +260,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'METHOD_NOT_IMPLEMENTED',
           errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmImport 方法`,
+          retryable: false,
         };
       }
 
@@ -263,10 +276,13 @@ export async function dispatchDutyTask(
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const customCode = (err as { errorCode?: string })?.errorCode;
+        const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {
           status: 'FAILED',
-          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'CONFIRM_IMPORT_FAILED',
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'CONFIRM_IMPORT_FAILED'),
           errorMessage: errMsg,
+          retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
         };
       }
     }
@@ -278,6 +294,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'ORDER_ID_MISSING',
           errorMessage: 'OTA_CONFIRM_CANCEL 任务缺失有效的订单号 (otaOrderId)',
+          retryable: false,
         };
       }
       if (typeof runner.confirmCancel !== 'function') {
@@ -285,6 +302,7 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'METHOD_NOT_IMPLEMENTED',
           errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmCancel 方法`,
+          retryable: false,
         };
       }
       try {
@@ -298,10 +316,13 @@ export async function dispatchDutyTask(
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const customCode = (err as { errorCode?: string })?.errorCode;
+        const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {
           status: 'FAILED',
-          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : 'CONFIRM_CANCEL_FAILED',
+          errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'CONFIRM_CANCEL_FAILED'),
           errorMessage: errMsg,
+          retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
         };
       }
     }

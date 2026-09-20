@@ -6,7 +6,7 @@
 import { getAppEnv } from './env';
 import { APP_ENV_KEYS, type AppEnvKey } from '../types/env';
 
-export const OTA_ENV_KEY_MAP: Record<string, AppEnvKey> = {
+export const OTA_CATALOG_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   MEITUAN: APP_ENV_KEYS.otaCatalogMeituan,
   MEITUAN_BIZ: APP_ENV_KEYS.otaCatalogMeituanBiz,
   DOUYIN: APP_ENV_KEYS.otaCatalogDouyin,
@@ -49,7 +49,7 @@ const OTA_URL_ERROR_CONTEXT: Record<OtaUrlType, OtaUrlErrorContext> = {
 };
 
 function getOtaEnvKeyMap(urlType: OtaUrlType): Record<string, AppEnvKey> {
-  return urlType === 'catalog' ? OTA_ENV_KEY_MAP : OTA_ORDER_ENV_KEY_MAP;
+  return urlType === 'catalog' ? OTA_CATALOG_ENV_KEY_MAP : OTA_ORDER_ENV_KEY_MAP;
 }
 
 function resolveOtaUrl(channelCode: string, urlType: OtaUrlType): string {

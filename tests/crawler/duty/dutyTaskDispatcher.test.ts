@@ -735,5 +735,48 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         })
       );
     });
+
+    it('should propagate custom errorCode and retryable: false from runner error in OTA_IMPORT_ORDER', async () => {
+      const customErr = new Error('列表中未找到美团订单卡片');
+      Object.assign(customErr, { errorCode: 'ORDER_CARD_NOT_FOUND', retryable: false });
+      runner.inspectOrderDetail = vi.fn().mockRejectedValue(customErr);
+
+      const task: DutyClaimedTask = {
+        id: 'task-imp-custom-err',
+        businessId: 'MT-404',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({ otaOrderId: 'MT-404' })).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('ORDER_CARD_NOT_FOUND');
+      expect(result.retryable).toBe(false);
+      expect(result.errorMessage).toContain('列表中未找到美团订单卡片');
+    });
+
+    it('should propagate custom errorCode and retryable: false in OTA_CONFIRM_IMPORT', async () => {
+      const customErr = new Error('输入框已存在不同确认号');
+      Object.assign(customErr, { errorCode: 'CONFIRM_INPUT_ALREADY_FILLED', retryable: false });
+      runner.confirmImport = vi.fn().mockRejectedValue(customErr);
+
+      const task: DutyClaimedTask = {
+        id: 'task-conf-conflict',
+        businessId: 'MT-888',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({ confirmNo: 'NEW-CONF-123', otaOrderId: 'MT-888' })).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('CONFIRM_INPUT_ALREADY_FILLED');
+      expect(result.retryable).toBe(false);
+    });
   });
 });

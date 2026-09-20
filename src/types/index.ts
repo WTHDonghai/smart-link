@@ -441,6 +441,8 @@ export interface ChannelDutyInfo {
   status: ChannelDutyStatus;
   lastStartedAt?: number;
   error?: string;
+  manualVerificationRequired?: boolean;
+  manualVerificationReason?: string;
 }
 
 /**

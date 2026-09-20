@@ -253,11 +253,33 @@ export const toggleChannelDutyThunk = createAsyncThunk(
  */
 export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
-  async (_, { dispatch }) => {
+  async (_, { getState, dispatch }) => {
     const res = await queryDutyStatus();
     if (res.logs && res.logs.length > 0) {
       dispatch(addLogs(res.logs));
     }
+
+    // 边缘触发风控告警 Toast：仅在状态由非 DEGRADED 跃迁至 DEGRADED 时触发单次提示
+    const state = getState() as { orderGuardian: OrderGuardianState };
+    const prevChannels = state.orderGuardian.channelDuty;
+    for (const [code, nextInfo] of Object.entries(res.channels)) {
+      const prevStatus = prevChannels[code]?.status;
+      const nextStatus = nextInfo.status;
+      if (
+        prevStatus !== 'DEGRADED' &&
+        nextStatus === 'DEGRADED' &&
+        nextInfo.manualVerificationRequired
+      ) {
+        dispatch(
+          showToast({
+            type: 'warning',
+            title: '需要人工处理',
+            description: `${code === 'MEITUAN' ? '美团' : code}后台出现安全验证，请在浏览器窗口中完成验证后再继续`,
+          })
+        );
+      }
+    }
+
     return res;
   }
 );

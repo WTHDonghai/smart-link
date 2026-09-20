@@ -5,6 +5,7 @@ export interface DutyTaskExecutionResult {
   result?: Record<string, unknown>;
   errorCode?: string;
   errorMessage?: string;
+  retryable?: boolean;
 }
 
 export interface DutyUnhandledOrderSummary {

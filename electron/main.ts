@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
-import { syncChromeProfile } from '../src/crawler/profileSync';
+import { syncChromeProfile, syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
@@ -197,13 +197,13 @@ export function registerCrawlerIpcHandlers(): void {
   );
 
   // [TODO]: 需要移除，同步profile 只是用于开发需要
-  // 2. Profile 本地登录态同步
+  // 2. Profile 本地登录态同步 (开发阶段：CDP 调试端口精准同步)
   ipcMain.handle(
     'crawler:sync-profile',
     async (_event, channelCode?: string) => {
       try {
         const code = (channelCode || 'MEITUAN').trim().toUpperCase();
-        const result = syncChromeProfile({ channelCode: code });
+        const result = await syncChromeSessionViaCDP({ channelCode: code });
         return result;
       } catch (error) {
         const code = (channelCode || 'MEITUAN').trim().toUpperCase();

@@ -169,8 +169,8 @@ describe('HotelCollectionEngine 渠道并发互斥与执行保护', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('网络请求严重超时');
 
-    // 锁必须已从 Set 中删除
+    // 锁必须已从 Set 中删除，且保持渠道会话与 Tab 存活供后续任务复用，不误杀关闭
     expect(engine.isChannelActive('CHANNEL_FAIL')).toBe(false);
-    expect(mockSession.close).toHaveBeenCalledTimes(1);
+    expect(mockSession.close).not.toHaveBeenCalled();
   });
 });
