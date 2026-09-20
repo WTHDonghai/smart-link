@@ -1212,16 +1212,33 @@ describe('meituanDutyRunner', () => {
         scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       };
 
+      const inputLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        fill: vi.fn().mockResolvedValue(undefined),
+        inputValue: vi.fn().mockResolvedValue('CFM-12345'),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const confirmBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickSpy,
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
       const cardLocator = {
         isVisible: vi.fn().mockResolvedValue(true),
         scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
         click: clickSpy,
-        locator: () => ({
-          first: () => ({
-            isVisible: vi.fn().mockResolvedValue(false),
-            scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-            click: clickSpy,
-          }),
+        locator: (selector: string) => ({
+          first: () => {
+            if (selector.includes('input')) return inputLocator;
+            if (selector.includes('确认接受')) return confirmBtnLocator;
+            return {
+              isVisible: vi.fn().mockResolvedValue(false),
+              scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+              click: clickSpy,
+            };
+          },
         }),
       };
 
@@ -1237,7 +1254,10 @@ describe('meituanDutyRunner', () => {
                   return acceptBtnLocator;
                 }
                 if (selector.includes('input')) {
-                  return { isVisible: vi.fn().mockResolvedValue(false) };
+                  return inputLocator;
+                }
+                if (selector.includes('确认接受')) {
+                  return confirmBtnLocator;
                 }
                 return cardLocator;
               },
