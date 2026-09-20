@@ -1259,6 +1259,209 @@ describe('meituanDutyRunner', () => {
       expect(acceptSelector).toContain('.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary');
       expect(acceptSelector).not.toEqual('button:has-text("接受")');
     });
+
+    it('confirmImport should follow full modal flow: click accept, fill confirmNo in modal, and click 确认接受 in modal footer', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const clickedLabels: string[] = [];
+      let filledValue = '';
+
+      const acceptBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedLabels.push('accept-btn');
+        }),
+      };
+
+      const modalInput = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        inputValue: vi.fn().mockImplementation(async () => filledValue),
+        fill: vi.fn().mockImplementation(async (val: string) => {
+          filledValue = val;
+        }),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalConfirmBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedLabels.push('modal-confirm-btn');
+        }),
+      };
+
+      const modalDialog = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('确认接受')) return modalConfirmBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('确认接受')) return modalConfirmBtn;
+            if (sel.includes('button') || sel.includes('op-btn')) return acceptBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return modalInput;
+              if (selector.includes('确认接受')) return modalConfirmBtn;
+              if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap') || selector.includes('button')) return acceptBtn;
+              if (selector.includes('.mtd-modal') || selector.includes('.modal-container')) return modalDialog;
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200, url: () => 'https://eb.meituan.com/api/order/confirm' }),
+        },
+      };
+
+      await runner.confirmImport('CFM-REAL-888', 'MT-ORD-REAL');
+      expect(clickedLabels).toEqual(['accept-btn', 'modal-confirm-btn']);
+      expect(filledValue).toBe('CFM-REAL-888');
+    });
+
+    it('confirmImport should fail fast with CONFIRM_INPUT_ALREADY_FILLED when modal input contains different confirm number', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+
+      const acceptBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalInput = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        inputValue: vi.fn().mockResolvedValue('CFM-EXISTING-999'),
+        fill: vi.fn(),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalDialog = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('button') || sel.includes('op-btn')) return acceptBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return modalInput;
+              if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap') || selector.includes('button')) return acceptBtn;
+              if (selector.includes('.mtd-modal') || selector.includes('.modal-container')) return modalDialog;
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200 }),
+        },
+      };
+
+      await expect(runner.confirmImport('CFM-NEW-111', 'MT-ORD-CONFLICT'))
+        .rejects
+        .toThrow('已存在其他确认号「CFM-EXISTING-999」');
+    });
+
+    it('confirmImport should fail fast with CONFIRM_VALUE_MISMATCH when filled value does not match read-back', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+
+      const acceptBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      let currentVal = '';
+      const modalInput = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        inputValue: vi.fn().mockImplementation(async () => currentVal),
+        fill: vi.fn().mockImplementation(async () => {
+          currentVal = 'CFM-CORRUPTED'; // Simulate UI read-back mismatch
+        }),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalDialog = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('button') || sel.includes('op-btn')) return acceptBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return modalInput;
+              if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap') || selector.includes('button')) return acceptBtn;
+              if (selector.includes('.mtd-modal') || selector.includes('.modal-container')) return modalDialog;
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200 }),
+        },
+      };
+
+      await expect(runner.confirmImport('CFM-TARGET-123', 'MT-ORD-MISMATCH'))
+        .rejects
+        .toThrow('确认号填入后读回校验不一致');
+    });
   });
 
   describe('MeituanDutyRunner executeTask delegation via dispatchDutyTask', () => {

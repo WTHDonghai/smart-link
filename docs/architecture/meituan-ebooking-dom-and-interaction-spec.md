@@ -213,12 +213,62 @@ const acceptBtn = scope.locator(
 ).first();
 ```
 
-### 6.3 确认号输入框的真实情况与防串单
-- **初始态**：美团待处理订单通常**没有直接暴露的确认号输入框**，核心接单操作即为点击「接受」；
-- **若存在输入框**（特定酒店开启了 PMS 房号/确认号联动）：
-  1. 必须读取现有值比对：若输入框已存在不同的非空确认号，立即抛出 `CONFIRM_INPUT_ALREADY_FILLED` 并阻断（`retryable: false`），严禁盲目覆盖引发串单；
-  2. 填入后必须通过 `inputValue()` 执行二次读回校验（Fail-Fast: `CONFIRM_VALUE_MISMATCH`）。
-- **二次确认弹窗**：点击「接受」后，若出现 MTD 确认对话框（`.mtd-modal .mtd-btn.mtd-btn-primary:has-text("确定")`），必须自动予以确认完成操作闭环。
+### 6.3 确认号回填模态框（Modal Dialog）真实 DOM 与四步交互规范
+在美团商家后台（E-booking）中，待确认订单的确认号并非直接展示在卡片或详情表面，而是采用**点击「接受」触发「确认号回填 / 确认接受」模态弹窗**的交互设计：
+
+#### 模态弹窗与输入控件真实 DOM 结构
+```html
+<div class="mtd-modal-wrapper mtd-modal-center">
+  <div class="mtd-modal">
+    <span class="mtd-modal-close"><i class="mtdicon mtdicon-close-thick"></i></span>
+    <div class="mtd-modal-content-wrapper">
+      <div class="mtd-modal-content">
+        <div class="modal-container">
+          <div class="modal-container-content">
+            <!-- 酒店确认号表单项 -->
+            <div style="margin-left: 18px;">
+              <span>酒店确认号：</span>
+              <div data-v-3fd065c0="" class="mtd-input-wrapper">
+                <input type="text" placeholder="非必填" class="mtd-input">
+              </div>
+              <span class="text-accent">多确认号，用“,”隔开</span>
+            </div>
+            <!-- 酒店房间号表单项（若有） -->
+            <div style="margin-top: 10px; margin-left: 18px;">
+              <span>酒店房间号：</span>
+              <div class="mtd-input-wrapper">
+                <input type="text" placeholder="非必填" class="mtd-input">
+              </div>
+              <span class="text-accent">多房间号，用“,”隔开</span>
+            </div>
+          </div>
+          <!-- 底部操作按钮组 -->
+          <div class="modal-container-footer">
+            <div class="btn-group">
+              <button type="button" class="mtd-btn btn-item"><span>取消</span></button>
+              <button data-v-3fd065c0="" type="button" class="mtd-btn btn-item mtd-btn-primary">
+                <span> 确认接受 </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+#### 四步标准化交互时序
+1. **激活详情面板**：定位订单卡片，断言右侧 `.detail-header` 已处于该订单上下文；
+2. **触发模态弹窗**：点击详情头部主要操作按钮 `button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受")`；
+3. **安全回填与校验**：
+   - 定位模态弹窗内确认号输入框：`.modal-container div:has(span:has-text("酒店确认号")) input.mtd-input, input.mtd-input[placeholder*="非必填"]`；
+   - **防串单校验**：读取现有值，若已存在其他非空确认号立即阻断报错（`CONFIRM_INPUT_ALREADY_FILLED`）；
+   - **读回二次校验**：写入后必须 `inputValue()` 读回比对，不一致时立即阻断（`CONFIRM_VALUE_MISMATCH`）；
+4. **监听网络并提交确认**：
+   - 挂载 `/confirm|order|accept|operate/` 网络响应拦截器；
+   - 点击弹窗底部提交按钮：`.modal-container-footer .btn-group button.mtd-btn.btn-item.mtd-btn-primary:has-text("确认接受")`；
+   - 响应完成并执行拟真延时，完成接单闭环。
 
 ---
 
