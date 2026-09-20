@@ -1182,6 +1182,63 @@ describe('meituanDutyRunner', () => {
       await expect(runner.confirmImport('CFM-12345', 'MT-ORD-99')).resolves.toBeUndefined();
       await expect(runner.confirmCancel('MT-ORD-99')).resolves.toBeUndefined();
     });
+
+    it('confirmImport should target accept button using DOM structure and CSS classes rather than naive text matching', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const clickedSelectors: string[] = [];
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+
+      const acceptBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickSpy,
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+        locator: () => ({
+          first: () => ({
+            isVisible: vi.fn().mockResolvedValue(false),
+            scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+            click: clickSpy,
+          }),
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => {
+            clickedSelectors.push(selector);
+            return {
+              first: () => {
+                if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap .btn-container')) {
+                  return acceptBtnLocator;
+                }
+                if (selector.includes('input')) {
+                  return { isVisible: vi.fn().mockResolvedValue(false) };
+                }
+                return cardLocator;
+              },
+            };
+          },
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200, url: () => 'confirm' }),
+        },
+      };
+
+      await expect(runner.confirmImport('CFM-12345', 'MT-ORD-99')).resolves.toBeUndefined();
+      expect(clickSpy).toHaveBeenCalled();
+
+      // Verify the accept button selector was queried using DOM hierarchy and CSS classes
+      const acceptSelector = clickedSelectors.find(
+        (s) => s.includes('.btn-wrap') && s.includes('button.mtd-btn.op-btn.mtd-btn-primary')
+      );
+      expect(acceptSelector).toBeDefined();
+      expect(acceptSelector).toContain('.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary');
+      expect(acceptSelector).not.toEqual('button:has-text("接受")');
+    });
   });
 
   describe('MeituanDutyRunner executeTask delegation via dispatchDutyTask', () => {

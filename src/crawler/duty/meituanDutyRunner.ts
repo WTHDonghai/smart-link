@@ -930,87 +930,127 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
       // 2. 检查卡片内或右侧详情中的确认号输入框是否可见；若未展开/选定，先点击卡片
       let input = orderCard.locator(
-        'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .mtd-input'
+        'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"]'
       ).first();
 
       if (!await input.isVisible({ timeout: 800 }).catch(() => false)) {
-        await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片触发展开回填表单`);
-        await humanDelay(page, 400, 700);
+        // 检查右侧详情是否已就绪展示该订单；若未展示，点击卡片切换详情
+        const isCurrentDetail = await scope.locator(`.detail-header:has-text("${otaOrderId}")`).first().isVisible({ timeout: 500 }).catch(() => false);
+        if (!isCurrentDetail) {
+          await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片触发展开回填表单`);
+          await humanDelay(page, 400, 700);
+        }
 
         input = orderCard.locator(
-          'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .mtd-input'
+          'input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"]'
         ).first();
       }
 
       // 若在卡片作用域内未找到，在 scope 作用域（右侧详情面板等）中寻找
-      const targetInput = (await input.isVisible({ timeout: 1500 }).catch(() => false))
+      const targetInput = (await input.isVisible({ timeout: 800 }).catch(() => false))
         ? input
-        : scope.locator('input[name="confirmNo"], input[placeholder*="确认号"], input[placeholder*="房号"], [data-test="confirm-no-input"], .confirm-input input').first();
+        : scope.locator('.detail-container .confirm-input input, .detail-container input[placeholder*="确认号"], .detail-container input[name="confirmNo"], [data-test="confirm-no-input"]').first();
 
-      if (!await targetInput.isVisible({ timeout: 1500 }).catch(() => false)) {
-        if (await checkMeituanPageRisk(page)) {
-          await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+      const isInputVisible = await targetInput.isVisible({ timeout: 800 }).catch(() => false);
+
+      // 3. 若存在确认号输入框，执行防串单校验与读回校验
+      if (isInputVisible) {
+        const currentValue = (await targetInput.inputValue().catch(() => '')).trim();
+        if (currentValue && currentValue !== cleanConfirmNo) {
           throw new DutyExecutionError(
-            '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-            MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
+            `订单「${otaOrderId}」输入框已存在其他确认号「${currentValue}」，系统已停止覆盖以防串单`,
+            MeituanDutyErrorCode.CONFIRM_INPUT_ALREADY_FILLED,
             false
           );
         }
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」未找到确认号输入框`,
-          MeituanDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
-          false
-        );
-      }
 
-      // 3. 防串单校验：读取输入框现有值
-      const currentValue = (await targetInput.inputValue().catch(() => '')).trim();
-      if (currentValue && currentValue !== cleanConfirmNo) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」输入框已存在其他确认号「${currentValue}」，系统已停止覆盖以防串单`,
-          MeituanDutyErrorCode.CONFIRM_INPUT_ALREADY_FILLED,
-          false
-        );
-      }
-
-      // 4. 填入确认号并读回校验
-      if (currentValue !== cleanConfirmNo) {
-        await targetInput.fill(cleanConfirmNo);
-        const readBack = (await targetInput.inputValue().catch(() => '')).trim();
-        if (readBack !== cleanConfirmNo) {
-          throw new DutyExecutionError(
-            `订单「${otaOrderId}」确认号填入后读回校验不一致 (写入: ${cleanConfirmNo}, 读回: ${readBack})`,
-            MeituanDutyErrorCode.CONFIRM_VALUE_MISMATCH,
-            false
-          );
+        if (currentValue !== cleanConfirmNo) {
+          await targetInput.fill(cleanConfirmNo);
+          const readBack = (await targetInput.inputValue().catch(() => '')).trim();
+          if (readBack !== cleanConfirmNo) {
+            throw new DutyExecutionError(
+              `订单「${otaOrderId}」确认号填入后读回校验不一致 (写入: ${cleanConfirmNo}, 读回: ${readBack})`,
+              MeituanDutyErrorCode.CONFIRM_VALUE_MISMATCH,
+              false
+            );
+          }
         }
       }
 
-      // 5. 定位提交按钮并注册网络响应监听
-      const submitBtn = (await orderCard.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first().isVisible().catch(() => false))
-        ? orderCard.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first()
-        : scope.locator('button:has-text("提交确认"), button:has-text("确认接单"), button:has-text("接受预订"), button:has-text("保存"), button:has-text("确认")').first();
+      // 4. 定位「接受」接单操作按钮（严格基于美团详情头部 DOM 结构与 CSS 样式，绝不依赖裸文本匹配，防止误触页面其他同名元素）
+      // 真实 DOM 结构:
+      // <div class="detail-container">
+      //   <div class="detail-header">
+      //     <div class="header-container">
+      //       <div class="order-info-wrap">
+      //         <span>订单号：5035036069263942766</span>
+      //       </div>
+      //       <div class="btn-wrap">
+      //         <div class="btn-container">
+      //           <button type="button" class="mtd-btn op-btn mtd-btn-default"><span> 拒绝 </span></button>
+      //           <button type="button" class="mtd-btn op-btn mtd-btn-primary"><span> 接受 </span></button>
+      //         </div>
+      //       </div>
+      //     </div>
+      //   </div>
+      // </div>
+      const acceptBtn = scope.locator(
+        '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary, ' +
+        '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary, ' +
+        '.header-container .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary, ' +
+        '.detail-container button.mtd-btn.op-btn.mtd-btn-primary, ' +
+        '.btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary, ' +
+        '.detail-header .btn-container button.mtd-btn.mtd-btn-primary, ' +
+        '.detail-container .btn-wrap button.mtd-btn-primary'
+      ).first();
+
+      const submitBtn = (await acceptBtn.isVisible({ timeout: 1500 }).catch(() => false))
+        ? acceptBtn
+        : (await orderCard.locator('button.mtd-btn.op-btn.mtd-btn-primary, button.mtd-btn-primary').first().isVisible({ timeout: 500 }).catch(() => false))
+          ? orderCard.locator('button.mtd-btn.op-btn.mtd-btn-primary, button.mtd-btn-primary').first()
+          : scope.locator(
+              '.mtd-modal .mtd-btn.mtd-btn-primary, ' +
+              '.mtd-confirm .mtd-btn.mtd-btn-primary, ' +
+              '[role="dialog"] button.mtd-btn.mtd-btn-primary'
+            ).first();
 
       if (!await submitBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
         throw new DutyExecutionError(
-          `订单「${otaOrderId}」未找到提交/确认按钮`,
+          `订单「${otaOrderId}」未找到「接受」接单操作按钮`,
           MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
           false
         );
       }
 
-      // 注册确认接口网络监听（若支持）
+      // 5. 注册确认接口网络监听并点击「接受」按钮
       const confirmResponsePromise = typeof page.waitForResponse === 'function'
         ? page
             .waitForResponse(
-              (res) => res.status() === 200 && (res.url().includes('confirm') || res.url().includes('order') || res.url().includes('accept')),
+              (res) =>
+                res.status() === 200 &&
+                (res.url().includes('confirm') ||
+                 res.url().includes('order') ||
+                 res.url().includes('accept') ||
+                 res.url().includes('operate')),
               { timeout: 6000 }
             )
             .then(() => true)
             .catch(() => true) // 容错非标准响应
         : Promise.resolve(true);
 
-      await visualClickLocator(page, submitBtn, `提交订单「${otaOrderId}」确认号`);
+      await visualClickLocator(page, submitBtn, `点击订单「${otaOrderId}」接受接单操作按钮`);
+
+      // 6. 检查是否存在二次确认框（如 MtdModal 确认）
+      const confirmDialogBtn = scope.locator(
+        '.mtd-modal .mtd-btn.mtd-btn-primary:has-text("确定"), ' +
+        '.mtd-modal .mtd-btn.mtd-btn-primary:has-text("确认"), ' +
+        '.mtd-confirm .mtd-btn.mtd-btn-primary:has-text("确定"), ' +
+        '.mtd-confirm .mtd-btn.mtd-btn-primary:has-text("确认")'
+      ).first();
+      if (await confirmDialogBtn.isVisible({ timeout: 800 }).catch(() => false)) {
+        await visualClickLocator(page, confirmDialogBtn, `确认接受订单「${otaOrderId}」`);
+      }
+
       await confirmResponsePromise;
       await humanDelay(page, 400, 600);
     });
@@ -1046,7 +1086,12 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       await updateVisualTrackerStatus(page, `🛑 在美团后台确认取消订单「${otaOrderId}」（我已知晓）...`, 'action');
       try {
         const scope = this.getOrderScope(page);
-        const ackBtn = scope.locator('button:has-text("我已知晓")').first();
+        const ackBtn = scope.locator(
+          '.mtd-modal .mtd-btn.mtd-btn-primary:has-text("我已知晓"), ' +
+          '.mtd-confirm .mtd-btn.mtd-btn-primary:has-text("我已知晓"), ' +
+          '.detail-container button.mtd-btn:has-text("我已知晓"), ' +
+          'button:has-text("我已知晓")'
+        ).first();
         if (await ackBtn.isVisible({ timeout: 2000 })) {
           await visualClickLocator(page, ackBtn, '点击我已知晓');
         }
