@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from './meituanDutyRunner';
+import { parseMeituanOrderDetailResponse } from './meituanOrderParsers';
 import { PROCESS_ENV_KEYS } from '../../types/env';
 
 function parseArgs(argv: string[]) {
@@ -60,7 +61,11 @@ async function main() {
 
     try {
       console.log(`[DutyInspectDetail:CLI] 正在执行 inspectOrderDetail(otaOrderId: 「${targetOrderId}」)...`);
-      const detail = await runner.inspectOrderDetail(targetOrderId);
+      const rawDetail = await runner.inspectOrderDetail(targetOrderId);
+      const detail = parseMeituanOrderDetailResponse(rawDetail, targetOrderId);
+      if (!detail) {
+        throw new Error(`美团订单「${targetOrderId}」详情原始报文解析失败`);
+      }
       console.log('\n================ 美团订单详情提取结果 ================\n');
       console.log(`  OTA 渠道:      ${detail.otaChannel}`);
       console.log(`  美团订单号:    ${detail.otaOrderId}`);

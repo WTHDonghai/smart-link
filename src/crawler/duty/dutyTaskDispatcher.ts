@@ -13,6 +13,7 @@ import {
   renderRemarkFromProtocol,
   buildImportPayloadFromProtocol,
 } from '../../utils/template/orderPayloadTransformer';
+import { parseMeituanOrderDetailResponse } from './meituanOrderParsers';
 import { logger } from '../../services/logger';
 
 /**
@@ -22,8 +23,48 @@ import { logger } from '../../services/logger';
  * 2. OTA_IMPORT_ORDER: 解析任务入参 -> 路由至渠道执行页面查看详情并抓取字段 -> Fail-Fast 严格校验 -> 统一调用中台 importToolkitOrder -> 调度关闭详情；
  * 3. OTA_CONFIRM_IMPORT: 解析确认号 -> 路由至渠道执行页面回填；
  * 4. OTA_CONFIRM_CANCEL: 解析单号 -> 路由至渠道执行取消确认；
- * 彻底消除各渠道对内存缓存的读取，杜绝任何假数据兜底！
+/**
+ * 渠道详情报文解析适配器：将渠道页面抓取的原始报文（已回写明文敏感数据）转换为程序内部统一的 ExtractedOrderDetail
  */
+function parseOrderDetailFromRaw(
+  channelCode: string,
+  rawOrExtracted: Record<string, unknown>,
+  otaOrderId: string
+): ExtractedOrderDetail | null {
+  // 若已是完整结构化详情（如测试中的 MockRunner 或兼容适配层）
+  if (
+    typeof rawOrExtracted.guestName === 'string' &&
+    typeof rawOrExtracted.roomTypeName === 'string' &&
+    typeof rawOrExtracted.arrival === 'string' &&
+    typeof rawOrExtracted.departure === 'string'
+  ) {
+    return rawOrExtracted as unknown as ExtractedOrderDetail;
+  }
+
+  if (channelCode === 'MEITUAN') {
+    const parsed = parseMeituanOrderDetailResponse(rawOrExtracted, otaOrderId);
+    if (!parsed) return null;
+    return {
+      otaOrderId: parsed.otaOrderId || otaOrderId,
+      otaChannel: channelCode,
+      unitId: parsed.unitId,
+      unitName: parsed.unitName,
+      guestName: parsed.guestName || '',
+      guestMobile: parsed.guestMobile || '',
+      roomTypeName: parsed.roomTypeName || '',
+      ratePlanName: parsed.ratePlanName || '',
+      arrival: parsed.arrival || '',
+      departure: parsed.departure || '',
+      nights: parsed.nights || 1,
+      quantity: parsed.quantity || 1,
+      totalPrice: parsed.totalPrice ?? 0,
+      raw: rawOrExtracted,
+    };
+  }
+
+  return rawOrExtracted as unknown as ExtractedOrderDetail;
+}
+
 export async function dispatchDutyTask(
   task: DutyClaimedTask,
   runner: ChannelDutyRunner,
@@ -118,10 +159,10 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 1. 路由至对应渠道专属页面操作：点击打开详情卡片并抓取结构化字段
-      let detail: ExtractedOrderDetail;
+      // 1. 路由至对应渠道专属页面操作：点击打开详情卡片并抓取原始数据（已回写明文敏感数据）
+      let rawDetail: Record<string, unknown>;
       try {
-        detail = await runner.inspectOrderDetail(otaOrderId);
+        rawDetail = await runner.inspectOrderDetail(otaOrderId);
       } catch (inspectErr) {
         const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
         const isRisk = isRiskControlError(inspectErr);
@@ -135,7 +176,18 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 2. 顶层 Fail-Fast 严格校验：确保关键字段非空，绝不兜底假数据
+      // 2. 交由渠道解析器对原始报文统一进行结构化解析
+      const detail = parseOrderDetailFromRaw(runner.channelCode, rawDetail, otaOrderId);
+      if (!detail) {
+        return {
+          status: 'FAILED',
+          errorCode: 'ORDER_DETAIL_PARSE_FAILED',
+          errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情原始报文解析失败`,
+          retryable: false,
+        };
+      }
+
+      // 3. 顶层 Fail-Fast 严格校验：确保关键字段非空，绝不兜底假数据
       if (!detail.guestName || !detail.roomTypeName || !detail.arrival || !detail.departure) {
         return {
           status: 'FAILED',

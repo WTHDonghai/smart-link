@@ -61,8 +61,8 @@ export interface ChannelDutyRunner {
   /** 页面操作：刷新订单列表并获取当前待处理订单概要 */
   collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]>;
 
-  /** 页面操作：在当前渠道后台点击打开订单详情并抓取结构化字段（绝无虚构默认值） */
-  inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail>;
+  /** 页面操作：在当前渠道后台点击打开订单详情并抓取原始数据（回写明文客人姓名） */
+  inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 
   /** 页面操作：关闭详情视图（弹窗/抽屉）以保持页面就绪 */
   closeOrderDetail?(): Promise<void>;

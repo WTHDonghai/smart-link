@@ -6,7 +6,6 @@ import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
   DutyUnhandledOrderSummary,
-  ExtractedOrderDetail,
 } from './dutyContracts';
 import {
   MeituanDutyErrorCode,
@@ -19,7 +18,6 @@ import {
   isMeituanSensitiveUrl,
   isMeituanRiskControlText,
   parseMeituanOrderListResponse,
-  parseMeituanOrderDetailResponse,
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
 } from './meituanOrderParsers';
@@ -557,11 +555,11 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   /**
-   * 页面操作：在美团后台页面定位订单卡片并内联展开/点击，抓取详情真实字段
+   * 页面操作：在美团后台页面定位订单卡片并内联展开/点击，抓取详情原始数据（回写明文客人姓名）
    * 前置条件：待确认订单列表就绪（通过 refreshOrderList 刷新确保停留在「待确认订单」Tab 且渲染最新 DOM）
-   * 遵循 Fail-Fast 原则：100% 权威网络接口为源，智能跳过电话解密，零 DOM 业务数据拼接！
+   * 遵循 Fail-Fast 原则：100% 权威网络接口为源，智能跳过电话解密，只返回原始数据，零 DOM 业务数据拼接！
    */
-  public async inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail> {
+  public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     const page = this.getActivePage('查看订单详情');
 
     if (await checkMeituanPageRisk(page)) {
@@ -771,34 +769,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           );
         }
 
-        // 7. 将解密敏感信息（明文客人姓名/电话）融合回原始报文，由纯函数解析模块统一解析
+        // 7. 将解密敏感信息（明文客人姓名/电话）融合回原始报文，直接返回原始数据（由解析器统一解析转换）
         const mergedRaw = mergeSensitiveDataIntoRawDetail(rawDetail, capturedRef.sensitive);
-        const parsedDetail = parseMeituanOrderDetailResponse(mergedRaw, otaOrderId);
-
-        if (!parsedDetail) {
-          throw new DutyExecutionError(
-            `美团订单「${otaOrderId}」详情解析失败：未返回有效的订单数据结构`,
-            MeituanDutyErrorCode.ORDER_DETAIL_TIMEOUT,
-            true
-          );
-        }
-
-        return {
-          otaOrderId: parsedDetail.otaOrderId || otaOrderId,
-          otaChannel: this.channelCode,
-          unitId: parsedDetail.unitId,
-          unitName: parsedDetail.unitName,
-          guestName: parsedDetail.guestName || '',
-          guestMobile: parsedDetail.guestMobile || '',
-          roomTypeName: parsedDetail.roomTypeName || '',
-          ratePlanName: parsedDetail.ratePlanName || '',
-          arrival: parsedDetail.arrival || '',
-          departure: parsedDetail.departure || '',
-          nights: parsedDetail.nights || 1,
-          quantity: parsedDetail.quantity || 1,
-          totalPrice: parsedDetail.totalPrice ?? 0,
-          raw: mergedRaw as Record<string, unknown>,
-        };
+        return mergedRaw as Record<string, unknown>;
       } finally {
         if (typeof offFn === 'function') {
           offFn.call(page, 'response', onResponse);

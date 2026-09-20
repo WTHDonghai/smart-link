@@ -45,9 +45,9 @@ class MockDutyRunner implements ChannelDutyRunner {
     this.collectCalls++;
     return this.unhandledOrdersResult;
   }
-  public async inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail> {
+  public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     this.inspectCalls.push(otaOrderId);
-    return this.detailResult;
+    return this.detailResult as unknown as Record<string, unknown>;
   }
   public async closeOrderDetail(): Promise<void> {
     this.closeCalls++;
@@ -203,6 +203,52 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
           },
         ],
       });
+    });
+
+    it('should parse raw Meituan payload using parseMeituanOrderDetailResponse when runner returns raw payload', async () => {
+      runner.channelCode = 'MEITUAN';
+      const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-MEITUAN-200',
+      });
+
+      runner.inspectOrderDetail = vi.fn().mockResolvedValue({
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: 'MT-RAW-12345',
+            poiId: 'POI-MT-1',
+            guestName: '孙悟空',
+            guestMobile: '13800002222',
+            roomName: '至尊套房',
+            checkInDateString: '2026-10-01',
+            checkOutDateString: '2026-10-03',
+            nights: 2,
+            totalFee: 80000,
+          },
+        },
+      });
+
+      const taskPayload = { otaOrderId: 'MT-RAW-12345', unitId: 'POI-MT-1' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-meituan-raw',
+        businessId: 'MT-RAW-12345',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(result.result?.pmsOrderId).toBe('PMS-MEITUAN-200');
+      expect(importSpy).toHaveBeenCalledTimes(1);
+      const calledPayload = importSpy.mock.calls[0][0];
+      expect(calledPayload.orders[0].contact.name).toBe('孙悟空');
+      expect(calledPayload.orders[0].booking.roomType).toBe('至尊套房');
+      expect(calledPayload.orders[0].booking.arrival).toBe('2026-10-01');
+      expect(calledPayload.orders[0].booking.departure).toBe('2026-10-03');
     });
 
     it('should fail fast with ORDER_DETAIL_FETCH_FAILED when runner.inspectOrderDetail throws', async () => {

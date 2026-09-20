@@ -43,7 +43,7 @@ class MockChannelRunner implements ChannelDutyRunner {
     return [];
   }
 
-  public async inspectOrderDetail(otaOrderId: string): Promise<ExtractedOrderDetail> {
+  public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     return {
       otaOrderId,
       otaChannel: this.channelCode,

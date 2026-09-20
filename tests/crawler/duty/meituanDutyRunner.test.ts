@@ -831,16 +831,12 @@ describe('meituanDutyRunner', () => {
         },
       };
 
-      const detail = await runner.inspectOrderDetail('MT-EMPTY-FIELDS');
-      expect(detail.otaOrderId).toBe('MT-EMPTY-FIELDS');
-      expect(detail.guestName).toBe('');
-      expect(detail.roomTypeName).toBe('');
-      expect(detail.arrival).toBe('');
-      expect(detail.departure).toBe('');
-      expect(detail.raw).toBeDefined();
+      const raw = await runner.inspectOrderDetail('MT-EMPTY-FIELDS');
+      expect(raw).toBeDefined();
+      expect((raw.data as Record<string, unknown>).orderId).toBe('MT-EMPTY-FIELDS');
     });
 
-    it('inspectOrderDetail should extract valid fields from network response and return ExtractedOrderDetail', async () => {
+    it('inspectOrderDetail should extract raw response from network and return raw object directly', async () => {
       (runner as unknown as { running: boolean }).running = true;
       const cardLocator = {
         isVisible: vi.fn().mockResolvedValue(true),
@@ -882,18 +878,18 @@ describe('meituanDutyRunner', () => {
         },
       };
 
-      const detail = await runner.inspectOrderDetail('MT-DOM-001');
-      expect(detail.otaOrderId).toBe('MT-DOM-001');
-      expect(detail.otaChannel).toBe('MEITUAN');
-      expect(detail.guestName).toBe('李小龙');
-      expect(detail.guestMobile).toBe('13888889999');
-      expect(detail.roomTypeName).toBe('豪华江景房');
-      expect(detail.ratePlanName).toBe('含早特惠');
-      expect(detail.arrival).toBe('2026-09-20');
-      expect(detail.departure).toBe('2026-09-22');
-      expect(detail.nights).toBe(2);
-      expect(detail.totalPrice).toBe(660);
-      expect(detail.unitName).toBe('江景国际大饭店');
+      const raw = await runner.inspectOrderDetail('MT-DOM-001');
+      const orderData = (raw.data as Record<string, unknown>);
+      expect(orderData.orderId).toBe('MT-DOM-001');
+      expect(orderData.guestName).toBe('李小龙');
+      expect(orderData.guestMobile).toBe('13888889999');
+      expect(orderData.roomTypeName).toBe('豪华江景房');
+      expect(orderData.ratePlanName).toBe('含早特惠');
+      expect(orderData.arrival).toBe('2026-09-20');
+      expect(orderData.departure).toBe('2026-09-22');
+      expect(orderData.nights).toBe(2);
+      expect(orderData.totalPrice).toBe(660);
+      expect(orderData.hotelName).toBe('江景国际大饭店');
     });
 
     it('inspectOrderDetail should trigger refreshOrderList pre-requisite when order card is not initially visible', async () => {
@@ -950,11 +946,12 @@ describe('meituanDutyRunner', () => {
         },
       };
 
-      const detail = await runner.inspectOrderDetail('MT-REFRESH-001');
+      const raw = await runner.inspectOrderDetail('MT-REFRESH-001');
       expect(refreshSpy).toHaveBeenCalledTimes(1);
-      expect(detail.otaOrderId).toBe('MT-REFRESH-001');
-      expect(detail.guestName).toBe('张三');
-      expect(detail.roomTypeName).toBe('标准双人间');
+      const orderData = (raw.data as Record<string, unknown>);
+      expect(orderData.orderId).toBe('MT-REFRESH-001');
+      expect(orderData.guestName).toBe('张三');
+      expect(orderData.roomTypeName).toBe('标准双人间');
     });
 
     it('inspectOrderDetail should prioritize and merge intercepted network detail when available', async () => {
@@ -1003,13 +1000,14 @@ describe('meituanDutyRunner', () => {
         },
       };
 
-      const detail = await runner.inspectOrderDetail('MT-NET-002');
-      expect(detail.otaOrderId).toBe('MT-NET-002');
-      expect(detail.guestName).toBe('周星驰');
-      expect(detail.roomTypeName).toBe('至尊套房');
-      expect(detail.nights).toBe(3);
-      expect(detail.totalPrice).toBe(1500);
-      expect(detail.unitId).toBe('poi-net-002');
+      const raw = await runner.inspectOrderDetail('MT-NET-002');
+      const orderData = (raw.data as Record<string, unknown>);
+      expect(orderData.orderId).toBe('MT-NET-002');
+      expect(orderData.guestName).toBe('周星驰');
+      expect(orderData.roomTypeName).toBe('至尊套房');
+      expect(orderData.nights).toBe(3);
+      expect(orderData.totalFee).toBe(150000);
+      expect(orderData.poiId).toBe('poi-net-002');
     });
 
     it('inspectOrderDetail should intercept real Meituan line net URL /api/v1/ebooking/orders/${orderId} and merge unmasked sensitiveData', async () => {
@@ -1122,19 +1120,15 @@ describe('meituanDutyRunner', () => {
         }
       });
 
-      const detail = await runner.inspectOrderDetail(orderId);
-      expect(detail.otaOrderId).toBe(orderId);
-      expect(detail.arrival).toBe('2026-09-17');
-      expect(detail.departure).toBe('2026-09-18');
-      expect(detail.roomTypeName).toBe('豪华景观大床房');
-      expect(detail.guestName).toBe('李小龙');
-      expect(detail.guestMobile).toBe('13812345678');
-      expect(detail.totalPrice).toBe(298);
-
-      const rawDetailData = ((detail.raw as Record<string, unknown>)?.data as Record<string, unknown>)
-        ?.orderDetail as Record<string, unknown>;
-      expect(rawDetailData?.guestName).toBe('李小龙');
-      expect(rawDetailData?.guestMobile).toBe('13812345678');
+      const raw = await runner.inspectOrderDetail(orderId);
+      const rawOrderDetail = ((raw.data as Record<string, unknown>)?.orderDetail as Record<string, unknown>);
+      expect(rawOrderDetail?.orderId).toBe(orderId);
+      expect(rawOrderDetail?.checkInDate).toBe('2026-09-17');
+      expect(rawOrderDetail?.checkOutDate).toBe('2026-09-18');
+      expect(rawOrderDetail?.roomName).toBe('豪华景观大床房');
+      expect(rawOrderDetail?.guestName).toBe('李小龙');
+      expect(rawOrderDetail?.guestMobile).toBe('13812345678');
+      expect(rawOrderDetail?.totalFee).toBe(29800);
 
       expect(offSpy).toHaveBeenCalledWith('response', expect.any(Function));
     });
