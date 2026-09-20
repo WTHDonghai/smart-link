@@ -83,7 +83,7 @@ export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
 /**
  * 拟真人随机微延迟函数，打破机械等长时钟
  */
-export async function humanDelay(page: Page, minMs = 500, maxMs = 900): Promise<void> {
+export async function humanDelay(page: Page, minMs = 2000, maxMs = 5000): Promise<void> {
   const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
   if (page && typeof page.waitForTimeout === 'function') {
     await page.waitForTimeout(delay);
@@ -479,54 +479,13 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       '.mtd-list-item.list-item-container, .list-item-container, .list-item-wrap, tr.order-row'
     );
     const count = typeof items.count === 'function' ? await items.count().catch(() => 0) : 0;
-
-    // 1. 优先尝试直接文本匹配（兼容卡片内出现单号的变体或定制表格布局）
-    const directCard = scope.locator(
-      `.mtd-list-item.list-item-container:has-text("${otaOrderId}"), ` +
-      `.list-item-container:has-text("${otaOrderId}"), ` +
-      `.list-item-wrap:has-text("${otaOrderId}"), ` +
-      `tr:has-text("${otaOrderId}"), ` +
-      `[data-order-id="${otaOrderId}"]`
-    ).first();
-
-    if (await directCard.isVisible({ timeout: 300 }).catch(() => false)) {
-      return directCard;
-    }
-
-    // 2. 检查右侧详情面板或页面是否已经选定并展示了该订单号
-    const isRightDetailActive = await scope
-      .locator(
-        `.detail-container:has-text("${otaOrderId}"), ` +
-        `.right-content:has-text("${otaOrderId}"), ` +
-        `.order-detail:has-text("${otaOrderId}"), ` +
-        `body:has-text("${otaOrderId}")`
-      )
-      .first()
-      .isVisible({ timeout: 300 })
-      .catch(() => false);
-
-    if (isRightDetailActive) {
-      const selectedItem = scope
-        .locator('.list-item-container.selected, .list-item-container.active, .mtd-list-item-selected')
-        .first();
-      if (await selectedItem.isVisible({ timeout: 200 }).catch(() => false)) {
-        return selectedItem;
-      }
-      return items.first();
-    }
-
-    // 3. 列表中仅有 1 笔订单时，直接返回该唯一卡片
-    if (count === 1) {
-      return items.first();
-    }
-
-    // 4. 列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
-    if (count > 1 && typeof items.nth === 'function') {
+    //  列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
+    if (count > 0 && typeof items.nth === 'function') {
       for (let i = 0; i < count; i++) {
         const candidate = items.nth(i);
         if (!await candidate.isVisible().catch(() => false)) continue;
         await candidate.click({ timeout: 2000 }).catch(() => {});
-        await humanDelay(page, 200, 400);
+        await humanDelay(page, 1000, 3000);
 
         const matches = await scope
           .locator(
@@ -544,13 +503,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         }
       }
     }
-
-    // 5. 兜底回退：若存在可见的卡片首项，直接返回
-    const fallbackItem = items.first();
-    if (await fallbackItem.isVisible({ timeout: 300 }).catch(() => false)) {
-      return fallbackItem;
-    }
-
     return null;
   }
 
@@ -591,7 +543,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       if (!orderCard) {
         await updateVisualTrackerStatus(page, `🔄 待确认列表中未直接发现订单「${otaOrderId}」，正在刷新待确认列表...`, 'action');
         await this.refreshOrderList(page);
-        await humanDelay(page, 400, 800);
+        await humanDelay(page, 1000, 3000);
         orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       }
 

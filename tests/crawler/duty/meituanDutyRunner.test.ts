@@ -799,8 +799,8 @@ describe('meituanDutyRunner', () => {
       (runner as unknown as { running: boolean }).running = true;
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
-          locator: () => ({
-            first: () => ({
+          locator: () => {
+            const card = {
               isVisible: vi.fn().mockResolvedValue(true),
               click: vi.fn().mockResolvedValue(undefined),
               scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
@@ -810,8 +810,13 @@ describe('meituanDutyRunner', () => {
                   click: vi.fn().mockResolvedValue(undefined),
                 }),
               }),
-            }),
-          }),
+            };
+            return {
+              count: vi.fn().mockResolvedValue(1),
+              nth: () => card,
+              first: () => card,
+            };
+          },
           waitForTimeout: vi.fn().mockResolvedValue(undefined),
           waitForResponse: vi.fn().mockResolvedValue({
             url: () => 'https://eb.meituan.com/api/v1/ebooking/orders/MT-EMPTY-FIELDS',
@@ -852,6 +857,8 @@ describe('meituanDutyRunner', () => {
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
           locator: () => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
             first: () => cardLocator,
           }),
           waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -920,6 +927,8 @@ describe('meituanDutyRunner', () => {
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
           locator: () => ({
+            count: vi.fn().mockImplementation(async () => (hasRefreshed ? 1 : 0)),
+            nth: () => cardLocator,
             first: () => cardLocator,
           }),
           waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -971,6 +980,8 @@ describe('meituanDutyRunner', () => {
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
           locator: () => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
             first: () => cardLocator,
           }),
           waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -1048,6 +1059,8 @@ describe('meituanDutyRunner', () => {
           on: onSpy,
           off: offSpy,
           locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
             first: () => {
               if (selector.includes('查看姓名') || selector.includes('btn-text') || selector.includes('guest-name')) return revealBtn;
               if (selector.includes('我已知晓') || selector.includes('确定')) return confirmDialogBtn;
@@ -1171,6 +1184,8 @@ describe('meituanDutyRunner', () => {
       (runner as unknown as { session: { page: unknown } }).session = {
         page: {
           locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
             first: () => {
               if (selector.includes('input')) return inputLocator;
               if (selector.includes('button')) return btnLocator;
@@ -1215,6 +1230,8 @@ describe('meituanDutyRunner', () => {
           locator: (selector: string) => {
             clickedSelectors.push(selector);
             return {
+              count: vi.fn().mockResolvedValue(1),
+              nth: () => cardLocator,
               first: () => {
                 if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap .btn-container')) {
                   return acceptBtnLocator;
