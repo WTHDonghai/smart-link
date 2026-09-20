@@ -9,6 +9,7 @@ import { renderRemarkFromProtocol } from '../../utils/template/orderPayloadTrans
 
 function parseArgs(argv: string[]) {
   let orderId: string | undefined;
+  let customTemplate: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--order-id' || arg === '--orderId') {
@@ -16,6 +17,11 @@ function parseArgs(argv: string[]) {
       i++;
     } else if (arg.startsWith('--order-id=')) {
       orderId = arg.split('=')[1];
+    } else if (arg === '--template') {
+      customTemplate = argv[i + 1];
+      i++;
+    } else if (arg.startsWith('--template=')) {
+      customTemplate = arg.slice(arg.indexOf('=') + 1);
     } else if (!arg.startsWith('--') && !orderId) {
       orderId = arg;
     }
@@ -23,6 +29,7 @@ function parseArgs(argv: string[]) {
 
   return {
     orderId,
+    customTemplate,
     headless: argv.includes('--headless'),
     waitManualClose: argv.includes('--wait-manual-close'),
     closeBrowser: argv.includes('--close-browser'),
@@ -30,7 +37,13 @@ function parseArgs(argv: string[]) {
 }
 
 async function main() {
-  const { orderId: explicitOrderId, headless, waitManualClose, closeBrowser } = parseArgs(process.argv.slice(2));
+  const {
+    orderId: explicitOrderId,
+    customTemplate,
+    headless,
+    waitManualClose,
+    closeBrowser,
+  } = parseArgs(process.argv.slice(2));
   const runner = new MeituanDutyRunner();
 
   console.log(`[DutyInspectDetail:CLI] 启动美团订单详情抓取测试 (Headless: ${headless})...`);
@@ -90,15 +103,22 @@ async function main() {
 
       // 3. 对齐统一订单协议并驱动模版引擎求值渲染备注
       const protocolData = alignOrderToProtocol(detail, detail.otaChannel);
-      let template: string | null = null;
+      let remoteTemplate: string | null = null;
       try {
         const templateRes = await fetchChannelRemarkTemplate(protocolData.otaChannel);
-        template = templateRes.remarkTemplate;
+        remoteTemplate = templateRes.remarkTemplate;
       } catch (tmplErr) {
         const errMsg = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
         console.warn(`[DutyInspectDetail:CLI] 未能拉取到渠道「${protocolData.otaChannel}」远程备注模板 (将使用原备注兜底): ${errMsg}`);
       }
-      const renderedRemark = renderRemarkFromProtocol(protocolData, template);
+
+      // 若指定了命令行 --template 则优先使用命令行测试模版，否则使用远程模版
+      const effectiveTemplate = (customTemplate && customTemplate.trim()) ? customTemplate.trim() : remoteTemplate;
+      const renderedRemark = renderRemarkFromProtocol(protocolData, effectiveTemplate);
+
+      // 预先使用常用模版算出一个示例预览，帮助直观核对变量提取与渲染能力
+      const sampleDemoTemplate = '{{入住人}} / 电话:{{联系电话}} / {{房型名称}} / {{间夜数}}';
+      const sampleDemoRendered = renderRemarkFromProtocol(protocolData, sampleDemoTemplate);
 
       console.log('\n================ 美团订单详情提取结果 ================\n');
       console.log(`  OTA 渠道:      ${detail.otaChannel}`);
@@ -113,13 +133,25 @@ async function main() {
       console.log(`  离店日期:      ${detail.departure}`);
       console.log(`  入住间夜:      ${detail.nights} 晚 / ${detail.quantity || 1} 间`);
       console.log(`  订单总额:      ¥${detail.totalPrice}`);
-      console.log(`  客人原始备注:  ${detail.remark || protocolData.rawRemark || '(无)'}`);
-      console.log(`  渠道备注模版:  ${template ? `「${template}」` : '(未配置或未能获取，使用原备注兜底)'}`);
-      console.log(`  模版渲染备注:  ${renderedRemark || '(空)'}`);
+      console.log(`  客人原始备注:  ${detail.remark || protocolData.rawRemark || '(客人下单未填备注)'}`);
+      console.log(`  渠道远程模版:  ${remoteTemplate ? `「${remoteTemplate}」` : '(未配置渠道模版或CLI未连中台)'}`);
+      if (customTemplate) {
+        console.log(`  CLI指定模版:   「${customTemplate}」`);
+      }
+      console.log(`  最终生效模版:  ${effectiveTemplate ? `「${effectiveTemplate}」` : '(无模版，降级使用客人原始备注)'}`);
+      console.log(`  模版渲染结果:  ${renderedRemark || '(空)'}`);
+      console.log(`  示例模版求值:  ${sampleDemoRendered} (模版: ${sampleDemoTemplate})`);
       console.log('\n======================================================\n');
       console.log('[DutyInspectDetail:CLI] 接口原始返回 JSON (已回写姓名):\n', JSON.stringify(rawDetail, null, 2));
       console.log('\n[DutyInspectDetail:CLI] 结构化详情 JSON:\n', JSON.stringify(detail, null, 2));
       console.log('\n[DutyInspectDetail:CLI] 最终提交入单备注 (Remark):\n', renderedRemark || '(空)');
+
+      if (!renderedRemark) {
+        console.log('\n[DutyInspectDetail:CLI:诊断提示] 最终入单备注为空的原因：');
+        console.log('  1. 远程模版未配置或无法连接中台；');
+        console.log('  2. 当前美团订单客人下单时未填写任何特殊需求 (原备注为空)；');
+        console.log('  3. 可通过参数测试模版，例如: npm run duty:inspect-detail -- --template="{{入住人}} {{联系电话}} {{房型名称}}"');
+      }
     } catch (error) {
       if (waitManualClose) {
         console.error('[DutyInspectDetail:CLI] 执行失败；可继续检查页面，手动关闭浏览器窗口后退出。');
