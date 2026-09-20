@@ -65,7 +65,6 @@ export function fmtDate(value: unknown): string {
   return '';
 }
 
-// [TODO] 后续需要迁移到env 环境变量
 export const MEITUAN_ORDER_LIST_URL_PATH = '/api/v1/ebooking/orders/task/list';
 export const MEITUAN_ALL_ORDERS_LIST_URL_PATH = '/api/v1/ebooking/orders/list';
 
@@ -302,13 +301,25 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
   const data = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
 
   const rawList: unknown[] =
+    Array.isArray(root.data) ? root.data :
+    Array.isArray(payload) ? payload :
     Array.isArray(data.list) ? data.list :
     Array.isArray(data.orders) ? data.orders :
     Array.isArray(data.orderList) ? data.orderList :
     Array.isArray(data.items) ? data.items :
+    Array.isArray(data.taskList) ? data.taskList :
+    Array.isArray(data.taskOrderList) ? data.taskOrderList :
+    Array.isArray(data.tasks) ? data.tasks :
+    Array.isArray(data.unhandledList) ? data.unhandledList :
+    Array.isArray(data.unhandledOrders) ? data.unhandledOrders :
+    Array.isArray(data.records) ? data.records :
+    Array.isArray(data.rows) ? data.rows :
+    Array.isArray(data.elements) ? data.elements :
+    Array.isArray(data.pageData) ? data.pageData :
     Array.isArray(root.orders) ? root.orders :
     Array.isArray(root.list) ? root.list :
-    Array.isArray(payload) ? payload : [];
+    Array.isArray(root.taskList) ? root.taskList :
+    Array.isArray(root.records) ? root.records : [];
 
   const orders: RawMeituanDutyOrder[] = [];
 
@@ -316,24 +327,85 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
     if (!item || typeof item !== 'object') continue;
     const rec = item as Record<string, unknown>;
 
-    const orderId = String(rec.orderId || rec.orderID || rec.otaOrderId || rec.orderNo || '').trim();
+    // 兼容可能包裹在 orderInfo / order / orderDetail / taskInfo / task / bizOrder 中的嵌套对象
+    const orderObj = (
+      (rec.orderInfo && typeof rec.orderInfo === 'object' ? rec.orderInfo : null) ||
+      (rec.order && typeof rec.order === 'object' ? rec.order : null) ||
+      (rec.orderDetail && typeof rec.orderDetail === 'object' ? rec.orderDetail : null) ||
+      (rec.taskInfo && typeof rec.taskInfo === 'object' ? rec.taskInfo : null) ||
+      (rec.task && typeof rec.task === 'object' ? rec.task : null) ||
+      (rec.bizOrder && typeof rec.bizOrder === 'object' ? rec.bizOrder : null) ||
+      rec
+    ) as Record<string, unknown>;
+
+    const orderId = String(
+      orderObj.orderId ||
+      orderObj.orderID ||
+      orderObj.otaOrderId ||
+      orderObj.orderNo ||
+      orderObj.bizOrderId ||
+      orderObj.mtOrderId ||
+      orderObj.subOrderId ||
+      orderObj.orderCode ||
+      orderObj.bookingId ||
+      orderObj.id ||
+      rec.orderId ||
+      rec.orderID ||
+      rec.otaOrderId ||
+      rec.orderNo ||
+      rec.bizOrderId ||
+      rec.mtOrderId ||
+      rec.subOrderId ||
+      rec.orderCode ||
+      rec.bookingId ||
+      rec.id ||
+      ''
+    ).trim();
     if (!orderId) continue;
 
-    const checkInDate = fmtDate(rec.checkInDateString || rec.checkInDate || rec.arrival);
-    const checkOutDate = fmtDate(rec.checkOutDateString || rec.checkOutDate || rec.departure);
+    const checkInDate = fmtDate(
+      orderObj.checkInDateString ||
+      orderObj.checkInDate ||
+      orderObj.arrival ||
+      rec.checkInDateString ||
+      rec.checkInDate ||
+      rec.arrival
+    );
+    const checkOutDate = fmtDate(
+      orderObj.checkOutDateString ||
+      orderObj.checkOutDate ||
+      orderObj.departure ||
+      rec.checkOutDateString ||
+      rec.checkOutDate ||
+      rec.departure
+    );
 
-    let nights = Number(rec.nights || rec.nightCount || 0);
+    let nights = Number(orderObj.nights || orderObj.nightCount || rec.nights || rec.nightCount || 0);
     if (!nights && checkInDate && checkOutDate) {
       const diff = Math.round((Date.parse(checkOutDate) - Date.parse(checkInDate)) / 86400000);
       nights = diff > 0 ? diff : 1;
     }
     if (!nights) nights = 1;
 
-    const rawTotal = Number(rec.totalFee ?? rec.price ?? rec.totalPrice ?? 0);
-    const totalAmount = rec.totalFee != null || rawTotal > 1000 ? rawTotal / 100 : rawTotal;
+    const rawTotal = Number(
+      orderObj.totalFee ?? orderObj.price ?? orderObj.totalPrice ??
+      rec.totalFee ?? rec.price ?? rec.totalPrice ?? 0
+    );
+    const totalAmount =
+      orderObj.totalFee != null || rec.totalFee != null || rawTotal > 1000
+        ? rawTotal / 100
+        : rawTotal;
 
     const contacts: Array<{ name: string; phone: string }> = [];
-    const rawContacts = Array.isArray(rec.contacts) ? rec.contacts : Array.isArray(rec.guests) ? rec.guests : [];
+    const rawContacts = Array.isArray(orderObj.contacts)
+      ? orderObj.contacts
+      : Array.isArray(orderObj.guests)
+      ? orderObj.guests
+      : Array.isArray(rec.contacts)
+      ? rec.contacts
+      : Array.isArray(rec.guests)
+      ? rec.guests
+      : [];
     for (const c of rawContacts) {
       if (c && typeof c === 'object') {
         const cRec = c as Record<string, unknown>;
@@ -343,28 +415,68 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
         });
       }
     }
-    if (contacts.length === 0 && (rec.guestName || rec.guestMobile)) {
+    if (contacts.length === 0 && (orderObj.guestName || orderObj.guestMobile || rec.guestName || rec.guestMobile)) {
       contacts.push({
-        name: String(rec.guestName || '').trim(),
-        phone: String(rec.guestMobile || '').trim(),
+        name: String(orderObj.guestName || rec.guestName || '').trim(),
+        phone: String(orderObj.guestMobile || rec.guestMobile || '').trim(),
       });
     }
 
+    const hotelId = String(
+      orderObj.poiId || orderObj.hotelId || orderObj.unitId ||
+      rec.poiId || rec.hotelId || rec.unitId || ''
+    ).trim() || undefined;
+
+    const hotelName = String(
+      orderObj.poiName || orderObj.hotelName || orderObj.unitName ||
+      rec.poiName || rec.hotelName || rec.unitName || ''
+    ).trim() || undefined;
+
+    const orderDisplayLabel = String(
+      orderObj.orderDisplayLabel || orderObj.statusText || orderObj.status ||
+      rec.orderDisplayLabel || rec.statusText || rec.status || '新订'
+    ).trim();
+
+    const orderTime = String(
+      orderObj.aptCreatTimeString || orderObj.orderTime || orderObj.createTime ||
+      rec.aptCreatTimeString || rec.orderTime || rec.createTime || ''
+    ).trim() || undefined;
+
+    const roomName = String(
+      orderObj.roomName || orderObj.roomTypeName ||
+      rec.roomName || rec.roomTypeName || ''
+    ).trim();
+
+    const ratePlanName = String(
+      orderObj.ratePlanName || orderObj.rateCode ||
+      rec.ratePlanName || rec.rateCode || ''
+    ).trim();
+
+    const quantity = Number(orderObj.roomCount || orderObj.quantity || rec.roomCount || rec.quantity || 1);
+
+    const cancelOrder = Boolean(
+      orderObj.cancelOrder ||
+      rec.cancelOrder ||
+      orderObj.status === 'CANCEL' ||
+      rec.status === 'CANCEL' ||
+      orderDisplayLabel.includes('取消')
+    );
+
     orders.push({
       orderId,
-      hotelId: String(rec.poiId || rec.hotelId || '').trim() || undefined,
-      hotelName: String(rec.poiName || rec.hotelName || '').trim() || undefined,
-      orderDisplayLabel: String(rec.orderDisplayLabel || rec.statusText || rec.status || '新订').trim(),
-      orderTime: String(rec.aptCreatTimeString || rec.orderTime || '').trim() || undefined,
-      roomName: String(rec.roomName || rec.roomTypeName || '').trim(),
-      ratePlanName: String(rec.ratePlanName || rec.rateCode || '').trim(),
+      hotelId,
+      hotelName,
+      orderDisplayLabel,
+      orderTime,
+      roomName,
+      ratePlanName,
       checkInDate,
       checkOutDate,
       nights,
-      quantity: Number(rec.roomCount || rec.quantity || 1),
+      quantity,
       totalAmount,
       contacts,
-      cancelOrder: Boolean(rec.cancelOrder || rec.status === 'CANCEL'),
+      cancelOrder,
       raw: rec,
     });
   }

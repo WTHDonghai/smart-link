@@ -177,6 +177,56 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(rawOrders[1].totalAmount).toBe(400);
       expect(rawOrders[1].nights).toBe(1);
     });
+
+    it('should extract orders when root.data is an array directly', () => {
+      const payload = {
+        code: 0,
+        data: [
+          {
+            orderId: 'MT-DIRECT-ARRAY-1',
+            poiId: 'HOTEL-DIRECT',
+            poiName: '直连度假村',
+            status: 'NEW',
+            roomName: '大床房',
+            checkInDate: '2026-09-20',
+            checkOutDate: '2026-09-21',
+            totalFee: 50000,
+          },
+        ],
+      };
+
+      const summaries = parseMeituanOrderListResponse(payload);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0].orderId).toBe('MT-DIRECT-ARRAY-1');
+      expect(summaries[0].hotelName).toBe('直连度假村');
+    });
+
+    it('should extract orders when wrapped inside taskList and orderInfo', () => {
+      const payload = {
+        code: 0,
+        data: {
+          taskList: [
+            {
+              taskId: 'TASK-001',
+              orderInfo: {
+                bizOrderId: 'MT-TASK-ORDER-888',
+                hotelId: 'HOTEL-888',
+                hotelName: '任务酒店',
+                roomTypeName: '行政房',
+                checkInDateString: '2026-10-01',
+                checkOutDateString: '2026-10-03',
+                totalPrice: 1688,
+              },
+            },
+          ],
+        },
+      };
+
+      const summaries = parseMeituanOrderListResponse(payload);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0].orderId).toBe('MT-TASK-ORDER-888');
+      expect(summaries[0].hotelName).toBe('任务酒店');
+    });
   });
 
   describe('parseMeituanOrderDetailResponse', () => {

@@ -270,7 +270,19 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         if (!text) {
           throw new DutyExecutionError('美团列表响应报文为空', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
         }
-        const orders = parseMeituanOrderListResponse(JSON.parse(text));
+        let parsedPayload: unknown;
+        try {
+          parsedPayload = JSON.parse(text);
+        } catch {
+          throw new DutyExecutionError('美团列表响应非合法 JSON', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
+        }
+        const orders = parseMeituanOrderListResponse(parsedPayload);
+
+        await updateVisualTrackerStatus(
+          page,
+          `📥 待确认列表已刷新，权威网络接口共解析到 ${orders.length} 笔待处理订单`,
+          orders.length > 0 ? 'success' : 'info'
+        );
 
         // 4. 记录权威网络响应成功时间 (Fail-Fast: 绝无 DOM 拼接兜底！)
         this.lastListRefreshTime = Date.now();
