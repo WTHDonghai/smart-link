@@ -1,4 +1,4 @@
-import type { Page, Request, Response, Frame } from 'playwright';
+import type { Page, Request, Response, Frame, Locator } from 'playwright';
 import { createPersistentBrowserSession, type BrowserSession } from '../browserManager';
 import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker';
 import type { DutyClaimedTask, SystemLogEntry } from '../../types';
@@ -470,6 +470,94 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   /**
+   * 在美团商户后台列表中精确定位目标订单卡片
+   * 兼容美团真实 DOM 特征（左侧列表卡片不含订单号文本，订单号展示于右侧详情面板中）
+   */
+  private async locateOrderCard(
+    page: Page,
+    scope: Page | ReturnType<Page['frameLocator']>,
+    otaOrderId: string
+  ): Promise<Locator | null> {
+    const items = scope.locator(
+      '.mtd-list-item.list-item-container, .list-item-container, .list-item-wrap, tr.order-row'
+    );
+    const count = typeof items.count === 'function' ? await items.count().catch(() => 0) : 0;
+
+    // 1. 优先尝试直接文本匹配（兼容卡片内出现单号的变体或定制表格布局）
+    const directCard = scope.locator(
+      `.mtd-list-item.list-item-container:has-text("${otaOrderId}"), ` +
+      `.list-item-container:has-text("${otaOrderId}"), ` +
+      `.list-item-wrap:has-text("${otaOrderId}"), ` +
+      `tr:has-text("${otaOrderId}"), ` +
+      `[data-order-id="${otaOrderId}"]`
+    ).first();
+
+    if (await directCard.isVisible({ timeout: 300 }).catch(() => false)) {
+      return directCard;
+    }
+
+    // 2. 检查右侧详情面板或页面是否已经选定并展示了该订单号
+    const isRightDetailActive = await scope
+      .locator(
+        `.detail-container:has-text("${otaOrderId}"), ` +
+        `.right-content:has-text("${otaOrderId}"), ` +
+        `.order-detail:has-text("${otaOrderId}"), ` +
+        `body:has-text("${otaOrderId}")`
+      )
+      .first()
+      .isVisible({ timeout: 300 })
+      .catch(() => false);
+
+    if (isRightDetailActive) {
+      const selectedItem = scope
+        .locator('.list-item-container.selected, .list-item-container.active, .mtd-list-item-selected')
+        .first();
+      if (await selectedItem.isVisible({ timeout: 200 }).catch(() => false)) {
+        return selectedItem;
+      }
+      return items.first();
+    }
+
+    // 3. 列表中仅有 1 笔订单时，直接返回该唯一卡片
+    if (count === 1) {
+      return items.first();
+    }
+
+    // 4. 列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
+    if (count > 1 && typeof items.nth === 'function') {
+      for (let i = 0; i < count; i++) {
+        const candidate = items.nth(i);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await candidate.click({ timeout: 2000 }).catch(() => {});
+        await humanDelay(page, 200, 400);
+
+        const matches = await scope
+          .locator(
+            `.detail-container:has-text("${otaOrderId}"), ` +
+            `.right-content:has-text("${otaOrderId}"), ` +
+            `.order-detail:has-text("${otaOrderId}"), ` +
+            `body:has-text("${otaOrderId}")`
+          )
+          .first()
+          .isVisible({ timeout: 500 })
+          .catch(() => false);
+
+        if (matches) {
+          return candidate;
+        }
+      }
+    }
+
+    // 5. 兜底回退：若存在可见的卡片首项，直接返回
+    const fallbackItem = items.first();
+    if (await fallbackItem.isVisible({ timeout: 300 }).catch(() => false)) {
+      return fallbackItem;
+    }
+
+    return null;
+  }
+
+  /**
    * 页面操作：在美团后台页面定位订单卡片并内联展开/点击，抓取详情真实字段
    * 前置条件：待确认订单列表就绪（通过 refreshOrderList 刷新确保停留在「待确认订单」Tab 且渲染最新 DOM）
    * 遵循 Fail-Fast 原则：100% 权威网络接口为源，智能跳过电话解密，零 DOM 业务数据拼接！
@@ -499,29 +587,18 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       await updateVisualTrackerStatus(page, `🔍 正在定位订单「${otaOrderId}」卡片并展示详情...`, 'action');
 
       const scope = this.getOrderScope(page);
-      const getItemLocator = (targetId: string) => scope.locator(
-        `.mtd-list-item.list-item-container:has-text("${targetId}"), ` +
-        `.list-item-container:has-text("${targetId}"), ` +
-        `.mtd-list-item:has-text("${targetId}"), ` +
-        `.list-item-wrap:has-text("${targetId}"), ` +
-        `tr:has-text("${targetId}"), ` +
-        `.order-item:has-text("${targetId}"), ` +
-        `[data-order-id="${targetId}"]`
-      ).first();
 
       // 1. 前置就绪校验：若订单卡片未在当前页面直接可见，先执行待确认列表刷新确保停留在「待确认订单」Tab 且渲染最新列表
-      let orderCard = getItemLocator(otaOrderId);
-      let isCardVisible = await orderCard.isVisible({ timeout: 1200 }).catch(() => false);
+      let orderCard = await this.locateOrderCard(page, scope, otaOrderId);
 
-      if (!isCardVisible) {
+      if (!orderCard) {
         await updateVisualTrackerStatus(page, `🔄 待确认列表中未直接发现订单「${otaOrderId}」，正在刷新待确认列表...`, 'action');
         await this.refreshOrderList(page);
         await humanDelay(page, 400, 800);
-        orderCard = getItemLocator(otaOrderId);
-        isCardVisible = await orderCard.isVisible({ timeout: 2500 }).catch(() => false);
+        orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       }
 
-      if (!isCardVisible) {
+      if (!orderCard || !await orderCard.isVisible({ timeout: 2000 }).catch(() => false)) {
         if (await checkMeituanPageRisk(page)) {
           await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
           throw new DutyExecutionError(
@@ -623,7 +700,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         // 4. 姓名脱敏解除交互（“查看姓名”）
         try {
           const revealNameBtn = scope.locator(
-            'button:has-text("查看姓名"), a:has-text("查看姓名"), ' +
+            'button:has-text("查看姓名"), a:has-text("查看姓名"), span:has-text("查看姓名"), ' +
             'button:has-text("获取姓名"), a:has-text("获取姓名"), ' +
             'button:has-text("显示姓名"), a:has-text("显示姓名"), ' +
             '[data-test="reveal-guest-name"], .reveal-name-btn'
@@ -662,7 +739,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         if (!resolvedPhone) {
           try {
             const revealPhoneBtn = scope.locator(
-              'button:has-text("查看电话"), a:has-text("查看电话"), ' +
+              'button:has-text("查看电话"), a:has-text("查看电话"), span:has-text("查看电话"), ' +
               'button:has-text("获取电话"), a:has-text("获取电话"), ' +
               'button:has-text("查看手机"), a:has-text("查看手机"), ' +
               'button:has-text("查看完整号码"), a:has-text("查看完整号码")'
@@ -811,25 +888,16 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       await updateVisualTrackerStatus(page, `📝 正在订单「${otaOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`, 'action');
 
       const scope = this.getOrderScope(page);
-      const getItemLocator = (targetId: string) => scope.locator(
-        `.mtd-list-item.list-item-container:has-text("${targetId}"), ` +
-        `.list-item-container:has-text("${targetId}"), ` +
-        `.mtd-list-item:has-text("${targetId}"), ` +
-        `.list-item-wrap:has-text("${targetId}"), ` +
-        `tr:has-text("${targetId}"), ` +
-        `.order-item:has-text("${targetId}"), ` +
-        `[data-order-id="${targetId}"]`
-      ).first();
 
       // 1. 定位目标订单卡片，若不可见先刷新待确认列表
-      let orderCard = getItemLocator(otaOrderId);
-      if (!await orderCard.isVisible({ timeout: 1500 }).catch(() => false)) {
+      let orderCard = await this.locateOrderCard(page, scope, otaOrderId);
+      if (!orderCard) {
         await this.refreshOrderList(page);
         await humanDelay(page, 400, 800);
-        orderCard = getItemLocator(otaOrderId);
+        orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       }
 
-      if (!await orderCard.isVisible({ timeout: 2500 }).catch(() => false)) {
+      if (!orderCard || !await orderCard.isVisible({ timeout: 2000 }).catch(() => false)) {
         if (await checkMeituanPageRisk(page)) {
           await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
           throw new DutyExecutionError(

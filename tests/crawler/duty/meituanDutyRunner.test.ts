@@ -894,19 +894,18 @@ describe('meituanDutyRunner', () => {
 
     it('inspectOrderDetail should trigger refreshOrderList pre-requisite when order card is not initially visible', async () => {
       (runner as unknown as { running: boolean }).running = true;
+      let hasRefreshed = false;
       const refreshSpy = vi.spyOn(runner, 'refreshOrderList').mockImplementation(async () => {
+        hasRefreshed = true;
         return {
           status: () => 200,
           text: async () => JSON.stringify({ code: 0, data: { list: [] } }),
         } as unknown as Parameters<typeof runner.refreshOrderList>[0] extends never ? never : any;
       });
 
-      let callCount = 0;
       const cardLocator = {
         isVisible: vi.fn().mockImplementation(async () => {
-          callCount++;
-          // First check returns false, after refresh returns true
-          return callCount > 1;
+          return hasRefreshed;
         }),
         scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
         click: vi.fn().mockResolvedValue(undefined),
