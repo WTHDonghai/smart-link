@@ -80,7 +80,8 @@ async function main() {
       console.log(`  入住间夜:      ${detail.nights} 晚 / ${detail.quantity || 1} 间`);
       console.log(`  订单总额:      ¥${detail.totalPrice}`);
       console.log('\n======================================================\n');
-      console.log('[DutyInspectDetail:CLI] 结构化详情 JSON:\n', JSON.stringify(detail, null, 2));
+      console.log('[DutyInspectDetail:CLI] 接口原始返回 JSON (已回写姓名):\n', JSON.stringify(rawDetail, null, 2));
+      console.log('\n[DutyInspectDetail:CLI] 结构化详情 JSON:\n', JSON.stringify(detail, null, 2));
     } catch (error) {
       if (waitManualClose) {
         console.error('[DutyInspectDetail:CLI] 执行失败；可继续检查页面，手动关闭浏览器窗口后退出。');
