@@ -40,6 +40,16 @@
   - **请求合并与防抖等待补偿**：在途 Promise 复用门禁位于互斥锁之前，防抖期内拟真等待补齐，杜绝误报 `VERIFIED_EMPTY`。
   - **重试透传与边缘触发 Toast**：全链路结构化异常透传 `retryable: false` 杜绝无效重推，渲染层边缘触发避免 Toast 轰炸。
 
+### 5. 美团商家后台（E-booking）DOM 结构与自动化交互参考规范
+- **文档路径**：[`docs/architecture/meituan-ebooking-dom-and-interaction-spec.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/meituan-ebooking-dom-and-interaction-spec.md)
+- **文档状态**：实测权威规范（生产实测取证与反思基准）
+- **核心内容**：
+  - **Master-Detail 左右双栏拓扑**：左侧卡片流与右侧详情面板，彻底破除弹窗模态对话框（Modal）与表格操作列伪脑补。
+  - **无“详情”按钮事实**：卡片自身即整体可点击项，禁止查找不存在的 `detailBtn`，消除 800ms 无效等待。
+  - **敏感信息解密标准**：姓名解密（DOM 结构 + MTD 确认弹窗）与智能跳过电话解密（规避 1 秒双重敏感解密风控）。
+  - **接单“接受”按钮定位标准**：基于 `.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary` 结构与主要操作样式精准定位，禁止裸文本匹配。
+  - **自动化操作速查对照表**：详细比对错误脑补与规范标准实现。
+
 ---
 
 ## 🏛️ 项目最高治理准则
