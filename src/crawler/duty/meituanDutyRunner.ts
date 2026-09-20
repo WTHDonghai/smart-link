@@ -940,24 +940,60 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
    * 页面操作：在美团后台确认取消（我已知晓）
    */
   public async confirmCancel(otaOrderId: string): Promise<void> {
+    if (!otaOrderId || !otaOrderId.trim()) {
+      throw new DutyExecutionError('otaOrderId 不能为空', MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND, false);
+    }
+    const cleanOrderId = otaOrderId.trim();
     const page = this.getActivePage('确认取消');
 
     return this.runWithMutex(async () => {
-      await updateVisualTrackerStatus(page, `🛑 在美团后台确认取消订单「${otaOrderId}」（我已知晓）...`, 'action');
-      try {
-        const scope = this.getOrderScope(page);
-        const ackBtn = scope.locator(
-          '.mtd-modal .mtd-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-          '.mtd-confirm .mtd-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-          '.detail-container button.mtd-btn:has-text("我已知晓"), ' +
-          'button:has-text("我已知晓")'
-        ).first();
-        if (await ackBtn.isVisible({ timeout: 2000 })) {
-          await visualClickLocator(page, ackBtn, '点击我已知晓');
-        }
-      } catch {
-        // 容错已确认状态
+      await updateVisualTrackerStatus(page, `🛑 在美团后台确认取消订单「${cleanOrderId}」（我已知晓）...`, 'action');
+      const scope = this.getOrderScope(page);
+
+      // 1. 定位订单卡片
+      let orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
+      if (!orderCard) {
+        await this.refreshOrderList(page);
+        await humanDelay(page, 500, 800);
+        orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
       }
+
+      if (!orderCard || !await orderCard.isVisible({ timeout: 2000 }).catch(() => false)) {
+        throw new DutyExecutionError(
+          `未在美团订单列表中找到已取消订单「${cleanOrderId}」卡片`,
+          MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND,
+          true
+        );
+      }
+
+      // 2. 检查右侧详情是否已就绪展示该订单；若未展示，点击卡片切换详情
+      const isCurrentDetail = await scope.locator(`.detail-header:has-text("${cleanOrderId}")`).first().isVisible({ timeout: 500 }).catch(() => false);
+      if (!isCurrentDetail) {
+        await visualClickLocator(page, orderCard, `点击订单「${cleanOrderId}」卡片激活详情展示`);
+        await humanDelay(page, 400, 700);
+      }
+
+      // 3. 定位详情头部操作按钮区域中的「我已知晓」按钮
+      // DOM 结构层级: .detail-container -> .detail-header -> .btn-wrap -> .btn-container -> button.mtd-btn.op-btn.mtd-btn-primary
+      // 样式类: mtd-btn op-btn mtd-btn-primary
+      // 文本: 我已知晓
+      const ackBtn = scope.locator(
+        '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
+        '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
+        '.btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")'
+      ).first();
+
+      if (!await ackBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+        throw new DutyExecutionError(
+          `订单「${cleanOrderId}」详情头部未找到「我已知晓」确认取消操作按钮`,
+          MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
+          false
+        );
+      }
+
+      // 4. 点击「我已知晓」执行取消确认
+      await visualClickLocator(page, ackBtn, `点击「我已知晓」按钮确认取消订单「${cleanOrderId}」`);
+      await humanDelay(page, 400, 600);
     });
   }
 

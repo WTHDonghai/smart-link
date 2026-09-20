@@ -39,6 +39,7 @@ describe('ChannelMappingView 渠道映射列表视图', () => {
         {
           culturalTourismChannels: [
             {
+              id: 'pms-mt',
               channelId: 'pms-mt',
               channelCode: 'MT_PMS',
               channelName: '文旅美团直连',

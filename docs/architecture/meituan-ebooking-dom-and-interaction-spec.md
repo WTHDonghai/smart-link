@@ -272,7 +272,34 @@ const acceptBtn = scope.locator(
 
 ---
 
-## 7. 权威数据源原则与 Fail-Fast (Data Authority & Fail-Fast)
+## 7. 已取消订单确认（我已知晓）交互规范 (Cancel Confirmation Spec)
+
+### 7.1 业务场景与 DOM 结构
+在美团「待确认订单」Tab 中，若客人发起取消或系统已取消，订单详情头部展示「我已知晓」确认取消操作按钮：
+
+```html
+<!-- 详情头部操作区域 -->
+<div data-v-21a6a984="" class="btn-wrap">
+  <div data-v-21a6a984="" class="btn-container">
+    <button data-v-21a6a984="" type="button" class="mtd-btn op-btn mtd-btn-primary">
+      <span> 我已知晓 </span>
+    </button>
+  </div>
+</div>
+```
+
+### 7.2 标准化定位与交互时序
+1. **定位订单卡片**：通过 `locateOrderCard(page, scope, otaOrderId)` 找到目标订单；
+2. **激活详情面板**：若右侧 `.detail-header` 未处于该订单上下文，点击订单卡片激活详情展示；
+3. **精准定位「我已知晓」按钮**：
+   - 依赖 DOM 层级结构 + 组件 CSS 样式类 + 文本约束：
+     `.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")`；
+4. **点击执行取消确认**：
+   - 通过 `visualClickLocator` 点击并执行拟真延时，完成取消确认闭环。
+
+---
+
+## 8. 权威数据源原则与 Fail-Fast (Data Authority & Fail-Fast)
 
 按照项目最高规范 [`AGENTS.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/AGENTS.md) 的要求：
 
@@ -288,7 +315,7 @@ const acceptBtn = scope.locator(
 
 ---
 
-## 8. CLI 诊断与手工核验工具清单 (CLI Diagnostic Tools)
+## 9. CLI 诊断与手工核验工具清单 (CLI Diagnostic Tools)
 
 为保证在无测试订单或排查线上问题时能够由开发者或运维人员随时开展可视化实测，系统内置了专用 CLI 工具：
 
@@ -296,11 +323,12 @@ const acceptBtn = scope.locator(
 | :--- | :--- | :--- |
 | `npm run duty:refresh-list` | 美团列表刷新与 Tab 切换交互测试 | 以非无头模式（`headless: false`）启动真实美团页面，执行 Tab 切换、网络响应监听与防抖等待全流程，运行后保留窗口供人工检查。 |
 | `npm run duty:inspect-detail` | 美团订单详情定位与抓取测试 | 可指定订单号（或自动选取列表首单），测试卡片定位、点击展开、姓名解密与权威网络详情拦截。 |
-| `npm run duty:inspect-detail:mock` | 详情抓取 Mock 模式快速测试 | 在无真实美团登录凭证的环境下验证调度与解析逻辑。 |
+| `npm run duty:confirm-import` | 接单与确认号回填测试（默认 Dry-Run） | 演练点击「接受」展开弹窗、填入确认号与读回校验，收尾点击取消，绝不触碰生产提交。 |
+| `npm run duty:confirm-cancel` | 取消确认（我已知晓）测试（默认 Dry-Run） | 定位已取消订单、激活详情、精准定位「我已知晓」按钮，演练模式不执行真实点击。 |
 
 ---
 
-## 9. 总结：美团自动化操作速查对照表
+## 10. 总结：美团自动化操作速查对照表
 
 | 操作意图 | 错误做法（绝对禁止） | 正确做法（规范标准） |
 | :--- | :--- | :--- |
@@ -310,4 +338,6 @@ const acceptBtn = scope.locator(
 | **解密客人真实姓名** | 裸文本匹配或等待不存在的二次确认弹窗 | 基于 DOM 结构与样式定位：`.detail-info-item .guest-name .btn-text` 直接点击（无二次确认弹窗） |
 | **解密客人联系电话** | 无脑每次都去点击“查看电话”或等待弹窗 | 若姓名解密或原始报文已有明文手机号，**强制跳过**解密以规避双重敏感风控探针；无二次确认弹窗 |
 | **点击「接受」接单** | 裸文本匹配 `button:has-text("接受")` | 基于详情头部操作栏与主要按钮样式定位：`.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary` |
+| **点击「我已知晓」确认取消** | 裸文本匹配或弹窗兜底盲点 | 基于详情头部操作栏层级定位：`.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")` |
 | **提取业务字段** | 从 DOM 页面文字中正则提取价格/日期/房型 | **100% 依赖网络详情接口与解密接口拦截报文**，DOM 仅作交互触发 |
+

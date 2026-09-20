@@ -1482,6 +1482,101 @@ describe('meituanDutyRunner', () => {
         .rejects
         .toThrow('确认号填入后读回校验不一致');
     });
+
+    it('confirmCancel should throw when otaOrderId is empty', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: { locator: vi.fn() },
+      };
+      await expect(runner.confirmCancel(''))
+        .rejects
+        .toThrow('otaOrderId 不能为空');
+    });
+
+    it('confirmCancel should locate order card, activate detail, find 我已知晓 button via DOM hierarchy/CSS, and click it', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const clickedActions: string[] = [];
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedActions.push('card-click');
+        }),
+      };
+
+      const ackBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedActions.push('ack-btn-click');
+        }),
+      };
+
+      const queriedSelectors: string[] = [];
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => {
+            queriedSelectors.push(selector);
+            return {
+              count: vi.fn().mockResolvedValue(1),
+              nth: () => cardLocator,
+              first: () => {
+                if (selector.includes('我已知晓')) return ackBtnLocator;
+                if (selector.includes('.detail-header')) return { isVisible: vi.fn().mockResolvedValue(true) };
+                return cardLocator;
+              },
+            };
+          },
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        },
+      };
+
+      await runner.confirmCancel('MT-ORD-CANCEL-01');
+      expect(clickedActions).toEqual(['card-click', 'ack-btn-click']);
+
+      // Verify the button selector was queried using strict DOM hierarchy and CSS classes
+      const ackSelector = queriedSelectors.find(
+        (s) => s.includes('.btn-wrap') && s.includes('button.mtd-btn.op-btn.mtd-btn-primary') && s.includes('我已知晓')
+      );
+      expect(ackSelector).toBeDefined();
+      expect(ackSelector).toContain('.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")');
+    });
+
+    it('confirmCancel should fail fast with CONFIRM_SUBMIT_NOT_FOUND when 我已知晓 button is not visible', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const ackBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(false),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('我已知晓')) return ackBtnLocator;
+              if (selector.includes('.detail-header')) return { isVisible: vi.fn().mockResolvedValue(true) };
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        },
+      };
+
+      await expect(runner.confirmCancel('MT-ORD-CANCEL-NOTFOUND'))
+        .rejects
+        .toThrow('详情头部未找到「我已知晓」确认取消操作按钮');
+    });
   });
 
   describe('MeituanDutyRunner executeTask delegation via dispatchDutyTask', () => {

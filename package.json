@@ -21,6 +21,8 @@
     "duty:inspect-detail:mock": "vite-node --mode mock src/crawler/duty/inspectDetailCli.ts",
     "duty:confirm-import": "vite-node src/crawler/duty/confirmImportCli.ts --wait-manual-close",
     "duty:confirm-import:submit": "vite-node src/crawler/duty/confirmImportCli.ts --submit --wait-manual-close",
+    "duty:confirm-cancel": "vite-node src/crawler/duty/confirmCancelCli.ts --wait-manual-close",
+    "duty:confirm-cancel:submit": "vite-node src/crawler/duty/confirmCancelCli.ts --submit --wait-manual-close",
     "profile:list": "vite-node src/crawler/syncCli.ts --list",
     "profile:sync": "vite-node src/crawler/syncCli.ts",
     "test": "vitest run"
