@@ -684,17 +684,8 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         : Promise.resolve(null);
 
       try {
-        // 3. 点击订单卡片触发详情展示与网络拦截
-        const detailBtn = orderCard.locator(
-          'button:has-text("详情"), a:has-text("详情"), button:has-text("查看"), a:has-text("查看"), .detail-btn, [data-test="order-detail"]'
-        ).first();
-
-        if (await detailBtn.isVisible({ timeout: 800 }).catch(() => false)) {
-          await visualClickLocator(page, detailBtn, `点击订单「${otaOrderId}」详情`);
-        } else {
-          await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片`);
-        }
-
+        // 3. 点击订单卡片触发右侧详情展示与网络拦截（美团真实 DOM 中左侧卡片为整体可点击项，无独立“详情”按钮）
+        await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片展示详情`);
         await humanDelay(page, 500, 800);
 
         // 4. 姓名脱敏解除交互（基于美团详情页 DOM 结构与样式精准定位）
