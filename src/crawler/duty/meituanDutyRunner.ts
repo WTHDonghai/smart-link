@@ -688,7 +688,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片展示详情`);
         await humanDelay(page, 500, 800);
 
-        // 4. 姓名脱敏解除交互（基于美团详情页 DOM 结构与样式精准定位）
+        // 4. 姓名脱敏解除交互（基于美团详情页真实 DOM 结构精准定位，无二次确认弹窗）
         // 真实 DOM 结构:
         // <p class="detail-info-item">
         //   <span class="info-key">客人姓名</span>
@@ -713,22 +713,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
           if (await revealNameBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
             await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
             await humanDelay(page, 400, 700);
-
-            // 点击平台二次确认框（支持 MtdUI 模态框: .mtd-modal / .mtd-confirm 及通用对话框）
-            const confirmDialogBtn = scope.locator(
-              '.mtd-modal .mtd-btn:has-text("我已知晓"), .mtd-confirm .mtd-btn:has-text("我已知晓"), ' +
-              '.mtd-modal button:has-text("我已知晓"), .mtd-confirm button:has-text("我已知晓"), ' +
-              '.mtd-modal button:has-text("确定"), .mtd-confirm button:has-text("确定"), ' +
-              '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
-              '.el-dialog button:has-text("我已知晓"), .el-dialog button:has-text("确定"), ' +
-              '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), ' +
-              'button:has-text("我已知晓"), button:has-text("我知道了")'
-            ).first();
-
-            if (await confirmDialogBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-              await visualClickLocator(page, confirmDialogBtn, '确认查看客人信息');
-              await humanDelay(page, 400, 600);
-            }
           }
         } catch {
           // 容错姓名脱敏交互
@@ -754,20 +738,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
             if (await revealPhoneBtn.isVisible({ timeout: 800 }).catch(() => false)) {
               await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
               await humanDelay(page, 400, 700);
-
-              const confirmPhoneDialogBtn = scope.locator(
-                '.mtd-modal .mtd-btn:has-text("我已知晓"), .mtd-confirm .mtd-btn:has-text("我已知晓"), ' +
-                '.mtd-modal button:has-text("我已知晓"), .mtd-confirm button:has-text("我已知晓"), ' +
-                '.mtd-modal button:has-text("确定"), .mtd-confirm button:has-text("确定"), ' +
-                '.ant-modal button:has-text("我已知晓"), .ant-modal button:has-text("确定"), ' +
-                '[role="dialog"] button:has-text("我已知晓"), [role="dialog"] button:has-text("确定"), ' +
-                'button:has-text("我已知晓"), button:has-text("确定")'
-              ).first();
-
-              if (await confirmPhoneDialogBtn.isVisible({ timeout: 800 }).catch(() => false)) {
-                await visualClickLocator(page, confirmPhoneDialogBtn, '确认查看电话');
-                await humanDelay(page, 400, 600);
-              }
             }
           } catch {
             // 容错电话解密交互
