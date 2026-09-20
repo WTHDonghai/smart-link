@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import type { ProfileSyncResult } from './types';
 import { detectDefaultChromeSourceDir, resolveChromeProfileDir } from './paths';
@@ -12,7 +13,7 @@ export interface ProfileSyncOptions {
   channelCode?: string; // 目标渠道标识（大写），如 'MEITUAN'
   channelId?: string; // 兼容向后兼容性
   customSourceDir?: string; // 可选的自定义源 Chrome 路径
-  customSourceProfile?: string; // 可选的自定义源 Profile 名称 (如 'Profile 7')
+  customSourceProfile?: string; // 可选的自定义源 Profile 名称 (如 'Profile 7', '7', 或用户配置名)
 }
 
 export interface CdpSyncOptions {
@@ -21,6 +22,159 @@ export interface CdpSyncOptions {
   port?: number; // Chrome 远程调试端口，默认 9222
   host?: string; // Chrome 调试主机，默认 '127.0.0.1'
   timeoutMs?: number; // 连接超时时间 (ms)，默认 4000
+}
+
+export interface ChromeProfileInfo {
+  id: string; // 目录标识，如 'Profile 7', 'Default'
+  name: string; // 用户显示名称，如 'Boldanny-Spiderman'
+  email?: string; // 绑定的账号邮箱
+  isActive: boolean; // 是否为系统当前活跃使用的 Profile (last_used)
+  dirPath: string; // 物理路径
+}
+
+/**
+ * 遍历并列出系统 Chrome 中所有已配置的用户 Profile
+ */
+export function listChromeProfiles(sourceRoot?: string): ChromeProfileInfo[] {
+  const root = sourceRoot || detectDefaultChromeSourceDir();
+  const localStatePath = path.join(root, 'Local State');
+  if (!fs.existsSync(localStatePath)) {
+    return [];
+  }
+  try {
+    const localState = JSON.parse(fs.readFileSync(localStatePath, 'utf8'));
+    const profileObj = (localState.profile as Record<string, unknown>) || {};
+    const lastUsed = (profileObj.last_used as string) || 'Default';
+    const infoCache = (profileObj.info_cache as Record<string, Record<string, unknown>>) || {};
+
+    const profiles: ChromeProfileInfo[] = [];
+    for (const [id, info] of Object.entries(infoCache)) {
+      const dirPath = path.join(root, id);
+      if (fs.existsSync(dirPath)) {
+        profiles.push({
+          id,
+          name: (info.name as string) || id,
+          email: (info.user_name as string) || undefined,
+          isActive: id === lastUsed,
+          dirPath,
+        });
+      }
+    }
+    // 排序：当前活跃的置顶，其余按显示名称升序
+    profiles.sort((a, b) => {
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return profiles;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 根据用户的输入（ID、名称、纯数字序号）解析定位目标 Chrome Profile
+ */
+export function resolveTargetProfile(
+  profiles: readonly ChromeProfileInfo[],
+  query?: string
+): ChromeProfileInfo | null {
+  if (!query || !query.trim()) {
+    return profiles.find((p) => p.isActive) || profiles[0] || null;
+  }
+  const q = query.trim().toLowerCase();
+
+  // 1. 精确匹配 id (如 "profile 7", "default")
+  const byId = profiles.find((p) => p.id.toLowerCase() === q);
+  if (byId) return byId;
+
+  // 2. 纯数字匹配 (如 "7" -> "Profile 7")
+  if (/^\d+$/.test(q)) {
+    const byNum = profiles.find((p) => p.id.toLowerCase() === `profile ${q}`);
+    if (byNum) return byNum;
+  }
+
+  // 3. 精确匹配名称 (如 "boldanny-spiderman")
+  const byName = profiles.find((p) => p.name.toLowerCase() === q);
+  if (byName) return byName;
+
+  // 4. 模糊包含名称或邮箱
+  const byPartial = profiles.find(
+    (p) =>
+      p.name.toLowerCase().includes(q) ||
+      (p.email && p.email.toLowerCase().includes(q))
+  );
+  if (byPartial) return byPartial;
+
+  return null;
+}
+
+/**
+ * 校验指定文件是否为合法的 SQLite 3 数据库文件（头部以 "SQLite format 3" 开头）
+ */
+export function isSqliteDatabase(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(16);
+    fs.readSync(fd, buffer, 0, 16, 0);
+    fs.closeSync(fd);
+    return buffer.toString('utf8', 0, 15) === 'SQLite format 3';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 在目标 Profile 的 Cookies 数据库中执行白名单物理清洗，只保留美团及点评域名 Cookies
+ */
+export function sanitizeTargetCookiesDatabase(targetProfileDir: string): {
+  cleanedCookiesPath: string;
+  remainingCount: number;
+} {
+  const candidates = [
+    path.join(targetProfileDir, 'Cookies'),
+    path.join(targetProfileDir, 'Network', 'Cookies'),
+  ];
+
+  let cookiePath = '';
+  for (const p of candidates) {
+    if (fs.existsSync(p) && isSqliteDatabase(p)) {
+      cookiePath = p;
+      break;
+    }
+  }
+
+  if (!cookiePath) {
+    return { cleanedCookiesPath: '', remainingCount: 0 };
+  }
+
+  // 清除可能存在的 SQLite WAL / SHM 临时缓存
+  const wal = `${cookiePath}-wal`;
+  const shm = `${cookiePath}-shm`;
+  if (fs.existsSync(wal)) {
+    try { fs.rmSync(wal, { force: true }); } catch {}
+  }
+  if (fs.existsSync(shm)) {
+    try { fs.rmSync(shm, { force: true }); } catch {}
+  }
+
+  const sql = `
+    DELETE FROM cookies WHERE host_key NOT LIKE '%meituan%' AND host_key NOT LIKE '%dianping%';
+    VACUUM;
+    SELECT count(*) FROM cookies;
+  `;
+
+  try {
+    const stdout = execFileSync('sqlite3', [cookiePath, sql], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    const lines = stdout.trim().split('\n');
+    const remaining = parseInt(lines[lines.length - 1], 10) || 0;
+    return { cleanedCookiesPath: cookiePath, remainingCount: remaining };
+  } catch (e) {
+    throw new Error(`执行 Cookies 白名单物理清洗失败: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /**
@@ -155,8 +309,20 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
 
   const profileObj = (localState.profile as Record<string, unknown>) || {};
   const lastUsedProfile = (profileObj.last_used as string) || 'Default';
-  const sourceProfileName = options.customSourceProfile || lastUsedProfile;
-  const sourceProfileDir = path.join(sourceRoot, sourceProfileName);
+
+  // 解析并匹配目标 Profile (支持 ID、名称、纯数字序号，默认使用当前活跃的 last_used)
+  const allProfiles = listChromeProfiles(sourceRoot);
+  const targetSourceProfile = resolveTargetProfile(allProfiles, options.customSourceProfile);
+
+  if (options.customSourceProfile && !targetSourceProfile) {
+    const available = allProfiles.map((p) => `"${p.id}" (${p.name})`).join(', ');
+    throw new Error(
+      `未找到指定的源 Chrome Profile: "${options.customSourceProfile}"。\n可用 Profiles: [${available}]`
+    );
+  }
+
+  const sourceProfileName = targetSourceProfile?.id || options.customSourceProfile || lastUsedProfile;
+  const sourceProfileDir = targetSourceProfile?.dirPath || path.join(sourceRoot, sourceProfileName);
 
   if (!fs.existsSync(sourceProfileDir)) {
     throw new Error(`未找到源 Chrome Profile 目录: ${sourceProfileDir}`);
@@ -239,6 +405,15 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     }
   }
 
+  // 4.3 物理执行 SQLite Cookies 白名单过滤，只保留美团/大众点评登录态，杜绝任何外部站点隐私泄露
+  let cleanedMeituanCount = 0;
+  try {
+    const sanitizeResult = sanitizeTargetCookiesDatabase(targetProfileDir);
+    cleanedMeituanCount = sanitizeResult.remainingCount;
+  } catch {
+    // 忽略异常 (例如非 SQLite 文件测试桩)
+  }
+
   // 5. 规范化写入 targetRoot/Local State
   const infoCache = (profileObj.info_cache as Record<string, unknown>) || {};
   const sourceInfo = infoCache[sourceProfileName] || {};
@@ -277,12 +452,20 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     }
   }
 
+  const profileLabel = targetSourceProfile
+    ? `${targetSourceProfile.id} (${targetSourceProfile.name})`
+    : sourceProfileName;
+
+  const cookieInfo = cleanedMeituanCount > 0
+    ? `已保留 ${cleanedMeituanCount} 个美团登录态 Cookies (其余站点已物理清除)`
+    : '未检测到美团登录态 Cookies';
+
   return {
     success: true,
     sourceDir: sourceProfileDir,
     sourceProfile: sourceProfileName,
     targetDir: targetRoot,
-    message: `成功从系统 Chrome Profile (${sourceProfileName}) 同步登录态至「${channelCode}」专用目录`,
+    message: `成功从系统 Chrome Profile「${profileLabel}」同步登录态至「${channelCode}」专用目录。${cookieInfo}`,
   };
 }
 
