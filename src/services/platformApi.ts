@@ -41,6 +41,9 @@ function inferModuleFromPath(path: string): LogModule {
   if (path.includes('/hotels')) {
     return 'HOTEL';
   }
+  if (path.includes('/channel-product') || path.includes('/product-management') || path.includes('/product')) {
+    return 'PRODUCT';
+  }
   if (path.includes('/channels') || path.includes('/channel')) {
     return 'CHANNEL';
   }
@@ -127,23 +130,84 @@ export async function requestPlatformApi<T = unknown>(
   let token = await platformAuthService.getValidAccessToken();
 
   const makeRequest = async (accessToken: string) => {
+    const headersRecord: Record<string, string> = {};
+    if (fetchOptions.headers) {
+      if (fetchOptions.headers instanceof Headers) {
+        fetchOptions.headers.forEach((val, key) => {
+          headersRecord[key] = val;
+        });
+      } else if (Array.isArray(fetchOptions.headers)) {
+        for (const [key, val] of fetchOptions.headers) {
+          headersRecord[key] = val;
+        }
+      } else {
+        Object.assign(headersRecord, fetchOptions.headers);
+      }
+    }
+    headersRecord['App-Auth'] = `bearer ${accessToken}`;
+    const hasContentType = Object.keys(headersRecord).some((k) => k.toLowerCase() === 'content-type');
+    if (!hasContentType && fetchOptions.body && typeof fetchOptions.body === 'string') {
+      headersRecord['Content-Type'] = 'application/json';
+    }
+
+    // 优先委托 Electron 主进程 Node.js 原生发起，彻底脱离浏览器 CORS 与 OPTIONS 预检
+    if (typeof window !== 'undefined' && window.host?.platform?.request) {
+
+      const resp = await window.host.platform.request({
+        url: fullUrl,
+        method,
+        headers: headersRecord,
+        body: typeof fetchOptions.body === 'string' ? fetchOptions.body : undefined,
+        timeoutMs,
+      });
+      return {
+        ok: resp.ok,
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+        bodyText: resp.body,
+      };
+    }
+
+    // 单元测试 / 独立环境回退标准 fetch
+    const headers = new Headers(headersRecord);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const headers = new Headers(fetchOptions.headers || {});
-      headers.set('App-Auth', `bearer ${accessToken}`);
-      if (!headers.has('Content-Type') && fetchOptions.body && typeof fetchOptions.body === 'string') {
-        headers.set('Content-Type', 'application/json');
-      }
-
       const response = await fetch(fullUrl, {
         ...fetchOptions,
         headers,
         signal: controller.signal,
       });
 
-      return response;
+      let bodyText = '';
+      if (typeof response.text === 'function') {
+        bodyText = await response.text();
+      } else if (typeof response.json === 'function') {
+        const json = await response.json();
+        bodyText = typeof json === 'string' ? json : JSON.stringify(json);
+      }
+
+      const headersMap: Record<string, string> = {};
+      if (response.headers) {
+        if (typeof response.headers.forEach === 'function') {
+          response.headers.forEach((val, key) => {
+            headersMap[key.toLowerCase()] = val;
+          });
+        } else if (typeof response.headers.get === 'function') {
+          const ct = response.headers.get('content-type');
+          if (ct) headersMap['content-type'] = ct;
+        }
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        headers: headersMap,
+        bodyText,
+      };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -164,17 +228,12 @@ export async function requestPlatformApi<T = unknown>(
       let errorDetail = '';
       let responseData: unknown = undefined;
       try {
-        if (typeof response.json === 'function') {
-          responseData = await response.json();
-          const errJson = responseData as Record<string, unknown>;
-          errorDetail = String(errJson.msg || errJson.message || errJson.error || '');
-        } else if (typeof response.text === 'function') {
-          const text = await response.text();
-          errorDetail = text;
-          responseData = text;
-        }
+        responseData = response.bodyText ? JSON.parse(response.bodyText) : undefined;
+        const errJson = responseData as Record<string, unknown>;
+        errorDetail = String(errJson.msg || errJson.message || errJson.error || '');
       } catch {
-        // 无法解析 JSON 则采用状态码
+        errorDetail = response.bodyText;
+        responseData = response.bodyText;
       }
 
       const logEntry = logger.track('API_REQUEST_FAILED', {
@@ -201,18 +260,10 @@ export async function requestPlatformApi<T = unknown>(
     }
 
     let responseData: unknown = undefined;
-    const contentType = response.headers?.get?.('content-type') || '';
-    if (contentType.includes('application/json') && typeof response.json === 'function') {
-      responseData = await response.json();
-    } else if (typeof response.text === 'function') {
-      const text = await response.text();
-      try {
-        responseData = text ? JSON.parse(text) : undefined;
-      } catch {
-        responseData = text;
-      }
-    } else if (typeof response.json === 'function') {
-      responseData = await response.json();
+    try {
+      responseData = response.bodyText ? JSON.parse(response.bodyText) : undefined;
+    } catch {
+      responseData = response.bodyText;
     }
 
     const logEntry = logger.track('API_REQUEST_SUCCESS', {

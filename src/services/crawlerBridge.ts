@@ -3,6 +3,8 @@ import type {
   HotelCrawlResult,
   ProfileSyncResult,
   CollectorLogPayload,
+  ProductCrawlRequest,
+  ProductCrawlResult,
 } from '../crawler/types';
 import type { CrawlerBridgeApi } from '../types';
 
@@ -13,7 +15,7 @@ export interface CrawlerApiResponse extends HotelCrawlResult {
 function getCrawlerApi(): CrawlerBridgeApi {
   const host = window.host;
   if (!host?.crawler) {
-    throw new Error('门店采集仅支持桌面端');
+    throw new Error('自动化采集功能仅支持桌面端');
   }
 
   return host.crawler;
@@ -55,3 +57,29 @@ export async function syncChromeProfileByChannel(
 
   return result;
 }
+
+export async function collectProductsByHotel(
+  request: ProductCrawlRequest
+): Promise<ProductCrawlResult> {
+  const code = (request.channelCode || '').trim().toUpperCase();
+  if (!code) {
+    throw new Error('采集渠道编码 channelCode 不能为空');
+  }
+  const extUnitCode = (request.extUnitCode || '').trim();
+  if (!extUnitCode) {
+    throw new Error('产品采集缺少外部门店编码 extUnitCode');
+  }
+
+  const result = await getCrawlerApi().collectProducts({
+    ...request,
+    channelCode: code,
+    extUnitCode,
+  });
+
+  if (!result.success) {
+    throw new Error(result.error || `「${code}」产品采集失败`);
+  }
+
+  return result;
+}
+

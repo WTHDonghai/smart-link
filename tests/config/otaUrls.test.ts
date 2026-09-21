@@ -4,6 +4,8 @@ import {
   getMeituanCatalogUrl,
   getOtaOrderUrl,
   getMeituanOrderUrl,
+  getOtaProductUrl,
+  getMeituanProductUrl,
 } from '../../src/config/otaUrls';
 import { APP_ENV_KEYS } from '../../src/types/env';
 import { resolveMeituanTargetUrl } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
@@ -112,6 +114,33 @@ describe('otaUrls config & single source of truth', () => {
       expect(getOtaOrderUrl('meituanbiz')).toBe(
         'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
       );
+    });
+  });
+
+  describe('getOtaProductUrl & getMeituanProductUrl', () => {
+    it('returns custom product URL when SMARTLINK_OTA_MEITUAN_PRODUCT_URL is configured', () => {
+      process.env[APP_ENV_KEYS.otaProductMeituan] = 'https://custom.meituan.com/hotel/products';
+      expect(getMeituanProductUrl()).toBe('https://custom.meituan.com/hotel/products');
+      expect(getOtaProductUrl('MEITUAN')).toBe('https://custom.meituan.com/hotel/products');
+    });
+
+    it('falls back to getOtaChannelUrl when product specific env is not set', () => {
+      delete process.env[APP_ENV_KEYS.otaProductMeituan];
+      process.env[APP_ENV_KEYS.otaCatalogMeituan] = 'https://catalog.meituan.com/merchant';
+
+      expect(getMeituanProductUrl()).toBe('https://catalog.meituan.com/merchant');
+      expect(getOtaProductUrl('MEITUAN')).toBe('https://catalog.meituan.com/merchant');
+    });
+
+    it('throws Fail-Fast error when neither product nor catalog URL is configured', () => {
+      delete process.env[APP_ENV_KEYS.otaProductMeituan];
+      delete process.env[APP_ENV_KEYS.otaCatalogMeituan];
+
+      expect(() => getMeituanProductUrl()).toThrow('未配置渠道「MEITUAN」的目标访问地址');
+    });
+
+    it('throws explicit error when channelCode is empty', () => {
+      expect(() => getOtaProductUrl('')).toThrow('渠道编码 channelCode 不能为空');
     });
   });
 });

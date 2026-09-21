@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
-import { syncChromeProfile, syncChromeSessionViaCDP } from '../src/crawler/profileSync';
+import { syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
@@ -12,11 +12,19 @@ import {
   savePlatformTokenFile,
   clearPlatformTokenFile,
 } from '../src/crawler/duty/platformTokenStore';
+import { stationIdentityManager } from '../src/crawler/duty/stationIdentity';
 import { saveTokensToStorage, clearTokensFromStorage } from '../src/services/platformAuth';
-import type { HotelCrawlRequest, HotelCrawlResult } from '../src/crawler/types';
+import type {
+  HotelCrawlRequest,
+  HotelCrawlResult,
+  ProductCrawlRequest,
+  ProductCrawlResult,
+} from '../src/crawler/types';
 import type {
   DesktopOperationResult,
   PlatformAuthTokens,
+  PlatformBridgeRequestOptions,
+  PlatformBridgeResponse,
   SystemLogEntry,
 } from '../src/types';
 import { loadProjectEnv } from '../src/config/envLoader';
@@ -171,10 +179,20 @@ export function registerCrawlerIpcHandlers(): void {
         if (!code) {
           throw new Error('未指定采集渠道代码 channelCode');
         }
-        return await hotelCollectionEngine.collectHotels({
-          ...request,
-          channelCode: code,
-        });
+        return await hotelCollectionEngine.collectHotels(
+          {
+            ...request,
+            channelCode: code,
+          },
+          (logPayload) => {
+            logger.track('CRAWLER_LOG', {
+              module: 'HOTEL',
+              level: logPayload.level === 'PLAYWRIGHT' ? 'INFO' : logPayload.level,
+              message: logPayload.message,
+              details: logPayload.details,
+            });
+          }
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         return {
@@ -196,7 +214,47 @@ export function registerCrawlerIpcHandlers(): void {
     }
   );
 
-  // [TODO]: 需要移除，同步profile 只是用于开发需要
+  // 2. 产品自动化采集 (直接调度 hotelCollectionEngine.collectProducts)
+  ipcMain.handle(
+    'crawler:collect-products',
+    async (_event, request: ProductCrawlRequest): Promise<ProductCrawlResult> => {
+      try {
+        const code = (request.channelCode || '').trim().toUpperCase();
+        if (!code) {
+          throw new Error('未指定采集渠道代码 channelCode');
+        }
+        const extUnitCode = (request.extUnitCode || '').trim();
+        if (!extUnitCode) {
+          throw new Error('未指定外部门店编码 extUnitCode');
+        }
+        return await hotelCollectionEngine.collectProducts(
+          {
+            ...request,
+            channelCode: code,
+            extUnitCode,
+          },
+          (logPayload) => {
+            logger.track('CRAWLER_LOG', {
+              module: 'PRODUCT',
+              level: logPayload.level === 'PLAYWRIGHT' ? 'INFO' : logPayload.level,
+              message: logPayload.message,
+              details: logPayload.details,
+            });
+          }
+        );
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          channelCode: request?.channelCode || '',
+          extUnitCode: request?.extUnitCode || '',
+          error: errorMsg,
+          products: [],
+        };
+      }
+    }
+  );
+
   // 2. Profile 本地登录态同步 (开发阶段：CDP 调试端口精准同步)
   ipcMain.handle(
     'crawler:sync-profile',
@@ -206,7 +264,6 @@ export function registerCrawlerIpcHandlers(): void {
         const result = await syncChromeSessionViaCDP({ channelCode: code });
         return result;
       } catch (error) {
-        const code = (channelCode || 'MEITUAN').trim().toUpperCase();
         return {
           success: false,
           sourceDir: '',
@@ -214,6 +271,46 @@ export function registerCrawlerIpcHandlers(): void {
           targetDir: '',
           error: error instanceof Error ? error.message : String(error),
         };
+      }
+    }
+  );
+}
+
+/**
+ * 注册文旅平台网络请求原生代理 IPC 监听器
+ * 由 Electron 主进程 Node.js 原生发起，彻底脱离浏览器端 CORS 与 OPTIONS 预检限制
+ */
+export function registerPlatformIpcHandlers(): void {
+  ipcMain.handle(
+    'platform:request',
+    async (_event, options: PlatformBridgeRequestOptions): Promise<PlatformBridgeResponse> => {
+      const controller = new AbortController();
+      const timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 15000;
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(options.url, {
+          method: (options.method || 'GET').toUpperCase(),
+          headers: options.headers,
+          body: options.body,
+          signal: controller.signal,
+        });
+
+        const text = await response.text();
+        const headersRecord: Record<string, string> = {};
+        response.headers.forEach((val, key) => {
+          headersRecord[key.toLowerCase()] = val;
+        });
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          headers: headersRecord,
+          body: text,
+        };
+      } finally {
+        clearTimeout(timer);
       }
     }
   );
@@ -281,6 +378,10 @@ export function registerDutyIpcHandlers(): void {
     const fileResult = savePlatformTokenFile(tokens);
     if (!fileResult.success) {
       return { success: false, error: fileResult.error };
+    }
+
+    if (tokens.platformBaseUrl) {
+      stationIdentityManager.setPlatformBaseUrl(tokens.platformBaseUrl);
     }
 
     return { success: true };
@@ -546,6 +647,7 @@ if (process.type === 'browser') {
     initNodePlatformTokens();
 
     registerMainLogIpcHandlers();
+    registerPlatformIpcHandlers();
     registerCrawlerIpcHandlers();
     registerDutyIpcHandlers();
     await createMainWindow();

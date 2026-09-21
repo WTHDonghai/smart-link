@@ -6,10 +6,17 @@ import type {
   StationIdentity,
   SystemLogEntry,
 } from './index';
-import type { HotelCrawlRequest, HotelCrawlResult, ProfileSyncResult } from '../crawler/types';
+import type {
+  HotelCrawlRequest,
+  HotelCrawlResult,
+  ProfileSyncResult,
+  ProductCrawlRequest,
+  ProductCrawlResult,
+} from '../crawler/types';
 
 export interface CrawlerBridgeApi {
   collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
+  collectProducts(request: ProductCrawlRequest): Promise<ProductCrawlResult>;
   syncProfile(channelCode?: string): Promise<ProfileSyncResult>;
 }
 
@@ -30,10 +37,31 @@ export interface DutyBridgeApi {
   onLog(callback: (entry: SystemLogEntry) => void): () => void;
 }
 
+export interface PlatformBridgeRequestOptions {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs?: number;
+}
+
+export interface PlatformBridgeResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export interface PlatformBridgeApi {
+  request(options: PlatformBridgeRequestOptions): Promise<PlatformBridgeResponse>;
+}
+
 export interface HostBridgeApi {
   crawler: CrawlerBridgeApi;
   duty: DutyBridgeApi;
   env: AppEnvSnapshot;
+  platform?: PlatformBridgeApi;
 }
 
 declare global {

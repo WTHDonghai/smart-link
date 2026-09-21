@@ -10,6 +10,7 @@ export const APP_ENV_KEYS = {
   otaCatalogFliggy: 'SMARTLINK_OTA_FLIGGY_URL',
   otaCatalogQunar: 'SMARTLINK_OTA_QUNAR_URL',
   otaCatalogRed: 'SMARTLINK_OTA_RED_URL',
+  otaProductMeituan: 'SMARTLINK_OTA_MEITUAN_PRODUCT_URL',
   otaOrderMeituan: 'SMARTLINK_OTA_MEITUAN_ORDER_URL',
   otaOrderDouyin: 'SMARTLINK_OTA_DOUYIN_ORDER_URL',
   otaOrderCtrip: 'SMARTLINK_OTA_CTRIP_ORDER_URL',

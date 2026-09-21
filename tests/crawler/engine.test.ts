@@ -3,6 +3,7 @@ import { HotelCollectionEngine } from '../../src/crawler/engine';
 import { hotelCollectorRegistry } from '../../src/crawler/registry';
 import { createPersistentBrowserSession } from '../../src/crawler/browserManager';
 import type { ChannelHotelCollector } from '../../src/crawler/collectors/base';
+import { dutyOrchestrationEngine } from '../../src/crawler/duty/dutyOrchestrationEngine';
 
 vi.mock('../../src/crawler/browserManager', () => ({
   createPersistentBrowserSession: vi.fn(),
@@ -63,7 +64,7 @@ describe('HotelCollectionEngine 渠道并发互斥与执行保护', () => {
         channelCode: 'MOCK_BUSY_CHANNEL',
         headless: true,
       })
-    ).rejects.toThrow('渠道「MOCK_BUSY_CHANNEL」门店采集任务正在执行中，请勿重复发起。');
+    ).rejects.toThrow('渠道「MOCK_BUSY_CHANNEL」当前已有正在执行的自动化作业（门店或产品采集），请等待当前作业完成后再试。');
 
     // 大小写不同但同渠道名同样应互斥
     await expect(
@@ -71,7 +72,15 @@ describe('HotelCollectionEngine 渠道并发互斥与执行保护', () => {
         channelCode: 'mock_busy_channel',
         headless: true,
       })
-    ).rejects.toThrow('渠道「MOCK_BUSY_CHANNEL」门店采集任务正在执行中，请勿重复发起。');
+    ).rejects.toThrow('渠道「MOCK_BUSY_CHANNEL」当前已有正在执行的自动化作业（门店或产品采集），请等待当前作业完成后再试。');
+
+    // 发起同渠道的产品采集任务同样应被互斥阻断
+    await expect(
+      engine.collectProducts({
+        channelCode: 'MOCK_BUSY_CHANNEL',
+        extUnitCode: 'HOTEL-1',
+      })
+    ).rejects.toThrow('渠道「MOCK_BUSY_CHANNEL」当前已有正在执行的自动化作业（门店或产品采集），请等待当前作业完成后再试。');
 
     // 释放第一个任务完成
     resolveFirstSession!(undefined);
@@ -172,5 +181,26 @@ describe('HotelCollectionEngine 渠道并发互斥与执行保护', () => {
     // 锁必须已从 Set 中删除，且保持渠道会话与 Tab 存活供后续任务复用，不误杀关闭
     expect(engine.isChannelActive('CHANNEL_FAIL')).toBe(false);
     expect(mockSession.close).not.toHaveBeenCalled();
+  });
+
+  it('当渠道正在执行自动化订单值守时，collectHotels 与 collectProducts 必须 Fail-Fast 抛错阻断', async () => {
+    vi.spyOn(dutyOrchestrationEngine, 'isChannelActive').mockImplementation((code) => {
+      return code.toUpperCase() === 'DUTY_BUSY_CHANNEL';
+    });
+
+    await expect(
+      engine.collectHotels({
+        channelCode: 'DUTY_BUSY_CHANNEL',
+        headless: true,
+      })
+    ).rejects.toThrow('渠道「DUTY_BUSY_CHANNEL」当前正在执行自动化订单值守，请先停止值守后再执行门店采集。');
+
+    await expect(
+      engine.collectProducts({
+        channelCode: 'DUTY_BUSY_CHANNEL',
+        extUnitCode: 'HOTEL-DUTY-1',
+        headless: true,
+      })
+    ).rejects.toThrow('渠道「DUTY_BUSY_CHANNEL」当前正在执行自动化订单值守，请先停止值守后再执行产品采集。');
   });
 });

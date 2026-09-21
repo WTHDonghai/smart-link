@@ -13,6 +13,7 @@ import {
   getDefaultStationCacheFile,
 } from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
+import { logger } from '../../../src/services/logger';
 import type { StationIdentity } from '../../../src/types';
 
 describe('stationIdentity', () => {
@@ -165,6 +166,37 @@ describe('stationIdentity', () => {
       const updated = JSON.parse(fs.readFileSync(cacheFilePath, 'utf-8')) as { platformBaseUrl: string; stationId: string };
       expect(updated.stationId).toBe('st-prod-999');
       expect(updated.platformBaseUrl).toBe('https://prod-api.hotel.com');
+    });
+
+    it('should clear invalid cache file and avoid repetitive warning logs on subsequent queries when platformBaseUrl changes', () => {
+      const cachedOldData = {
+        version: 1,
+        stationId: 'st-old-env',
+        appId: 'smart-link',
+        platformBaseUrl: 'https://old-api.hotel.com',
+        registeredAt: '2026-09-17T08:00:00.000Z',
+      };
+
+      fs.writeFileSync(cacheFilePath, JSON.stringify(cachedOldData, null, 2), 'utf-8');
+
+      const warnSpy = vi.spyOn(logger, 'warn');
+
+      const manager = new StationIdentityManager({
+        cacheFilePath,
+        appId: 'smart-link',
+        platformBaseUrl: 'https://new-api.hotel.com',
+      });
+
+      // 首次读取：检测到环境变更，记录警告并物理清除无效缓存文件
+      const firstResult = manager.getCurrentIdentity();
+      expect(firstResult).toBeNull();
+      expect(fs.existsSync(cacheFilePath)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // 第二次读取（模拟 3 秒后的状态轮询）：缓存文件已清理，直接返回 null，不再重复输出警告日志
+      const secondResult = manager.getCurrentIdentity();
+      expect(secondResult).toBeNull();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
     });
 
     it('should deduplicate concurrent in-flight registration calls', async () => {

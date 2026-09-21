@@ -73,6 +73,7 @@ export interface HotelMapping {
   otaHotelName: string;
   otaHotelId: string;
   extUnitCode?: string;
+  unitId?: string;
   pmsHotelName: string;
   pmsHotelId: string;
   unitCode?: string;
@@ -120,22 +121,82 @@ export interface PlatformProperty {
   type?: string;
 }
 
-export interface ProductMapping {
-  id: string;
-  hotelId: string;
-  hotelName: string;
-  otaChannelId: string;
-  otaProductName: string;
-  otaProductCode: string;
-  otaPhysicalRoomName: string;
-  otaPhysicalRoomCode: string;
-  internalRoomType: string;
+export interface RoomTypeOption {
+  id?: string;
+  code: string;
+  name: string;
+  displayLabel: string;
+}
+
+export interface RatePlanOption {
+  id?: string;
   rateCode: string;
-  bookingType: string;
+  rateName: string;
+  displayLabel: string;
+}
+
+export interface ReservationTypeOption {
+  id?: string;
+  code: string;
+  label: string;
+  displayLabel: string;
+}
+
+export interface ProductMapping {
+  id?: string;
+  mappingId?: string;
+  channelCode: string;
+  extUnitCode: string;
+  unitId: string;
+  unitType: string;
+  otaChannelId?: string;
+  otaChannelCode?: string;
+  hotelId?: string;
+  hotelName?: string;
+  // OTA 字段
+  otaRoomTypeId: string;
+  otaRoomTypeName: string;
+  otaBasicRoomId?: string;
+  otaBasicRoomName?: string;
+  otaRateCodeId?: string;
+  otaPayType?: string;
+  // 视图兼容字段
+  otaProductName?: string;
+  otaProductCode?: string;
+  otaPhysicalRoomName?: string;
+  otaPhysicalRoomCode?: string;
+  // 内部映射字段 (允许为空字符串)
+  roomType: string;
+  rateCode: string;
+  payType: string;
+  internalRoomType?: string;
+  bookingType?: string;
+  // 状态与来源
   status: 'completed' | 'pending' | 'active' | 'inactive';
+  source?: 'remote-platform' | 'ota-collection' | 'merged';
+  otaProductPresent?: boolean;
   priceRule?: 'direct' | 'markup_fixed' | 'markup_percent';
   markupValue?: number;
   autoSyncInventory?: boolean;
+}
+
+export interface SaveProductMappingPayloadItem {
+  id?: string;
+  channelCode: string;
+  extUnitCode: string;
+  unitId: string | number;
+  unitType: string;
+  otaRoomTypeId: string;
+  otaRoomTypeName: string;
+  otaBasicRoomId?: string;
+  otaBasicRoomName?: string;
+  otaRateCodeId?: string;
+  otaPayType: string;
+  roomType: string;
+  rateCode: string;
+  payType: string;
+  otaProductPresent?: boolean;
+  status?: string;
 }
 
 export type OrderStatus = 'transferred' | 'processing' | 'confirmed' | 'failed' | 'manual_review' | 'pending' | 'success' | 'cancelled' | 'importing';
@@ -213,6 +274,7 @@ export type LogEventType =
   | 'PLAYWRIGHT_CAPTCHA_DETECTED'
   | 'PLAYWRIGHT_CAPTCHA_SOLVED'
   | 'PLAYWRIGHT_HEARTBEAT'
+  | 'CRAWLER_LOG'
   // 任务驱动值守 (Duty Task)
   | 'DUTY_STATION_REGISTER'
   | 'DUTY_ACTUAL_STATE_REPORT'
@@ -699,6 +761,9 @@ export type {
   CrawlerBridgeApi,
   DutyBridgeApi,
   HostBridgeApi,
+  PlatformBridgeRequestOptions,
+  PlatformBridgeResponse,
+  PlatformBridgeApi,
 } from './host';
 
 export type {

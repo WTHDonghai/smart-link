@@ -391,4 +391,50 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
       unsubscribe();
     }
   });
+
+  it('优先委托 window.host.platform.request 原生 IPC 发起网络请求', async () => {
+    const validTokens: PlatformAuthTokens = {
+      accessToken: 'valid-ipc-token',
+      refreshToken: 'refresh-ipc',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveTokensToStorage(validTokens);
+
+    const mockRequest = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: 200, data: [{ code: 'EXK', name: '行政大床房' }] }),
+    });
+
+    hostWindow.host = {
+      platform: {
+        request: mockRequest,
+      },
+    };
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const result = await requestPlatformApi<{ code: number; data: { code: string; name: string }[] }>(
+      '/product-management/room-types?unitId=1001',
+      {
+        baseUrl: 'https://pms.example.com',
+        headers: { 'App-Property-Id': '1001' },
+      }
+    );
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const [callOptions] = mockRequest.mock.calls[0];
+    expect(callOptions.url).toBe('https://pms.example.com/product-management/room-types?unitId=1001');
+    expect(callOptions.headers['App-Property-Id']).toBe('1001');
+    expect(callOptions.headers['App-Auth']).toBe('bearer valid-ipc-token');
+    expect(result.data[0].code).toBe('EXK');
+  });
 });

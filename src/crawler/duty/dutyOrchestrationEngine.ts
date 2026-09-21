@@ -23,11 +23,11 @@ import {
   submitDutyTaskResult,
 } from '../../services/dutyRuntimeApi';
 import { registerApiLogListener } from '../../services/platformApi';
-import { logger } from '../../services/logger';
 import { formatLogTimestamp } from '../../services/logStorage';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger } from './dutyTaskLogger';
+import { hotelCollectionEngine } from '../engine';
 
 export { dispatchDutyTask };
 
@@ -132,6 +132,19 @@ export class DutyOrchestrationEngine {
     return this.coordinatorStatus;
   }
 
+  /**
+   * 检查指定渠道是否正在执行自动化值守
+   */
+  public isChannelActive(channelCode: string): boolean {
+    const code = (channelCode || '').trim().toUpperCase();
+    const runner = this.runners.get(code);
+    if (runner && runner.isRunning()) {
+      return true;
+    }
+    const state = this.channelStates.get(code);
+    return state?.status === 'RUNNING' || state?.status === 'STARTING';
+  }
+
   public getChannelDutyStatus(): Record<string, ChannelDutyInfo> {
     const result: Record<string, ChannelDutyInfo> = {};
     for (const [code, info] of this.channelStates.entries()) {
@@ -207,6 +220,12 @@ export class DutyOrchestrationEngine {
     const runner = this.runners.get(code);
     if (!runner) {
       throw new Error(`暂不支持渠道「${code}」自动化值守`);
+    }
+
+    if (hotelCollectionEngine.isChannelActive(channelCode)) {
+      throw new Error(
+        `渠道「${channelCode}」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启值守。`
+      );
     }
 
     if (runner.isRunning()) {

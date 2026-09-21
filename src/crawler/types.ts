@@ -59,3 +59,38 @@ export interface ProfileSyncResult {
   message?: string;
   error?: string;
 }
+
+export interface ProductCrawlRequest {
+  channelCode: string;
+  pmsChannelCode?: string;
+  extUnitCode: string;
+  otaHotelName?: string;
+  poiId?: string;
+  partnerId?: string;
+  targetUrl?: string;
+  headless?: boolean;
+  timeoutMs?: number;
+  waitMs?: number;
+}
+
+export interface DiscoveredProductCandidate {
+  otaChannelCode: string;
+  extUnitCode: string;
+  otaRoomTypeId: string;
+  otaRoomTypeName: string;
+  otaBasicRoomId?: string;
+  otaBasicRoomName?: string;
+  otaRateCodeId?: string;
+  otaPayType?: string;
+  source: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface ProductCrawlResult {
+  success: boolean;
+  channelCode: string;
+  extUnitCode: string;
+  products: DiscoveredProductCandidate[];
+  error?: string;
+}
+

@@ -27,6 +27,11 @@ export const OTA_ORDER_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   QUNAR: APP_ENV_KEYS.otaOrderQunar,
 };
 
+export const OTA_PRODUCT_ENV_KEY_MAP: Record<string, AppEnvKey> = {
+  MEITUAN: APP_ENV_KEYS.otaProductMeituan,
+  MEITUAN_BIZ: APP_ENV_KEYS.otaProductMeituan,
+};
+
 interface OtaUrlErrorContext {
   subject: string;
   unsupportedMessagePrefix: string;
@@ -144,4 +149,33 @@ export function getOtaOrderUrl(channelCode: string): string {
  */
 export function getMeituanOrderUrl(): string {
   return getOtaOrderUrl('MEITUAN');
+}
+
+/**
+ * 根据渠道编码获取该渠道产品采集目标 URL (Single Source of Truth)
+ * 优先读取渠道产品专用环境变量；若未配置，默认回退至该渠道的标准目录中心页面 (getOtaChannelUrl)
+ */
+export function getOtaProductUrl(channelCode: string): string {
+  const code = (channelCode || '').trim();
+  if (!code) {
+    throw new Error('渠道编码 channelCode 不能为空');
+  }
+
+  const normalizedCode = normalizeOtaChannelCode(code);
+  const envKey = OTA_PRODUCT_ENV_KEY_MAP[normalizedCode];
+  if (envKey) {
+    const customProductUrl = getAppEnv(envKey);
+    if (customProductUrl?.trim()) {
+      return customProductUrl.trim();
+    }
+  }
+
+  return getOtaChannelUrl(normalizedCode);
+}
+
+/**
+ * 快捷获取美团产品采集标准目标 URL
+ */
+export function getMeituanProductUrl(): string {
+  return getOtaProductUrl('MEITUAN');
 }
