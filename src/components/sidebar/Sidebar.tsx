@@ -16,6 +16,7 @@ import { NavTab } from '../../types';
 import { 
   ArrowLeftRight, 
   Building2, 
+  BedDouble,
   ShieldCheck, 
   FileText, 
   Menu,
