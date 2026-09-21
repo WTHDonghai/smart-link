@@ -555,12 +555,12 @@ export const EditOrderDrawer: React.FC<EditOrderDrawerProps> = ({
                 {isSaving ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>保存并导入中...</span>
+                    <span>保存中...</span>
                   </>
                 ) : (
                   <>
                     <Save className="w-3.5 h-3.5" />
-                    <span>保存并导入</span>
+                    <span>保存</span>
                   </>
                 )}
               </button>

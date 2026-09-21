@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import orderGuardianReducer, {
   setFilterStatus,
   setFilterQuery,
@@ -12,11 +12,24 @@ import orderGuardianReducer, {
   fetchStatisticsThunk,
   loadOrderEditorThunk,
   saveOrderDraftThunk,
+  executeOrderActionThunk,
   toggleChannelDutyThunk,
   syncDutyStatusThunk,
   selectGuardianStats,
 } from '../../../src/store/slices/orderGuardianSlice';
-import type { ToolkitOrder } from '../../../src/types';
+import type { ToolkitOrder, ToolkitOrderDraft } from '../../../src/types';
+import { showToast } from '../../../src/store/slices/appSlice';
+
+vi.mock('../../../src/services/toolkitOrderApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/services/toolkitOrderApi')>();
+  return {
+    ...actual,
+    updateToolkitOrder: vi.fn(),
+    retryToolkitOrderImport: vi.fn(),
+    deleteToolkitOrder: vi.fn(),
+    cancelToolkitOrder: vi.fn(),
+  };
+});
 
 const mockOrder: ToolkitOrder = {
   id: 'ord_1',
@@ -247,6 +260,71 @@ describe('orderGuardianSlice reducer', () => {
       expect(stats.imported).toBe(10);
       expect(stats.failed).toBe(2);
       expect(stats.pendingManual).toBe(2);
+    });
+  });
+
+  describe('thunk execution', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('saveOrderDraftThunk calls updateToolkitOrder without triggering import and shows success toast', async () => {
+      const { updateToolkitOrder, retryToolkitOrderImport } = await import('../../../src/services/toolkitOrderApi');
+      vi.mocked(updateToolkitOrder).mockResolvedValueOnce(undefined);
+
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: {
+          orders: [mockOrder],
+          activeEditOrder: mockOrder,
+        },
+      });
+
+      const draft: ToolkitOrderDraft = {
+        otaOrderId: 'MT1001',
+        contact: { name: '张三', mobile: '13800001111' },
+        booking: {
+          roomType: '大床房',
+          roomTypeId: 'RT_01',
+          rateCode: 'OTA',
+          paytype: '预付全额',
+          arrival: '2026-10-01',
+          departure: '2026-10-02',
+          quantity: 1,
+          pricing: [{ date: '2026-10-01', price: 200 }],
+        },
+      };
+
+      await saveOrderDraftThunk({ id: 'ord_1', draft, order: mockOrder })(dispatch, getState, undefined);
+
+      expect(updateToolkitOrder).toHaveBeenCalledWith(mockOrder, draft);
+      expect(retryToolkitOrderImport).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith(
+        showToast({ type: 'success', title: '订单 MT1001 已成功保存' })
+      );
+    });
+
+    it('executeOrderActionThunk IMPORT calls retryToolkitOrderImport and shows success toast', async () => {
+      const { retryToolkitOrderImport, updateToolkitOrder } = await import('../../../src/services/toolkitOrderApi');
+      vi.mocked(retryToolkitOrderImport).mockResolvedValueOnce({
+        success: true,
+        pmsOrderId: 'PMS_9999',
+      });
+
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: {
+          orders: [mockOrder],
+        },
+      });
+
+      await executeOrderActionThunk({ id: 'ord_1', action: 'IMPORT', order: mockOrder })(dispatch, getState, undefined);
+
+      expect(retryToolkitOrderImport).toHaveBeenCalledWith(mockOrder);
+      expect(updateToolkitOrder).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith(
+        showToast({ type: 'success', title: '订单 MT1001 导入请求已提交 (PMS单号: PMS_9999)' })
+      );
     });
   });
 });

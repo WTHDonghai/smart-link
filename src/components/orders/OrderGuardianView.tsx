@@ -175,7 +175,7 @@ export const OrderGuardianView: React.FC = () => {
       module: 'ORDER',
       level: 'INFO',
       orderNo: draft.otaOrderId,
-      message: `[OrderGuardian] 用户保存并导入订单 ${draft.otaOrderId}`,
+      message: `[OrderGuardian] 用户保存订单草稿 ${draft.otaOrderId}`,
       details: `房型: ${draft.booking.roomType} | 房价码: ${draft.booking.rateCode} | 入住人: ${draft.contact.name}`,
     });
     void dispatch(saveOrderDraftThunk({ id, draft, order: activeEditOrder || undefined }));

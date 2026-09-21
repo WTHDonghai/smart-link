@@ -155,7 +155,7 @@ export const executeOrderActionThunk = createAsyncThunk(
         const importRes = await retryToolkitOrderImport(targetOrder || id);
         const pmsInfo = importRes.pmsOrderId ? ` (PMS单号: ${importRes.pmsOrderId})` : '';
         const orderNo = targetOrder?.otaOrderId || id;
-        dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功重新导入${pmsInfo}` }));
+        dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 导入请求已提交${pmsInfo}` }));
       } else if (action === 'DELETE') {
         await deleteToolkitOrder(id);
         dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功删除` }));
@@ -230,7 +230,7 @@ export const loadOrderEditorThunk = createAsyncThunk(
 );
 
 /**
- * 保存编辑订单并直接重新导入文旅中台
+ * 保存编辑订单草稿 (仅保存修改，不触发 PMS 导入)
  */
 export const saveOrderDraftThunk = createAsyncThunk(
   'orderGuardian/saveDraft',
@@ -242,16 +242,15 @@ export const saveOrderDraftThunk = createAsyncThunk(
       const state = getState() as { orderGuardian: OrderGuardianState };
       const baseOrder = order || state.orderGuardian.activeEditOrder || state.orderGuardian.orders.find((o) => o.id === id);
       const targetOrder = baseOrder || id;
-      const res = await updateToolkitOrder(targetOrder, draft);
-      const pmsInfo = res.pmsOrderId ? ` (PMS单号: ${res.pmsOrderId})` : '';
+      await updateToolkitOrder(targetOrder, draft);
       const orderNo = draft.otaOrderId || id;
-      dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功保存并导入${pmsInfo}` }));
+      dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功保存` }));
       void dispatch(fetchOrdersThunk());
       void dispatch(fetchStatisticsThunk());
       return id;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '保存并导入失败';
-      dispatch(showToast({ type: 'error', title: '保存并导入失败', description: msg }));
+      const msg = error instanceof Error ? error.message : '保存订单失败';
+      dispatch(showToast({ type: 'error', title: '保存失败', description: msg }));
       return rejectWithValue(msg);
     }
   }

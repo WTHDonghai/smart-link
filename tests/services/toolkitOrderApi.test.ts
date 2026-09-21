@@ -316,41 +316,35 @@ describe('toolkitOrderApi', () => {
         remark: '加急处理',
       };
 
-      const result = await updateToolkitOrder(baseOrder, draft);
+      await updateToolkitOrder(baseOrder, draft);
       expect(mockRequest).toHaveBeenCalledWith(
-        '/toolkit/orders/import',
+        `${ORDER_ENDPOINTS.ORDERS}/ord_1`,
         expect.objectContaining({
-          method: 'POST',
+          method: 'PUT',
           body: JSON.stringify({
-            extUnitCode: 'HOTEL_01',
-            orders: [
-              {
-                otaOrderId: 'MT_1001',
-                otaChannel: 'MEITUAN',
-                contact: { name: '张三', mobile: '13800001111' },
-                booking: {
-                  roomType: '大床房',
-                  originRoomType: '大床房',
-                  rateCode: 'OTA',
-                  arrival: '2026-10-01',
-                  departure: '2026-10-02',
-                  roomTypeId: 'RT_01',
-                  nights: 1,
-                  quantity: 1,
-                  totalPrice: 200,
-                  paytype: '预付全额',
-                  pricing: [{ date: '2026-10-01', price: 200 }],
-                },
-                remark: '加急处理',
-              },
-            ],
+            ...baseOrder,
+            otaOrderId: 'MT_1001',
+            contact: { name: '张三', mobile: '13800001111' },
+            booking: {
+              ...baseOrder.booking,
+              roomType: '大床房',
+              roomTypeId: 'RT_01',
+              rateCode: 'OTA',
+              paytype: '预付全额',
+              arrival: '2026-10-01',
+              departure: '2026-10-02',
+              nights: 1,
+              quantity: 1,
+              pricing: [{ date: '2026-10-01', price: 200 }],
+              totalPrice: 200,
+            },
+            remark: '加急处理',
           }),
         })
       );
-      expect(result.pmsOrderId).toBe('PMS_999');
     });
 
-    it('updateToolkitOrder fetches details first if given an id string before importing', async () => {
+    it('updateToolkitOrder fetches details first if given an id string before sending PUT', async () => {
       mockRequest.mockResolvedValueOnce({
         id: 'ord_1',
         unitId: 'HOTEL_01',
@@ -359,11 +353,15 @@ describe('toolkitOrderApi', () => {
         otaOrderId: 'MT_1001',
         contact: { name: '张三', mobile: '13800001111' },
         status: 'FAILED',
+        booking: {
+          roomType: '标准间',
+          rateCode: 'RACK',
+          paytype: '预付全额',
+        },
       });
       mockRequest.mockResolvedValueOnce({
         success: true,
         code: 200,
-        data: { confirmationNo: 'CONF_888' },
       });
 
       const draft = {
@@ -381,13 +379,15 @@ describe('toolkitOrderApi', () => {
         },
       };
 
-      const result = await updateToolkitOrder('ord_1', draft);
+      await updateToolkitOrder('ord_1', draft);
       expect(mockRequest).toHaveBeenCalledWith('/toolkit/orders/ord_1');
-      expect(mockRequest).toHaveBeenCalledWith('/toolkit/orders/import', expect.anything());
-      expect(result.confirmationNo).toBe('CONF_888');
+      expect(mockRequest).toHaveBeenCalledWith(
+        '/toolkit/orders/ord_1',
+        expect.objectContaining({ method: 'PUT' })
+      );
     });
 
-    it('retryToolkitOrderImport converts ToolkitOrder to ImportPayload and posts to /toolkit/orders/import', async () => {
+    it('retryToolkitOrderImport calls POST /toolkit/orders/:id/import with record id', async () => {
       mockRequest.mockResolvedValueOnce({
         success: true,
         code: 200,
@@ -419,33 +419,10 @@ describe('toolkitOrderApi', () => {
 
       const result = await retryToolkitOrderImport(orderToImport);
       expect(mockRequest).toHaveBeenCalledWith(
-        '/toolkit/orders/import',
+        '/toolkit/orders/ord_1/import',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            extUnitCode: 'HOTEL_01',
-            orders: [
-              {
-                otaOrderId: 'MT_1001',
-                otaChannel: 'MEITUAN',
-                contact: { name: '张三', mobile: '13800001111' },
-                booking: {
-                  roomType: '大床房',
-                  originRoomType: '大床房',
-                  rateCode: 'OTA',
-                  arrival: '2026-10-01',
-                  departure: '2026-10-02',
-                  roomTypeId: 'RT_01',
-                  nights: 1,
-                  quantity: 1,
-                  totalPrice: 200,
-                  paytype: '预付全额',
-                  pricing: [{ date: '2026-10-01', price: 200 }],
-                },
-                remark: '',
-              },
-            ],
-          }),
+          body: JSON.stringify({ id: 'ord_1' }),
         })
       );
       expect(result.pmsOrderId).toBe('PMS_888');
@@ -476,9 +453,10 @@ describe('toolkitOrderApi', () => {
       const result = await retryToolkitOrderImport('ord_2');
       expect(mockRequest).toHaveBeenCalledWith('/toolkit/orders/ord_2');
       expect(mockRequest).toHaveBeenCalledWith(
-        '/toolkit/orders/import',
+        '/toolkit/orders/ord_2/import',
         expect.objectContaining({
           method: 'POST',
+          body: JSON.stringify({ id: 'ord_2' }),
         })
       );
       expect(result.confirmationNo).toBe('CONF_999');

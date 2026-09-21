@@ -1,7 +1,6 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
 import { fetchRoomTypes, fetchRatePlans, fetchReservationTypes } from './productApi';
-import { importToolkitOrder } from './dutyRuntimeApi';
-import { getAllowedOrderActions, buildImportPayloadFromOrder } from '../utils/orderHelpers';
+import { getAllowedOrderActions } from '../utils/orderHelpers';
 import type {
   ToolkitOrder,
   ToolkitOrderStatus,
@@ -264,12 +263,12 @@ export async function fetchToolkitOrderDetails(id: string): Promise<ToolkitOrder
 }
 
 /**
- * 保存修改并重新导入订单 (复用中台统一真实导入接口 POST /toolkit/orders/import)
+ * 保存修改订单 (调用中台 PUT /toolkit/orders/:id，仅保存修改草稿，不触发导入)
  */
 export async function updateToolkitOrder(
   orderOrId: ToolkitOrder | string,
   draft: ToolkitOrderDraft
-): Promise<{ success: boolean; pmsOrderId?: string; confirmationNo?: string; batchId?: string }> {
+): Promise<void> {
   let targetOrder: ToolkitOrder;
   if (typeof orderOrId === 'string') {
     if (!orderOrId?.trim()) throw new Error('订单 ID 不能为空');
@@ -278,6 +277,7 @@ export async function updateToolkitOrder(
     if (!orderOrId) throw new Error('订单数据不能为空');
     targetOrder = orderOrId;
   }
+  if (!targetOrder.id?.trim()) throw new Error('订单 ID 不能为空');
 
   const arrival = (draft.booking.arrival || targetOrder.booking?.arrival || '').slice(0, 10);
   const departure = (draft.booking.departure || targetOrder.booking?.departure || '').slice(0, 10);
@@ -295,8 +295,9 @@ export async function updateToolkitOrder(
       ? Math.max(1, Math.round((Date.parse(`${departure}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`)) / 86400000))
       : Number(targetOrder.booking?.nights) || 1);
 
-  const mergedOrder: ToolkitOrder = {
+  const mergedOrder = {
     ...targetOrder,
+    otaOrderId: (draft.otaOrderId || targetOrder.otaOrderId || '').trim(),
     contact: {
       name: draft.contact.name.trim(),
       mobile: draft.contact.mobile.trim(),
@@ -317,12 +318,18 @@ export async function updateToolkitOrder(
     remark: (draft.remark !== undefined ? draft.remark : targetOrder.remark || '').trim(),
   };
 
-  const payload = buildImportPayloadFromOrder(mergedOrder);
-  return await importToolkitOrder(payload);
+  const response = await requestPlatformApi<unknown>(
+    `${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(targetOrder.id.trim())}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(mergedOrder),
+    }
+  );
+  unwrapPlatformEnvelope(response);
 }
 
 /**
- * 人工重试导入失败订单 (复用中台统一真实导入接口 POST /toolkit/orders/import)
+ * 人工重试导入失败订单 (调用中台单条订单导入接口 POST /toolkit/orders/:id/import)
  */
 export async function retryToolkitOrderImport(
   orderOrId: ToolkitOrder | string
@@ -335,8 +342,22 @@ export async function retryToolkitOrderImport(
     if (!orderOrId) throw new Error('订单数据不能为空');
     targetOrder = orderOrId;
   }
-  const payload = buildImportPayloadFromOrder(targetOrder);
-  return await importToolkitOrder(payload);
+  if (!targetOrder.id?.trim()) throw new Error('订单 ID 不能为空');
+
+  const response = await requestPlatformApi<unknown>(
+    `${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(targetOrder.id.trim())}/import`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ id: targetOrder.id.trim() }),
+    }
+  );
+  const data = unwrapPlatformEnvelope<Record<string, unknown>>(response);
+  return {
+    success: true,
+    pmsOrderId: data && typeof data === 'object' && data.pmsOrderId ? String(data.pmsOrderId) : undefined,
+    confirmationNo: data && typeof data === 'object' && data.confirmationNo ? String(data.confirmationNo) : undefined,
+    batchId: data && typeof data === 'object' && data.batchId ? String(data.batchId) : undefined,
+  };
 }
 
 /**

@@ -73,7 +73,7 @@ describe('EditOrderDrawer 编辑订单抽屉组件', () => {
     expect(html).toContain('2026-10-01');
     expect(html).toContain('2026-10-02');
     expect(html).toContain('¥600.00');
-    expect(html).toContain('保存并导入');
+    expect(html).toContain('保存');
   });
 
   it('在 loading 状态下展示沉浸式加载动画而隐藏表单', () => {
@@ -109,10 +109,10 @@ describe('EditOrderDrawer 编辑订单抽屉组件', () => {
     // 含有只读/禁用标识
     expect(html).toContain('disabled=""');
 
-    // 底部只读 footer 展现“关闭”与“转为编辑”按钮，不出现“保存并导入”
+    // 底部只读 footer 展现“关闭”与“转为编辑”按钮，不出现“保存”
     expect(html).toContain('关闭');
     expect(html).toContain('转为编辑');
-    expect(html).not.toContain('保存并导入');
+    expect(html).not.toContain('保存');
   });
 
   it('在 isReadOnly 只读模式下若订单失败展示失败错误提示', () => {
