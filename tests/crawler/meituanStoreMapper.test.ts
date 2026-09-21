@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractMeituanStoresFromResponses,
+  getDefaultMeituanCatalogUrl,
   normalizeMeituanHotelCandidates,
   resolveMeituanTargetUrl,
   parseMeituanDropdownItem,
-  DEFAULT_MEITUAN_CATALOG_URL,
 } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
 
 describe('meituanStoreMapper', () => {
   describe('resolveMeituanTargetUrl', () => {
     it('returns default catalog URL when input is empty or undefined', () => {
-      expect(resolveMeituanTargetUrl('')).toBe(DEFAULT_MEITUAN_CATALOG_URL);
-      expect(resolveMeituanTargetUrl('   ')).toBe(DEFAULT_MEITUAN_CATALOG_URL);
-      expect(resolveMeituanTargetUrl(undefined)).toBe(DEFAULT_MEITUAN_CATALOG_URL);
+      expect(resolveMeituanTargetUrl('')).toBe(getDefaultMeituanCatalogUrl());
+      expect(resolveMeituanTargetUrl('   ')).toBe(getDefaultMeituanCatalogUrl());
+      expect(resolveMeituanTargetUrl(undefined)).toBe(getDefaultMeituanCatalogUrl());
     });
 
     it('throws explicit error when input is an invalid URL format according to Fail-Fast principle', () => {

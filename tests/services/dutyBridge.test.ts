@@ -1,201 +1,79 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  startDutyByChannel,
-  stopDutyByChannel,
-  stopAllDuty,
-  queryDutyStatus,
-  syncDutyTokens,
   clearDutyTokens,
+  takePendingMainLogs,
+  queryDutyStatus,
+  startDutyByChannel,
+  stopAllDuty,
+  stopDutyByChannel,
+  subscribeDutyLogs,
+  syncDutyTokens,
 } from '../../src/services/dutyBridge';
-import * as dutyRuntimeApi from '../../src/services/dutyRuntimeApi';
 import type { PlatformAuthTokens } from '../../src/types';
 
-vi.mock('../../src/services/dutyRuntimeApi', () => ({
-  startChannelDutyHttp: vi.fn(),
-  stopChannelDutyHttp: vi.fn(),
-  stopAllDutyHttp: vi.fn(),
-  fetchDutyStatusHttp: vi.fn(),
-  syncDutyTokensHttp: vi.fn(),
-  clearDutyTokensHttp: vi.fn(),
-}));
+const hostWindow = window as unknown as { host?: { duty?: unknown } };
+
+const tokens: PlatformAuthTokens = {
+  accessToken: 'access-token',
+  refreshToken: 'refresh-token',
+  expiresAt: Date.now() + 60_000,
+  tokenType: 'bearer',
+  platformBaseUrl: 'https://api.example.com',
+  tenantId: 'TENANT',
+  authenticatedAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
+function installDutyApi() {
+  const duty = {
+    startDuty: vi.fn().mockResolvedValue({ success: true }),
+    stopDuty: vi.fn().mockResolvedValue({ success: true }),
+    stopAllDuty: vi.fn().mockResolvedValue({ success: true }),
+    getStatus: vi.fn().mockResolvedValue({ channels: {}, coordinatorStatus: 'IDLE', station: null, logs: [] }),
+    syncTokens: vi.fn().mockResolvedValue({ success: true }),
+    clearTokens: vi.fn().mockResolvedValue({ success: true }),
+    takePendingLogs: vi.fn().mockResolvedValue([]),
+    onLog: vi.fn().mockReturnValue(() => undefined),
+  };
+  hostWindow.host = { duty };
+  return duty;
+}
+
+afterEach(() => {
+  delete hostWindow.host;
+  vi.restoreAllMocks();
+});
 
 describe('dutyBridge', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    delete (window as unknown as { electron?: unknown }).electron;
+  it('requires the desktop duty API', async () => {
+    delete hostWindow.host;
+    await expect(startDutyByChannel('MEITUAN')).rejects.toThrow('值守调度仅支持桌面端');
+    expect(() => subscribeDutyLogs(() => undefined)).toThrow('值守调度仅支持桌面端');
   });
 
-  describe('startDutyByChannel', () => {
-    it('uses Electron IPC when available in desktop context', async () => {
-      const mockStartDuty = vi.fn().mockResolvedValue({ success: true, message: 'IPC Started' });
-      (window as unknown as { electron: { duty: { startDuty: typeof mockStartDuty } } }).electron = {
-        duty: { startDuty: mockStartDuty },
-      };
+  it('starts duty through IPC when no renderer token is present', async () => {
+    const duty = installDutyApi();
 
-      const res = await startDutyByChannel('meituan');
-      expect(mockStartDuty).toHaveBeenCalledWith('MEITUAN');
-      expect(res.success).toBe(true);
-      expect(res.message).toBe('IPC Started');
-      expect(dutyRuntimeApi.startChannelDutyHttp).not.toHaveBeenCalled();
-    });
+    await startDutyByChannel('meituan');
 
-    it('falls back to HTTP API in web context', async () => {
-      vi.mocked(dutyRuntimeApi.startChannelDutyHttp).mockResolvedValueOnce({
-        success: true,
-        message: 'HTTP Started',
-      });
-
-      const res = await startDutyByChannel('DOUYIN');
-      expect(dutyRuntimeApi.startChannelDutyHttp).toHaveBeenCalledWith('DOUYIN');
-      expect(res.success).toBe(true);
-      expect(res.message).toBe('HTTP Started');
-    });
-
-    it('throws error when channelCode is empty', async () => {
-      await expect(startDutyByChannel('')).rejects.toThrow('值守渠道编码 channelCode 不能为空');
-    });
+    expect(duty.startDuty).toHaveBeenCalledWith('MEITUAN');
   });
 
-  describe('stopDutyByChannel', () => {
-    it('uses Electron IPC when available in desktop context', async () => {
-      const mockStopDuty = vi.fn().mockResolvedValue({ success: true, message: 'IPC Stopped' });
-      (window as unknown as { electron: { duty: { stopDuty: typeof mockStopDuty } } }).electron = {
-        duty: { stopDuty: mockStopDuty },
-      };
+  it('routes all lifecycle calls through IPC', async () => {
+    const duty = installDutyApi();
 
-      const res = await stopDutyByChannel('CTRIP');
-      expect(mockStopDuty).toHaveBeenCalledWith('CTRIP');
-      expect(res.success).toBe(true);
-      expect(res.message).toBe('IPC Stopped');
-    });
+    await stopDutyByChannel('meituan');
+    await stopAllDuty();
+    await queryDutyStatus(123);
+    await syncDutyTokens(tokens);
+    await clearDutyTokens();
+    await takePendingMainLogs();
 
-    it('falls back to HTTP API in web context', async () => {
-      vi.mocked(dutyRuntimeApi.stopChannelDutyHttp).mockResolvedValueOnce({
-        success: true,
-        message: 'HTTP Stopped',
-      });
-
-      const res = await stopDutyByChannel('MEITUAN');
-      expect(dutyRuntimeApi.stopChannelDutyHttp).toHaveBeenCalledWith('MEITUAN');
-      expect(res.success).toBe(true);
-    });
-  });
-
-  describe('queryDutyStatus', () => {
-    it('queries IPC in desktop mode', async () => {
-      const mockStatus = {
-        channels: { MEITUAN: { channelCode: 'MEITUAN', status: 'RUNNING' as const } },
-        coordinatorStatus: 'CLAIMING' as const,
-        station: { stationId: 'station-desktop-001', appId: 'smart-link' },
-      };
-      (window as unknown as { electron: { duty: { getStatus: () => Promise<typeof mockStatus> } } }).electron = {
-        duty: { getStatus: vi.fn().mockResolvedValue(mockStatus) },
-      };
-
-      const res = await queryDutyStatus();
-      expect(res.coordinatorStatus).toBe('CLAIMING');
-      expect(res.channels.MEITUAN.status).toBe('RUNNING');
-      expect(res.station?.stationId).toBe('station-desktop-001');
-    });
-
-    it('queries HTTP in web mode', async () => {
-      vi.mocked(dutyRuntimeApi.fetchDutyStatusHttp).mockResolvedValueOnce({
-        channels: {},
-        coordinatorStatus: 'STOPPED',
-        station: { stationId: 'station-web-002', appId: 'smart-link' },
-      });
-
-      const res = await queryDutyStatus();
-      expect(res.coordinatorStatus).toBe('STOPPED');
-      expect(res.station?.stationId).toBe('station-web-002');
-    });
-
-    it('fails fast and throws when HTTP query fails', async () => {
-      vi.mocked(dutyRuntimeApi.fetchDutyStatusHttp).mockRejectedValueOnce(
-        new Error('Network offline')
-      );
-
-      await expect(queryDutyStatus()).rejects.toThrow('Network offline');
-    });
-  });
-
-  describe('syncDutyTokens and clearDutyTokens', () => {
-    const mockTokens: PlatformAuthTokens = {
-      accessToken: 'token-abc',
-      refreshToken: 'refresh-xyz',
-      expiresAt: 999999999,
-      tokenType: 'bearer',
-      platformBaseUrl: 'https://api.test.com',
-      tenantId: 'TENANT_BRIDGE',
-      authenticatedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    it('syncs tokens via Electron IPC when available', async () => {
-      const mockSync = vi.fn().mockResolvedValue({ success: true });
-      (window as unknown as { electron: { duty: { syncTokens: typeof mockSync } } }).electron = {
-        duty: { syncTokens: mockSync },
-      };
-
-      const res = await syncDutyTokens(mockTokens);
-      expect(mockSync).toHaveBeenCalledWith(mockTokens);
-      expect(res.success).toBe(true);
-      expect(dutyRuntimeApi.syncDutyTokensHttp).not.toHaveBeenCalled();
-    });
-
-    it('falls back to HTTP API for sync tokens in web context', async () => {
-      vi.mocked(dutyRuntimeApi.syncDutyTokensHttp).mockResolvedValueOnce({ success: true });
-
-      const res = await syncDutyTokens(mockTokens);
-      expect(dutyRuntimeApi.syncDutyTokensHttp).toHaveBeenCalledWith(mockTokens);
-      expect(res.success).toBe(true);
-    });
-
-    it('clears tokens via Electron IPC when available', async () => {
-      const mockClear = vi.fn().mockResolvedValue({ success: true });
-      (window as unknown as { electron: { duty: { clearTokens: typeof mockClear } } }).electron = {
-        duty: { clearTokens: mockClear },
-      };
-
-      const res = await clearDutyTokens();
-      expect(mockClear).toHaveBeenCalled();
-      expect(res.success).toBe(true);
-      expect(dutyRuntimeApi.clearDutyTokensHttp).not.toHaveBeenCalled();
-    });
-
-    it('falls back to HTTP API for clear tokens in web context', async () => {
-      vi.mocked(dutyRuntimeApi.clearDutyTokensHttp).mockResolvedValueOnce({ success: true });
-
-      const res = await clearDutyTokens();
-      expect(dutyRuntimeApi.clearDutyTokensHttp).toHaveBeenCalled();
-      expect(res.success).toBe(true);
-    });
-  });
-
-  describe('stopAllDuty', () => {
-    it('uses Electron IPC when available in desktop context', async () => {
-      const mockStopAll = vi.fn().mockResolvedValue({ success: true, message: 'All Stopped IPC' });
-      (window as unknown as { electron: { duty: { stopAllDuty: typeof mockStopAll } } }).electron = {
-        duty: { stopAllDuty: mockStopAll },
-      };
-
-      const res = await stopAllDuty();
-      expect(mockStopAll).toHaveBeenCalledTimes(1);
-      expect(res.success).toBe(true);
-      expect(res.message).toBe('All Stopped IPC');
-      expect(dutyRuntimeApi.stopAllDutyHttp).not.toHaveBeenCalled();
-    });
-
-    it('falls back to HTTP API in web context', async () => {
-      vi.mocked(dutyRuntimeApi.stopAllDutyHttp).mockResolvedValueOnce({
-        success: true,
-        message: 'All Stopped HTTP',
-      });
-
-      const res = await stopAllDuty();
-      expect(dutyRuntimeApi.stopAllDutyHttp).toHaveBeenCalledTimes(1);
-      expect(res.success).toBe(true);
-      expect(res.message).toBe('All Stopped HTTP');
-    });
+    expect(duty.stopDuty).toHaveBeenCalledWith('MEITUAN');
+    expect(duty.stopAllDuty).toHaveBeenCalledTimes(1);
+    expect(duty.getStatus).toHaveBeenCalledWith(123);
+    expect(duty.syncTokens).toHaveBeenCalledWith(tokens);
+    expect(duty.clearTokens).toHaveBeenCalledTimes(1);
+    expect(duty.takePendingLogs).toHaveBeenCalledTimes(1);
   });
 });

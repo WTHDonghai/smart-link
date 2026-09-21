@@ -4,6 +4,7 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import { injectStealthScripts, getStealthLaunchArgs } from './stealth';
 import { installVisualTracker } from './visualTracker';
 import { resolveChromeProfileDir } from './paths';
+import { PROCESS_ENV_KEYS } from '../types/env';
 
 export interface LaunchBrowserOptions {
   channelCode: string;
@@ -91,14 +92,134 @@ export async function closeAllBrowserSessions(): Promise<void> {
 }
 
 /**
- * 启动带反爬规避与本地独立持久化 Profile 的 Chromium 浏览器上下文
+ * 判定 Page 实例是否存活可用
+ */
+function isPageAlive(page?: Page | null): boolean {
+  if (!page) return false;
+  return typeof page.isClosed === 'function' ? !page.isClosed() : true;
+}
+
+/**
+ * 解析指定渠道的专属 Chrome Remote Debugging 端口
+ * 使得同一渠道跨进程（如 CLI 重复执行、桌面端与脚本协同）能够通过 CDP 复用已开启的浏览器视窗与 Tab
+ */
+export function resolveChannelDebugPort(channelCode: string): number {
+  const code = (channelCode || 'MEITUAN').trim().toUpperCase();
+  const PORT_MAP: Record<string, number> = {
+    MEITUAN: 9222,
+    MEITUAN_BIZ: 9223,
+    DOUYIN: 9224,
+    CTRIP: 9225,
+  };
+  if (PORT_MAP[code]) return PORT_MAP[code];
+  let hash = 0;
+  for (let i = 0; i < code.length; i++) {
+    hash = (hash * 31 + code.charCodeAt(i)) & 0xffff;
+  }
+  return 9226 + (hash % 74);
+}
+
+/**
+ * 尝试通过 CDP 连接当前渠道已在本地运行的 Chrome 实例
+ */
+async function tryConnectExistingBrowser(port: number): Promise<{
+  browser: { close: () => Promise<void> };
+  context: BrowserContext;
+  page: Page;
+} | null> {
+  try {
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
+      timeout: 1200,
+    });
+    const contexts = browser.contexts?.() || [];
+    if (contexts.length === 0) {
+      await browser.close?.();
+      return null;
+    }
+    const context = contexts[0];
+    const pages = context.pages?.() || [];
+    const alivePages = pages.filter((p) => isPageAlive(p));
+    const page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
+    return { browser, context, page };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 获取或创建渠道绑定的持久化 Chromium 会话；同一渠道只保留一个浏览器上下文并唯一绑定一个 Tab。
  */
 export async function createPersistentBrowserSession(
   options: LaunchBrowserOptions
 ): Promise<BrowserSession> {
   const profileDir = resolveChromeProfileDir(options.channelCode);
+  const existingSession = Array.from(activeBrowserSessions)
+    .find((session) => session.profileDir === profileDir);
 
-  // 确保 profile 目录存在
+  const isHeadless = options.headless ?? (process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true');
+
+  // 1. 进程内已有活跃会话：直接复用 Tab 或自愈恢复
+  if (existingSession) {
+    if (isPageAlive(existingSession.page)) {
+      if (!isHeadless) {
+        try {
+          await existingSession.page.bringToFront();
+        } catch {
+          // 忽略前台激活异常
+        }
+      }
+      return existingSession;
+    }
+
+    const pages = existingSession.context.pages?.() || [];
+    const availablePages = pages.filter((p) => isPageAlive(p));
+    const restoredPage = availablePages.length > 0 ? availablePages[0] : await existingSession.context.newPage();
+
+    if (!isHeadless) {
+      try {
+        await restoredPage.bringToFront();
+      } catch {
+        // 忽略前台激活异常
+      }
+    }
+
+    existingSession.page = restoredPage;
+    return existingSession;
+  }
+
+  // 2. 跨进程探测（如 CLI 重复执行、独立脚本接入）：尝试连接已在本地端口运行的同渠道 Chrome 实例
+  const debugPort = resolveChannelDebugPort(options.channelCode);
+  const cdpSession = await tryConnectExistingBrowser(debugPort);
+  if (cdpSession) {
+    if (!isHeadless) {
+      try {
+        await cdpSession.page.bringToFront?.();
+      } catch {
+        // 忽略前台激活异常
+      }
+    }
+
+    const session: BrowserSession = {
+      context: cdpSession.context,
+      page: cdpSession.page,
+      profileDir,
+      channelCode: options.channelCode,
+      close: async () => {
+        activeBrowserSessions.delete(session);
+        try {
+          // 断开 CDP 连接，绝不关闭外部已运行的浏览器窗口与 Tab
+          await cdpSession.browser.close();
+        } catch {
+          // 忽略断开异常
+        }
+      },
+    };
+
+    activeBrowserSessions.add(session);
+    return session;
+  }
+
+  // 3. 确保 profile 目录存在
   if (!fs.existsSync(profileDir)) {
     fs.mkdirSync(profileDir, { recursive: true });
   } else {
@@ -106,18 +227,12 @@ export async function createPersistentBrowserSession(
     releaseProfileLocks(profileDir);
   }
 
-  // 默认以可视化窗口 (Headed) 启动，让用户清晰目睹自动化操作流程，获得操作掌控感与确定性；
-  // 仅在显式指定 headless: true 或环境变量 PLAYWRIGHT_HEADLESS === 'true' 时才走无头模式。
-  const isHeadless = options.headless ?? (process.env.PLAYWRIGHT_HEADLESS === 'true');
-
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: isHeadless,
     channel: 'chrome',
-    args: getStealthLaunchArgs(),
+    args: [...getStealthLaunchArgs(), `--remote-debugging-port=${debugPort}`],
     ignoreDefaultArgs: ['--use-mock-keychain', '--password-store=basic'],
     viewport: { width: 1280, height: 850 },
-    userAgent:
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     ignoreHTTPSErrors: true,
@@ -131,8 +246,9 @@ export async function createPersistentBrowserSession(
     await installVisualTracker(context);
   }
 
-  const pages = context.pages();
-  const page = pages.length > 0 ? pages[0] : await context.newPage();
+  const pages = context.pages?.() || [];
+  const alivePages = pages.filter((p) => isPageAlive(p));
+  const page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
 
   // 若以可视化模式运行，将窗口置于前台激活
   if (!isHeadless) {

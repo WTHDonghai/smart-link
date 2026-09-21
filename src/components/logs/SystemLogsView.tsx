@@ -1,51 +1,42 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { 
+import {
   setFilterLevel,
   setFilterModule,
-  setFilterSearch, 
-  toggleAutoScroll, 
+  setFilterSearch,
+  setFilterStartDate,
+  setFilterEndDate,
+  setFilterDateRange,
+  resetDateFilter,
+  setFilterTaskStage,
+  resetLogFilters,
+  toggleAutoScroll,
   clearLogs,
   clearAllLogs,
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
-import { 
-  Terminal, 
-  Search, 
-  Trash2, 
-  Download, 
-  Play, 
-  Pause, 
+import { syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
+import { TASK_STAGES } from '../../utils/taskStage';
+import { isLogQuerySyntaxValid } from '../../utils/logQuery';
+import { getTodayDateString, getPastDateString } from '../../utils/logDate';
+import { formatLogsForExport } from '../../utils/logExport';
+import {
+  Terminal,
+  Search,
+  Trash2,
+  Download,
+  Play,
+  Pause,
   X,
-  CheckCircle2,
-  XCircle,
-  Copy,
-  Check,
   Code2,
-  ChevronDown,
-  ChevronUp,
-  Upload,
+  Calendar,
+  RotateCcw,
 } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
-import type { LogLevel, LogModule } from '../../types';
-
-function formatJsonPayload(data: unknown): string {
-  if (data === undefined) return '(无入参)';
-  if (data === null) return 'null';
-  if (typeof data === 'string') {
-    try {
-      const parsed = JSON.parse(data);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      return data;
-    }
-  }
-  try {
-    return JSON.stringify(data, null, 2);
-  } catch {
-    return String(data);
-  }
-}
+import { LogTaskMetaChips } from './LogTaskMetaChips';
+import { LogApiPayloadSection } from './LogApiPayloadSection';
+import { parseDateBounds, matchesLogFilter } from '../../services/logStorage';
+import type { LogLevel, LogModule, LogFilterParams } from '../../types';
 
 export interface SystemLogsViewProps {
   defaultExpandApiPayloads?: boolean;
@@ -59,7 +50,11 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   const filterLevel = useAppSelector((state) => state.systemLog.filterLevel);
   const filterModule = useAppSelector((state) => state.systemLog.filterModule);
   const filterSearch = useAppSelector((state) => state.systemLog.filterSearch);
+  const filterStartDate = useAppSelector((state) => state.systemLog.filterStartDate);
+  const filterEndDate = useAppSelector((state) => state.systemLog.filterEndDate);
+  const filterTaskStage = useAppSelector((state) => state.systemLog.filterTaskStage);
   const isAutoScroll = useAppSelector((state) => state.systemLog.isAutoScroll);
+  const hasInvalidQuerySyntax = !!filterSearch && !isLogQuerySyntaxValid(filterSearch);
 
   const [expandAllApiPayloads, setExpandAllApiPayloads] = useState(defaultExpandApiPayloads);
   const [toggledLogIds, setToggledLogIds] = useState<Set<string>>(new Set());
@@ -82,6 +77,16 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     });
   };
 
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleCopyText = async (key: string, text: string) => {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -90,8 +95,12 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
         throw new Error('当前环境不支持剪贴板写入');
       }
       setCopiedKey(key);
-      setTimeout(() => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => {
         setCopiedKey((curr) => (curr === key ? null : curr));
+        copyTimerRef.current = null;
       }, 1500);
       dispatch(showToast({ type: 'success', title: '已复制到剪贴板' }));
     } catch {
@@ -101,32 +110,36 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  const filteredLogs = logs.filter((log) => {
-    const matchesLevel = filterLevel === 'ALL' || log.level === filterLevel;
-    const isApiLog =
-      log.module === 'API' ||
-      !!log.apiUrl ||
-      (typeof log.event === 'string' && log.event.startsWith('API_'));
-    const matchesModule =
-      filterModule === 'ALL'
-        ? true
-        : filterModule === 'API'
-          ? isApiLog
-          : log.module === filterModule;
-    const matchesSearch =
-      !filterSearch ||
-      log.message.toLowerCase().includes(filterSearch.toLowerCase()) ||
-      (log.details && log.details.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.channelId && log.channelId.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.taskId && log.taskId.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.msgType && log.msgType.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.taskActionStage && log.taskActionStage.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.apiUrl && log.apiUrl.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.apiMethod && log.apiMethod.toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.apiParams !== undefined && JSON.stringify(log.apiParams).toLowerCase().includes(filterSearch.toLowerCase())) ||
-      (log.apiResponse !== undefined && JSON.stringify(log.apiResponse).toLowerCase().includes(filterSearch.toLowerCase()));
-    return matchesLevel && matchesModule && matchesSearch;
-  });
+  const filteredLogs = useMemo(() => {
+    const bounds = parseDateBounds(filterStartDate, filterEndDate);
+    if (bounds.startMs !== null && bounds.endMs !== null && bounds.startMs > bounds.endMs) {
+      return [];
+    }
+
+    const filterParams: LogFilterParams = {
+      level: filterLevel,
+      module: filterModule,
+      startDate: filterStartDate,
+      endDate: filterEndDate,
+      taskActionStage: filterTaskStage,
+      search: filterSearch,
+    };
+
+    return logs.filter((log) => matchesLogFilter(log, filterParams, bounds));
+  }, [
+    logs,
+    filterLevel,
+    filterModule,
+    filterTaskStage,
+    filterStartDate,
+    filterEndDate,
+    filterSearch,
+  ]);
+
+  // 挂载时立即拉取后台与主进程的最新值守/调度运行日志（全局轮询由 App.tsx 统一维持）
+  useEffect(() => {
+    void dispatch(syncDutyStatusThunk());
+  }, [dispatch]);
 
   // 当开启自动滚动且新日志到达时，自动保持置顶于最新的日志
   useEffect(() => {
@@ -137,39 +150,28 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
   const handleClearLogs = async () => {
     dispatch(clearLogs());
-    await dispatch(clearAllLogs());
-    dispatch(
-      showToast({
-        title: '系统日志已清空',
-        description: '已清除内存与持久化存储',
-        type: 'success',
-      })
-    );
+    const action = await dispatch(clearAllLogs());
+    if (clearAllLogs.fulfilled.match(action)) {
+      dispatch(
+        showToast({
+          title: '系统日志已清空',
+          description: '已清除内存与持久化存储',
+          type: 'success',
+        })
+      );
+    } else {
+      dispatch(
+        showToast({
+          title: '清空日志失败',
+          description: '持久化存储未能清空，请重试',
+          type: 'error',
+        })
+      );
+    }
   };
 
   const handleExport = () => {
-    const text = logs
-      .map(
-        (l) =>
-          `[${l.timestamp}] [${l.level}] [${l.module || 'UNKNOWN'}]${
-            l.apiMethod ? ` [${l.apiMethod}]` : ''
-          }${l.apiUrl ? ` [${l.apiUrl}]` : ''}${
-            l.httpStatus ? ` [HTTP ${l.httpStatus}]` : ''
-          }${
-            l.taskActionStage ? ` [${l.taskActionStage}]` : ''
-          }${l.msgType ? ` [msgType:${l.msgType}]` : ''}${
-            l.taskId ? ` [taskId:${l.taskId}]` : ''
-          } ${l.message} ${l.details ? `| ${l.details}` : ''}${
-            l.apiParams !== undefined ? ` | params: ${JSON.stringify(l.apiParams)}` : ''
-          }${
-            l.apiResponse !== undefined ? ` | response: ${JSON.stringify(l.apiResponse)}` : ''
-          }${
-            l.taskResult !== undefined
-              ? ` | result: ${typeof l.taskResult === 'object' ? JSON.stringify(l.taskResult) : String(l.taskResult)}`
-              : ''
-          }`
-      )
-      .join('\n');
+    const text = formatLogsForExport(filteredLogs);
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -186,7 +188,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     );
   };
 
-  const renderLevelBadge = (level: string) => {
+  const renderLevelBadge = (level: LogLevel) => {
     switch (level) {
       case 'PLAYWRIGHT':
         return <StatusBadge variant="playwright" label="PLAYWRIGHT" icon={true} size="xs" />;
@@ -199,229 +201,6 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       default:
         return <StatusBadge variant="info" label="INFO" size="xs" />;
     }
-  };
-
-  const renderTaskMetaChips = (log: (typeof logs)[number]) => {
-    if (!log.taskActionStage && !log.msgType && !log.taskId && !log.taskStatus) return null;
-
-    return (
-      <div className="flex flex-wrap items-center gap-1.5 my-1 font-mono text-[11px]">
-        {/* 1. 任务流转阶段: 优先明确是 CLAIM 认领还是 RESULT 结果 */}
-        {log.taskActionStage === 'CLAIM' && (
-          <span className="px-1.5 py-0.5 rounded font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/40">
-            认领 CLAIM
-          </span>
-        )}
-        {log.taskActionStage === 'EXECUTE' && (
-          <span className="px-1.5 py-0.5 rounded font-semibold bg-blue-500/25 text-blue-300 border border-blue-500/40">
-            执行 EXECUTE
-          </span>
-        )}
-        {log.taskActionStage === 'RESULT' && (
-          <span
-            className={`px-1.5 py-0.5 rounded font-semibold ${
-              log.taskStatus === 'SUCCEEDED'
-                ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
-                : 'bg-rose-500/25 text-rose-300 border border-rose-500/40'
-            }`}
-          >
-            结果 RESULT
-          </span>
-        )}
-        {log.taskActionStage === 'REPORT' && (
-          <span className="px-1.5 py-0.5 rounded font-semibold bg-amber-500/25 text-amber-300 border border-amber-500/40">
-            上报 REPORT
-          </span>
-        )}
-
-        {/* 2. 任务消息类型 msgType */}
-        {log.msgType && (
-          <span className="px-1.5 py-0.5 rounded bg-cyan-950/60 text-cyan-300 border border-cyan-600/40">
-            msgType: {log.msgType}
-          </span>
-        )}
-
-        {/* 3. 任务 ID */}
-        {log.taskId && (
-          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-            taskId: {log.taskId}
-          </span>
-        )}
-
-        {/* 4. 任务执行状态 (成功/失败) */}
-        {log.taskStatus && (
-          <span
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-bold ${
-              log.taskStatus === 'SUCCEEDED'
-                ? 'text-emerald-400 bg-emerald-950/50 border border-emerald-600/40'
-                : log.taskStatus === 'FAILED'
-                ? 'text-rose-400 bg-rose-950/50 border border-rose-600/40'
-                : 'text-amber-400 bg-amber-950/50 border border-amber-600/40'
-            }`}
-          >
-            {log.taskStatus === 'SUCCEEDED' ? (
-              <>
-                <CheckCircle2 className="w-3 h-3" />
-                <span>成功</span>
-              </>
-            ) : log.taskStatus === 'FAILED' ? (
-              <>
-                <XCircle className="w-3 h-3" />
-                <span>失败</span>
-              </>
-            ) : (
-              <span>{log.taskStatus}</span>
-            )}
-          </span>
-        )}
-      </div>
-    );
-  };
-
-  const renderApiPayloadSection = (log: (typeof logs)[number]) => {
-    const hasApiInfo = !!log.apiUrl || !!log.apiMethod || log.apiParams !== undefined || log.apiResponse !== undefined;
-    if (!hasApiInfo) return null;
-
-    const expanded = isPayloadExpanded(log.id);
-    const method = (log.apiMethod || 'API').toUpperCase();
-    const paramsText = formatJsonPayload(log.apiParams);
-    const responseText = formatJsonPayload(log.apiResponse);
-
-    const getMethodTone = (m: string) => {
-      switch (m) {
-        case 'GET':
-          return 'bg-emerald-950/60 text-emerald-300 border-emerald-600/40';
-        case 'POST':
-          return 'bg-blue-950/60 text-blue-300 border-blue-600/40';
-        case 'PUT':
-          return 'bg-amber-950/60 text-amber-300 border-amber-600/40';
-        case 'DELETE':
-          return 'bg-rose-950/60 text-rose-300 border-rose-600/40';
-        default:
-          return 'bg-purple-950/60 text-purple-300 border-purple-600/40';
-      }
-    };
-
-    return (
-      <div className="mt-2 flex flex-col gap-1.5 font-mono text-xs">
-        {/* API 核心摘要条 */}
-        <div className="flex flex-wrap items-center justify-between gap-2 p-1.5 bg-[#071322] border border-[#213145] rounded-md select-none">
-          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-            <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${getMethodTone(method)}`}>
-              {method}
-            </span>
-            {log.apiUrl && (
-              <span className="text-cyan-300 text-[11px] font-semibold bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40 truncate max-w-[400px]" title={log.apiUrl}>
-                {log.apiUrl}
-              </span>
-            )}
-            {log.httpStatus && (
-              <span
-                className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${
-                  log.httpStatus >= 200 && log.httpStatus < 300
-                    ? 'bg-emerald-950/50 text-emerald-300 border-emerald-600/40'
-                    : 'bg-rose-950/50 text-rose-300 border-rose-600/40'
-                }`}
-              >
-                HTTP {log.httpStatus}
-              </span>
-            )}
-            {log.durationMs !== undefined && (
-              <span className="text-gray-400 text-[11px]">
-                {log.durationMs}ms
-              </span>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => toggleLogExpand(log.id)}
-            className="inline-flex items-center gap-1 text-[11px] text-gray-300 hover:text-white px-2 py-0.5 rounded bg-slate-800/60 hover:bg-slate-700/80 border border-slate-700 transition-colors cursor-pointer"
-          >
-            {expanded ? (
-              <>
-                <ChevronUp className="w-3 h-3 text-cyan-400" />
-                <span>收起传参与返回</span>
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3 h-3 text-cyan-400" />
-                <span>展开传参与返回</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* 展开呈现：请求入参 & 接口返回 */}
-        {expanded && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 text-[11px]">
-            {/* 1. 请求入参面板 */}
-            <div className="bg-[#050e18] border border-[#1e293b] rounded-md p-2.5 flex flex-col min-w-0 shadow-inner">
-              <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-[#1e293b] text-gray-400 select-none">
-                <span className="font-bold text-amber-300 inline-flex items-center gap-1">
-                  <Upload className="w-3 h-3" />
-                  <span>📤 请求入参 (Params / Body)</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyText(`${log.id}-params`, paramsText)}
-                  disabled={log.apiParams === undefined}
-                  className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700"
-                  title="复制请求参数"
-                >
-                  {copiedKey === `${log.id}-params` ? (
-                    <>
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      <span className="text-emerald-400 font-semibold">已复制</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      <span>复制入参</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="text-amber-200/90 font-mono text-[11px] overflow-x-auto max-h-56 p-2 rounded bg-black/40 border border-[#1b2533] select-text whitespace-pre-wrap break-all leading-relaxed">
-                {paramsText}
-              </pre>
-            </div>
-
-            {/* 2. 接口返回面板 */}
-            <div className="bg-[#050e18] border border-[#1e293b] rounded-md p-2.5 flex flex-col min-w-0 shadow-inner">
-              <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-[#1e293b] text-gray-400 select-none">
-                <span className="font-bold text-cyan-300 inline-flex items-center gap-1">
-                  <Download className="w-3 h-3" />
-                  <span>📥 接口返回 (Response Data)</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyText(`${log.id}-response`, responseText)}
-                  disabled={log.apiResponse === undefined}
-                  className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700"
-                  title="复制接口返回"
-                >
-                  {copiedKey === `${log.id}-response` ? (
-                    <>
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      <span className="text-emerald-400 font-semibold">已复制</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      <span>复制返回</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="text-cyan-200/90 font-mono text-[11px] overflow-x-auto max-h-56 p-2 rounded bg-black/40 border border-[#1b2533] select-text whitespace-pre-wrap break-all leading-relaxed">
-                {responseText}
-              </pre>
-            </div>
-          </div>
-        )}
-      </div>
-    );
   };
 
   return (
@@ -502,11 +281,159 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       </div>
 
       {/* Filter Bar */}
-      <div className="flex flex-col gap-2.5 shrink-0">
-        {/* Module Filter Pills */}
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-[#737686] font-medium mr-1 select-none">业务模块:</span>
+      <div className="flex flex-col gap-2.5 shrink-0 bg-white p-3 rounded-xl border border-[#e2e8f0] shadow-2xs">
+        {/* Row 1: 统一输入与时间检索控制栏 (高度统一为 h-8，消除参差错落) */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* 统一专业日志搜索框 (合二为一：支持自由文本、单号与专业查询语句，如 order:12345 stage:claim level:error) */}
+          <div className="flex-1 min-w-[260px] max-w-lg">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#737686] pointer-events-none" />
+              <input
+                type="text"
+                value={filterSearch}
+                onChange={(e) => dispatch(setFilterSearch(e.target.value))}
+                placeholder="搜索日志关键词，或查询语句 (如 order:12345 stage:claim level:error)..."
+                className="w-full h-8 pl-8 pr-8 bg-[#f8faff] border border-[#dce9ff] rounded-lg text-xs font-mono text-[#0b1c30] placeholder-[#94a3b8] outline-hidden focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] transition-colors"
+              />
+              {filterSearch && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(setFilterSearch(''))}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-[#0b1c30] p-0.5 cursor-pointer"
+                  title="清空搜索条件"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {hasInvalidQuerySyntax && (
+              <p className="mt-1 text-[11px] text-amber-800">
+                查询语法不完整，已按字面文本匹配
+              </p>
+            )}
+          </div>
+
+          {/* 日期过滤组合：预设胶囊 + 自定义起止日期 */}
+          <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+            <span className="text-xs text-[#737686] font-medium mr-0.5 select-none inline-flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-[#004ac6]" />
+              <span>日期:</span>
+            </span>
+
+            {/* 预设胶囊按钮组 */}
+            {(() => {
+              const todayStr = getTodayDateString();
+              const past3DaysStr = getPastDateString(2);
+              const past7DaysStr = getPastDateString(6);
+              const isToday = filterStartDate === todayStr && filterEndDate === todayStr;
+              const is3Days = filterStartDate === past3DaysStr && filterEndDate === todayStr;
+              const is7Days = filterStartDate === past7DaysStr && filterEndDate === todayStr;
+              const isAllDate = !filterStartDate && !filterEndDate;
+
+              return (
+                <div className="inline-flex rounded-lg border border-[#dce9ff] p-0.5 bg-[#f8faff] gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => dispatch(resetDateFilter())}
+                    className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                      isAllDate
+                        ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                        : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
+                    }`}
+                  >
+                    全部
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dispatch(setFilterDateRange({ startDate: todayStr, endDate: todayStr }))}
+                    className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                      isToday
+                        ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                        : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
+                    }`}
+                  >
+                    今天
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dispatch(setFilterDateRange({ startDate: past3DaysStr, endDate: todayStr }))}
+                    className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                      is3Days
+                        ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                        : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
+                    }`}
+                  >
+                    近3天
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dispatch(setFilterDateRange({ startDate: past7DaysStr, endDate: todayStr }))}
+                    className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                      is7Days
+                        ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                        : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
+                    }`}
+                  >
+                    近7天
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* 日期范围选择器 (h-8 统一高度) */}
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={filterStartDate}
+                onChange={(e) => dispatch(setFilterStartDate(e.target.value))}
+                aria-label="日志开始日期"
+                className="h-8 px-2 bg-white border border-[#dce9ff] focus:border-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden cursor-pointer"
+              />
+              <span className="text-xs text-[#737686]">至</span>
+              <input
+                type="date"
+                value={filterEndDate}
+                onChange={(e) => dispatch(setFilterEndDate(e.target.value))}
+                aria-label="日志结束日期"
+                className="h-8 px-2 bg-white border border-[#dce9ff] focus:border-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden cursor-pointer"
+              />
+              {(filterStartDate || filterEndDate) && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(resetDateFilter())}
+                  className="text-[#94a3b8] hover:text-[#0b1c30] p-1 cursor-pointer"
+                  title="清除日期筛选"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 重置所有筛选按钮 */}
+          {(filterLevel !== 'ALL' ||
+            filterModule !== 'ALL' ||
+            !!filterSearch ||
+            !!filterStartDate ||
+            !!filterEndDate ||
+            filterTaskStage !== 'ALL') && (
+            <button
+              type="button"
+              onClick={() => dispatch(resetLogFilters())}
+              className="h-8 px-2.5 bg-gray-100 hover:bg-gray-200 text-[#434655] rounded-lg text-xs font-medium transition-colors cursor-pointer select-none inline-flex items-center gap-1 shrink-0 ml-auto"
+              title="重置所有筛选条件"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>重置</span>
+            </button>
+          )}
+        </div>
+
+        {/* Row 2: 维度徽章选择栏 (分组排列，整齐清晰) */}
+        <div className="flex items-center gap-2.5 flex-wrap pt-2 border-t border-[#f1f5f9]">
+          {/* 业务模块 Group */}
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-xs text-[#737686] font-medium mr-0.5 select-none shrink-0">业务模块:</span>
             {(
               [
                 { key: 'ALL', label: '全部' },
@@ -521,10 +448,10 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
                 key={mod.key}
                 type="button"
                 onClick={() => dispatch(setFilterModule(mod.key as 'ALL' | LogModule))}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer select-none ${
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
                   filterModule === mod.key
                     ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
-                    : 'bg-white border border-[#dce9ff] text-[#434655] hover:bg-[#f8faff]'
+                    : 'bg-[#f8faff] border border-[#dce9ff] text-[#434655] hover:bg-white'
                 }`}
               >
                 {mod.label}
@@ -532,45 +459,52 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
             ))}
           </div>
 
-          <div className="relative w-full md:w-64">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#737686] pointer-events-none" />
-            <input
-              type="text"
-              value={filterSearch}
-              onChange={(e) => dispatch(setFilterSearch(e.target.value))}
-              placeholder="搜索日志 / URL / 参数 / msgType..."
-              className="w-full h-8.5 pl-8.5 pr-8 bg-white border border-[#dce9ff] rounded-lg text-xs text-[#0b1c30] placeholder-[#94a3b8] outline-hidden focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] transition-colors"
-            />
-            {filterSearch && (
-              <button
-                type="button"
-                onClick={() => dispatch(setFilterSearch(''))}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-[#0b1c30] p-0.5 cursor-pointer"
-                title="清空搜索"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
+          {/* 竖分割线 */}
+          <div className="hidden lg:block h-3.5 w-px bg-slate-200 shrink-0 mx-0.5" />
 
-        {/* Level Filter Pills */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-[#737686] font-medium mr-1 select-none">日志级别:</span>
-          {(['ALL', 'PLAYWRIGHT', 'INFO', 'WARN', 'ERROR', 'SUCCESS'] as const).map((lvl) => (
-            <button
-              key={lvl}
-              type="button"
-              onClick={() => dispatch(setFilterLevel(lvl as 'ALL' | LogLevel))}
-              className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
-                filterLevel === lvl
-                  ? 'bg-slate-800 text-white font-semibold shadow-2xs'
-                  : 'bg-white border border-[#e2e8f0] text-[#737686] hover:bg-[#f8faff]'
-              }`}
-            >
-              {lvl === 'ALL' ? '全部级别' : lvl}
-            </button>
-          ))}
+          {/* Task 操作 Group */}
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-xs text-[#737686] font-medium mr-0.5 select-none shrink-0">Task 操作:</span>
+            {TASK_STAGES.map((op) => {
+              const isSelected = filterTaskStage === op.key;
+              return (
+                <button
+                  key={op.key}
+                  type="button"
+                  onClick={() => dispatch(setFilterTaskStage(isSelected && op.key !== 'ALL' ? 'ALL' : op.key))}
+                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                    isSelected
+                      ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                      : 'bg-[#f8faff] border border-[#dce9ff] text-[#434655] hover:bg-white'
+                  }`}
+                >
+                  {op.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 竖分割线 */}
+          <div className="hidden lg:block h-3.5 w-px bg-slate-200 shrink-0 mx-0.5" />
+
+          {/* 日志级别 Group */}
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-xs text-[#737686] font-medium mr-0.5 select-none shrink-0">日志级别:</span>
+            {(['ALL', 'PLAYWRIGHT', 'INFO', 'WARN', 'ERROR', 'SUCCESS'] as const).map((lvl) => (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => dispatch(setFilterLevel(lvl as 'ALL' | LogLevel))}
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                  filterLevel === lvl
+                    ? 'bg-slate-800 text-white font-semibold shadow-2xs'
+                    : 'bg-[#f8faff] border border-[#e2e8f0] text-[#737686] hover:bg-white'
+                }`}
+              >
+                {lvl === 'ALL' ? '全部级别' : lvl}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -595,8 +529,23 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
           className="flex-1 min-h-0 p-4 font-mono text-xs overflow-y-auto space-y-2.5 select-text"
         >
           {filteredLogs.length === 0 ? (
-            <div className="py-12 text-center text-gray-500">
-              暂无匹配的系统运行日志
+            <div className="py-12 flex flex-col items-center justify-center gap-2.5 text-gray-400 select-none">
+              <p className="text-xs">暂无匹配的系统运行日志</p>
+              {(filterLevel !== 'ALL' ||
+                filterModule !== 'ALL' ||
+                !!filterSearch ||
+                !!filterStartDate ||
+                !!filterEndDate ||
+                filterTaskStage !== 'ALL') && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(resetLogFilters())}
+                  className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-600 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>清空所有筛选条件</span>
+                </button>
+              )}
             </div>
           ) : (
             filteredLogs.map((log) => (
@@ -618,10 +567,16 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
                   </div>
 
                   {/* 任务流转元数据标签 (CLAIM / RESULT / msgType / taskId / 成功或失败) */}
-                  {renderTaskMetaChips(log)}
+                  <LogTaskMetaChips log={log} />
 
                   {/* 接口请求传参与返回详情区 (传参 & 返回) */}
-                  {renderApiPayloadSection(log)}
+                  <LogApiPayloadSection
+                    log={log}
+                    expanded={isPayloadExpanded(log.id)}
+                    copiedKey={copiedKey}
+                    onToggleExpand={() => toggleLogExpand(log.id)}
+                    onCopy={handleCopyText}
+                  />
 
                   {/* 详细执行结果结构体 (非 API 专属的任务原生结果) */}
                   {log.taskResult !== undefined && !log.apiUrl && (

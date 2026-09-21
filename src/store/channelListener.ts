@@ -2,15 +2,10 @@ import { createListenerMiddleware } from '@reduxjs/toolkit';
 import {
   updateChannelFieldMapping,
   toggleChannelField,
-  updateRemarkTemplate,
-  saveRemarkTemplateAsync,
-  fetchRemarkTemplateAsync,
   resetChannelProtocol,
   updateChannelProtocolSchema,
   saveProtocolSchemaToStorage,
-  saveRemarkTemplateToStorage,
   removeProtocolSchemaFromStorage,
-  removeRemarkTemplateFromStorage,
   type ChannelState,
 } from './slices/channelSlice';
 
@@ -59,45 +54,11 @@ channelListenerMiddleware.startListening({
   },
 });
 
-// 2. 监听备注模板更新（本地与异步远程），安全同步至 LocalStorage
-channelListenerMiddleware.startListening({
-  actionCreator: updateRemarkTemplate,
-  effect: (action, listenerApi) => {
-    const state = listenerApi.getState() as { channel: ChannelState };
-    const channelId = action.payload.channelId;
-    const channel = state.channel?.channels.find((c) => c.id === channelId);
-    if (channel && typeof channel.remarkTemplate === 'string') {
-      saveRemarkTemplateToStorage(channelId, channel.remarkTemplate);
-    }
-  },
-});
-
-channelListenerMiddleware.startListening({
-  actionCreator: saveRemarkTemplateAsync.fulfilled,
-  effect: (action) => {
-    const channelId = action.payload.channelId;
-    if (typeof action.payload.template === 'string') {
-      saveRemarkTemplateToStorage(channelId, action.payload.template);
-    }
-  },
-});
-
-channelListenerMiddleware.startListening({
-  actionCreator: fetchRemarkTemplateAsync.fulfilled,
-  effect: (action) => {
-    const channelId = action.payload.channelId;
-    if (typeof action.payload.remarkTemplate === 'string') {
-      saveRemarkTemplateToStorage(channelId, action.payload.remarkTemplate);
-    }
-  },
-});
-
-// 3. 监听协议与模板重置，安全清除 LocalStorage 缓存
+// 2. 监听协议重置，安全清除 LocalStorage 缓存
 channelListenerMiddleware.startListening({
   actionCreator: resetChannelProtocol,
   effect: (action) => {
     const channelId = action.payload.channelId;
     removeProtocolSchemaFromStorage(channelId);
-    removeRemarkTemplateFromStorage(channelId);
   },
 });

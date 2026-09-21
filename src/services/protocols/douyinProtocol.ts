@@ -380,10 +380,3 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     },
   ],
 };
-
-/** 抖音团购搬单默认智能备注模板 */
-export const DEFAULT_DOUYIN_REMARK_TEMPLATE =
-  '【抖音团购核销】主单号:{抖音主单号} | 预约单:{预约单号} (确认号:{确认号})\n' +
-  '房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话})\n' +
-  '入离:{入住日期}至{离店日期} | 实付:¥{实付金额}\n' +
-  '{{#if 是否含餐}}套餐:{早餐说明} | {{/if}}门票:{门票权益}';

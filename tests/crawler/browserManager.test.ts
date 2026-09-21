@@ -16,6 +16,7 @@ vi.mock('playwright', () => {
   return {
     chromium: {
       launchPersistentContext: vi.fn(),
+      connectOverCDP: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
     },
   };
 });
@@ -107,6 +108,120 @@ describe('browserManager', () => {
   });
 
   describe('activeBrowserSessions 自动登记与注销机制', () => {
+    it('同一 profile 已有活跃会话时复用渠道绑定页面', async () => {
+      const mockContext = createMockContext();
+      vi.mocked(chromium.launchPersistentContext).mockResolvedValue(mockContext as unknown as never);
+
+      const session = await createPersistentBrowserSession({
+        channelCode: 'MEITUAN',
+        headless: true,
+      });
+
+      const reusedSession = await createPersistentBrowserSession({
+        channelCode: 'MEITUAN',
+        headless: true,
+      });
+
+      expect(reusedSession).toBe(session);
+      expect(reusedSession.page).toBe(session.page);
+      expect(chromium.launchPersistentContext).toHaveBeenCalledTimes(1);
+      await session.close();
+      expect(getActiveBrowserSessionsCount()).toBe(0);
+    });
+
+    it('同一渠道多次获取会话时必须绑定并复用同一个 Tab (Page)，不创建重复 Tab', async () => {
+      const mockPage = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false),
+      };
+      const mockContext = {
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        pages: vi.fn().mockReturnValue([mockPage]),
+        newPage: vi.fn().mockResolvedValue(mockPage),
+        close: vi.fn().mockResolvedValue(undefined),
+        on: vi.fn(),
+      };
+      vi.mocked(chromium.launchPersistentContext).mockResolvedValue(mockContext as unknown as never);
+
+      const session1 = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: false });
+      expect(session1.page).toBe(mockPage);
+
+      const session2 = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: false });
+      expect(session2).toBe(session1);
+      expect(session2.page).toBe(mockPage);
+      // 核心断言：未开辟新 Tab（newPage 未被额外调用）
+      expect(mockContext.newPage).not.toHaveBeenCalled();
+      // 核心断言：在非 headless 模式下被激活置顶
+      expect(mockPage.bringToFront).toHaveBeenCalled();
+      await session1.close();
+    });
+
+    it('当渠道绑定的 Tab 被手动关闭后，再次请求时能够自动自愈重新绑定新 Tab，不返回已关闭的 Page', async () => {
+      const firstClosedPage = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false),
+      };
+      const healedPage = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false),
+      };
+      const mockContext = {
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        pages: vi.fn().mockReturnValue([firstClosedPage]),
+        newPage: vi.fn().mockResolvedValue(healedPage),
+        close: vi.fn().mockResolvedValue(undefined),
+        on: vi.fn(),
+      };
+      vi.mocked(chromium.launchPersistentContext).mockResolvedValue(mockContext as unknown as never);
+
+      const session = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: true });
+      expect(session.page).toBe(firstClosedPage);
+
+      // 模拟用户手动关闭了第一个 Tab
+      firstClosedPage.isClosed.mockReturnValue(true);
+      mockContext.pages.mockReturnValue([]);
+
+      // 再次获取渠道会话，必须自愈
+      const healedSession = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: true });
+      expect(healedSession).toBe(session);
+      // 核心断言：自动重新绑定为新 Tab，绝不返回已关闭的 Page 实例
+      expect(healedSession.page).toBe(healedPage);
+      expect(mockContext.newPage).toHaveBeenCalledTimes(1);
+
+      await session.close();
+    });
+
+    it('跨进程场景：当本地端口已有运行中浏览器时，通过 CDP 直接复用已有的浏览器视窗与 Tab，不重复启动新进程', async () => {
+      const existingTab = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false),
+      };
+      const cdpContext = {
+        pages: vi.fn().mockReturnValue([existingTab]),
+        newPage: vi.fn(),
+      };
+      const cdpBrowser = {
+        contexts: vi.fn().mockReturnValue([cdpContext]),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+
+      vi.mocked(chromium.connectOverCDP).mockResolvedValueOnce(cdpBrowser as unknown as never);
+
+      const session = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: false });
+      // 核心断言：直接复用已有浏览器的 Tab，不重新调用 launchPersistentContext
+      expect(session.page).toBe(existingTab);
+      expect(chromium.launchPersistentContext).not.toHaveBeenCalled();
+      expect(existingTab.bringToFront).toHaveBeenCalled();
+
+      // 关闭会话时仅断开 CDP，不杀死外部浏览器
+      await session.close();
+      expect(cdpBrowser.close).toHaveBeenCalledTimes(1);
+    });
+
     it('会话启动时自动加入集合，调用 session.close() 后自动从集合移除并释放锁文件', async () => {
       const tempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'smartlink-session-test-'));
       process.env.SMARTLINK_USER_DATA_DIR = tempUserData;

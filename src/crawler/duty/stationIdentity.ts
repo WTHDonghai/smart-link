@@ -51,7 +51,7 @@ export function normalizeBaseUrl(url?: string): string {
 /**
  * 获取 Electron 标准用户数据目录
  * 优先遵循 process.env.SMARTLINK_USER_DATA_DIR (Electron app.getPath('userData'))
- * 在非 Electron 开发调试环境下自动对齐操作系统原生 Electron 标准路径
+ * 在 CLI 独立运行环境下自动对齐操作系统原生 Electron 标准路径
  */
 export function getDefaultStationConfigDir(): string {
   return resolveUserDataDir();
@@ -273,6 +273,15 @@ export class StationIdentityManager {
    */
   public load(): StationIdentity | null {
     try {
+      // 动态补充 platformBaseUrl (若此前尚未初始化)
+      if (!this.platformBaseUrl) {
+        try {
+          this.platformBaseUrl = normalizeBaseUrl(getPlatformBaseUrl());
+        } catch {
+          // 尚未配置环境时保持
+        }
+      }
+
       if (!fs.existsSync(this.cacheFilePath)) {
         return null;
       }
@@ -290,6 +299,7 @@ export class StationIdentityManager {
 
       // 严格校验：appId 匹配且 stationId 非空
       if (!stationId || appId !== this.appId) {
+        this.clearCache();
         return null;
       }
 
@@ -303,6 +313,7 @@ export class StationIdentityManager {
             currentUrl: this.platformBaseUrl,
           },
         });
+        this.clearCache();
         return null;
       }
 

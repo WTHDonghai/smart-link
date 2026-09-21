@@ -5,6 +5,11 @@ import { resolveUserDataDir } from '../paths';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../services/platformAuth';
 import { logger } from '../../services/logger';
 
+export interface FilePersistenceResult {
+  success: boolean;
+  error?: string;
+}
+
 /**
  * 获取 Electron 标准用户数据目录下的 Token 缓存文件路径
  */
@@ -63,7 +68,7 @@ export function loadPlatformTokenFile(filePath = getDefaultTokenCacheFile()): Pl
 export function savePlatformTokenFile(
   tokens: PlatformAuthTokens,
   filePath = getDefaultTokenCacheFile()
-): void {
+): FilePersistenceResult {
   try {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
@@ -73,11 +78,15 @@ export function savePlatformTokenFile(
       encoding: 'utf-8',
       mode: 0o600,
     });
+    return { success: true };
   } catch (error) {
+    const message = `写入平台凭证文件失败: ${error instanceof Error ? error.message : String(error)}`;
     logger.warn('[平台凭证] 写入本地 Token 缓存文件异常', {
       module: 'AUTH',
-      details: error instanceof Error ? error.message : String(error),
+      details: message,
     });
+
+    return { success: false, error: message };
   }
 }
 

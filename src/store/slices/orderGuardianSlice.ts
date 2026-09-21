@@ -1,4 +1,9 @@
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  createAsyncThunk,
+  createSelector,
+  createSlice,
+  type PayloadAction,
+} from '@reduxjs/toolkit';
 import type {
   ToolkitOrder,
   ToolkitOrderStatistics,
@@ -16,7 +21,7 @@ import {
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
   updateToolkitOrder,
-  importToolkitOrder,
+  retryToolkitOrderImport,
   deleteToolkitOrder,
   cancelToolkitOrder,
   fetchPropertyProductOptions,
@@ -27,7 +32,8 @@ import {
   queryDutyStatus,
 } from '../../services/dutyBridge';
 import { showToast } from './appSlice';
-import { addLogs } from './systemLogSlice';
+import { addLog, addLogs } from './systemLogSlice';
+import type { HotelState } from './hotelSlice';
 
 export interface OrderGuardianState {
   orders: ToolkitOrder[];
@@ -68,12 +74,7 @@ const initialStatistics: ToolkitOrderStatistics = {
   failed: 0,
 };
 
-const initialChannelDuty: Record<string, ChannelDutyInfo> = {
-  MEITUAN: { channelCode: 'MEITUAN', status: 'STOPPED' },
-  MEITUAN_BIZ: { channelCode: 'MEITUAN_BIZ', status: 'STOPPED' },
-  DOUYIN: { channelCode: 'DOUYIN', status: 'STOPPED' },
-  CTRIP: { channelCode: 'CTRIP', status: 'STOPPED' },
-};
+const initialChannelDuty: Record<string, ChannelDutyInfo> = {};
 
 const initialState: OrderGuardianState = {
   orders: [],
@@ -144,13 +145,17 @@ export const fetchStatisticsThunk = createAsyncThunk(
 export const executeOrderActionThunk = createAsyncThunk(
   'orderGuardian/executeAction',
   async (
-    { id, action }: { id: string; action: ToolkitOrderAction },
-    { dispatch, rejectWithValue }
+    { id, action, order }: { id: string; action: ToolkitOrderAction; order?: ToolkitOrder },
+    { getState, dispatch, rejectWithValue }
   ) => {
     try {
       if (action === 'IMPORT') {
-        await importToolkitOrder(id);
-        dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功提交重新导入` }));
+        const state = getState() as { orderGuardian: OrderGuardianState };
+        const targetOrder = order || state.orderGuardian.orders.find((o) => o.id === id);
+        const importRes = await retryToolkitOrderImport(targetOrder || id);
+        const pmsInfo = importRes.pmsOrderId ? ` (PMS单号: ${importRes.pmsOrderId})` : '';
+        const orderNo = targetOrder?.otaOrderId || id;
+        dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 导入请求已提交${pmsInfo}` }));
       } else if (action === 'DELETE') {
         await deleteToolkitOrder(id);
         dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功删除` }));
@@ -175,21 +180,48 @@ export const executeOrderActionThunk = createAsyncThunk(
  */
 export const loadOrderEditorThunk = createAsyncThunk(
   'orderGuardian/loadEditor',
-  async (orderId: string, { rejectWithValue }) => {
+  async (orderId: string, { getState, dispatch, rejectWithValue }) => {
     try {
       const order = await fetchToolkitOrderDetails(orderId);
+      let targetUnitId = order.unitId?.trim();
+      let targetUnitType = 'Property';
+
+      if (!targetUnitId) {
+        const state = getState() as { hotel?: HotelState };
+        const hotels = state.hotel?.hotels || [];
+        const matchedHotel = hotels.find(
+          (h) =>
+            (h.unitName && order.unitName && h.unitName === order.unitName) ||
+            (h.otaHotelName && order.unitName && h.otaHotelName === order.unitName)
+        );
+        if (matchedHotel?.unitId) {
+          targetUnitId = String(matchedHotel.unitId).trim();
+          targetUnitType = matchedHotel.unitType || 'Property';
+        }
+      }
+
       let productOptions: InternalProductOptions = {
         roomTypes: [],
         rateCodes: [],
         reservationTypes: [],
       };
-      if (order.unitId) {
+
+      if (targetUnitId) {
         try {
-          productOptions = await fetchPropertyProductOptions(order.unitId);
-        } catch {
-          // 产品选项若失败保留空列表并在抽屉内提示
+          productOptions = await fetchPropertyProductOptions(targetUnitId, targetUnitType);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          dispatch(
+            addLog({
+              level: 'WARN',
+              module: 'ORDER',
+              message: `[OrderGuardian] 加载酒店 (${targetUnitId}) 产品选项失败`,
+              details: errMsg,
+            })
+          );
         }
       }
+
       return { order, productOptions };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : '加载订单编辑详情失败');
@@ -198,23 +230,27 @@ export const loadOrderEditorThunk = createAsyncThunk(
 );
 
 /**
- * 保存编辑订单草稿
+ * 保存编辑订单草稿 (仅保存修改，不触发 PMS 导入)
  */
 export const saveOrderDraftThunk = createAsyncThunk(
   'orderGuardian/saveDraft',
   async (
-    { id, draft }: { id: string; draft: ToolkitOrderDraft },
-    { dispatch, rejectWithValue }
+    { id, draft, order }: { id: string; draft: ToolkitOrderDraft; order?: ToolkitOrder },
+    { getState, dispatch, rejectWithValue }
   ) => {
     try {
-      await updateToolkitOrder(id, draft);
-      dispatch(showToast({ type: 'success', title: '订单修改已成功保存' }));
+      const state = getState() as { orderGuardian: OrderGuardianState };
+      const baseOrder = order || state.orderGuardian.activeEditOrder || state.orderGuardian.orders.find((o) => o.id === id);
+      const targetOrder = baseOrder || id;
+      await updateToolkitOrder(targetOrder, draft);
+      const orderNo = draft.otaOrderId || id;
+      dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功保存` }));
       void dispatch(fetchOrdersThunk());
       void dispatch(fetchStatisticsThunk());
       return id;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '保存修改失败';
-      dispatch(showToast({ type: 'error', title: '保存修改失败', description: msg }));
+      const msg = error instanceof Error ? error.message : '保存订单失败';
+      dispatch(showToast({ type: 'error', title: '保存失败', description: msg }));
       return rejectWithValue(msg);
     }
   }
@@ -253,11 +289,33 @@ export const toggleChannelDutyThunk = createAsyncThunk(
  */
 export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
-  async (_, { dispatch }) => {
+  async (_, { getState, dispatch }) => {
     const res = await queryDutyStatus();
     if (res.logs && res.logs.length > 0) {
       dispatch(addLogs(res.logs));
     }
+
+    // 边缘触发风控告警 Toast：仅在状态由非 DEGRADED 跃迁至 DEGRADED 时触发单次提示
+    const state = getState() as { orderGuardian: OrderGuardianState };
+    const prevChannels = state.orderGuardian.channelDuty;
+    for (const [code, nextInfo] of Object.entries(res.channels)) {
+      const prevStatus = prevChannels[code]?.status;
+      const nextStatus = nextInfo.status;
+      if (
+        prevStatus !== 'DEGRADED' &&
+        nextStatus === 'DEGRADED' &&
+        nextInfo.manualVerificationRequired
+      ) {
+        dispatch(
+          showToast({
+            type: 'warning',
+            title: '需要人工处理',
+            description: `${code === 'MEITUAN' ? '美团' : code}后台出现安全验证，请在浏览器窗口中完成验证后再继续`,
+          })
+        );
+      }
+    }
+
     return res;
   }
 );
@@ -389,9 +447,13 @@ export const orderGuardianSlice = createSlice({
       })
       .addCase(toggleChannelDutyThunk.rejected, (state, action) => {
         const payload = action.payload as { channelCode?: string; error?: string } | undefined;
-        if (payload?.channelCode && state.channelDuty[payload.channelCode]) {
-          state.channelDuty[payload.channelCode].status = 'DEGRADED';
-          state.channelDuty[payload.channelCode].error = payload.error;
+        if (payload?.channelCode) {
+          const prev = state.channelDuty[payload.channelCode] || { channelCode: payload.channelCode, status: 'DEGRADED' };
+          state.channelDuty[payload.channelCode] = {
+            ...prev,
+            status: 'DEGRADED',
+            error: payload.error,
+          };
         }
       });
 
@@ -411,11 +473,13 @@ export const orderGuardianSlice = createSlice({
 /**
  * 保持向下兼容 Sidebar 统计指标选择器
  */
-export const selectGuardianStats = (state: {
+type GuardianStatsRootState = {
   orderGuardian: { statistics: ToolkitOrderStatistics };
-}): GuardianStats => {
-  const stats = state.orderGuardian.statistics;
-  return {
+};
+
+export const selectGuardianStats = createSelector(
+  (state: GuardianStatsRootState) => state.orderGuardian.statistics,
+  (stats): GuardianStats => ({
     todayImported: stats.today,
     pendingConfirm: stats.pending,
     imported: stats.success,
@@ -424,9 +488,9 @@ export const selectGuardianStats = (state: {
     todaySuccess: stats.success,
     todayFailed: stats.failed,
     pendingManual: stats.failed,
-    avgTransferSeconds: 1.2,
-  };
-};
+    avgTransferSeconds: undefined,
+  })
+);
 
 export const {
   setFilterStatus,

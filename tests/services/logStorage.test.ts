@@ -1,6 +1,73 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { LogStorageService, SEVEN_DAYS_MS, formatLogTimestamp } from '../../src/services/logStorage';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  LogStorageService,
+  SEVEN_DAYS_MS,
+  formatLogTimestamp,
+  matchesLogFilter,
+  parseDateBounds,
+} from '../../src/services/logStorage';
 import { SystemLogEntry } from '../../src/types';
+
+type FakeEventHandler = (event: { target: unknown }) => void;
+
+interface FakeCursorRequest {
+  onsuccess: FakeEventHandler | null;
+  onerror: FakeEventHandler | null;
+}
+
+interface FakeStore {
+  put: (entry: SystemLogEntry) => void;
+  index: () => { openCursor: () => FakeCursorRequest };
+}
+
+interface FakeTransaction {
+  error: Error;
+  objectStore: () => FakeStore;
+  oncomplete: (() => void) | null;
+  onerror: FakeEventHandler | null;
+}
+
+interface FakeDatabase {
+  transaction: () => FakeTransaction;
+}
+
+interface FakeOpenRequest {
+  result: FakeDatabase;
+  onupgradeneeded: FakeEventHandler | null;
+  onsuccess: FakeEventHandler | null;
+  onerror: FakeEventHandler | null;
+}
+
+function installFailingIndexedDBStub(): Error {
+  const transactionError = new Error('simulated IndexedDB transaction failure');
+  const cursorRequest: FakeCursorRequest = { onsuccess: null, onerror: null };
+  const store: FakeStore = {
+    put: () => undefined,
+    index: () => ({ openCursor: () => cursorRequest }),
+  };
+  const transaction: FakeTransaction = {
+    error: transactionError,
+    objectStore: () => store,
+    oncomplete: null,
+    onerror: null,
+  };
+  const database: FakeDatabase = {
+    transaction: () => {
+      queueMicrotask(() => transaction.onerror?.({ target: transaction }));
+      return transaction;
+    },
+  };
+  const openRequest: FakeOpenRequest = {
+    result: database,
+    onupgradeneeded: null,
+    onsuccess: null,
+    onerror: null,
+  };
+
+  queueMicrotask(() => openRequest.onsuccess?.({ target: openRequest }));
+  vi.stubGlobal('indexedDB', { open: () => openRequest } as unknown as IDBFactory);
+  return transactionError;
+}
 
 describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
   let storage: LogStorageService;
@@ -14,6 +81,93 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
     const fixedDate = new Date(2026, 8, 16, 14, 30, 45, 123); // 2026-09-16 14:30:45.123
     const formatted = formatLogTimestamp(fixedDate);
     expect(formatted).toBe('2026-09-16 14:30:45.123');
+  });
+
+  describe('Strict date bounds validation', () => {
+    it('rejects impossible calendar dates without silently normalizing them', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const bounds = parseDateBounds('2026-02-31');
+
+      expect(bounds).toEqual({ startMs: null, endMs: null, hasInvalidInput: true });
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[LogStorage] 日期筛选值非法，必须为有效的 YYYY-MM-DD:',
+        '2026-02-31'
+      );
+    });
+
+    it('keeps valid padded, unpadded, and slash-separated dates on exact local day boundaries', () => {
+      const cases = [
+        ['2026-09-15', 2026, 8, 15],
+        ['2026-9-5', 2026, 8, 5],
+        ['2026/09/15', 2026, 8, 15],
+      ] as const;
+
+      for (const [input, year, monthIndex, day] of cases) {
+        const bounds = parseDateBounds(undefined, undefined, input);
+        expect(bounds).toEqual({
+          startMs: new Date(year, monthIndex, day, 0, 0, 0, 0).getTime(),
+          endMs: new Date(year, monthIndex, day, 23, 59, 59, 999).getTime(),
+          hasInvalidInput: false,
+        });
+      }
+    });
+
+    it('fails closed with a concrete empty result when an invalid date participates in filtering', async () => {
+      const now = Date.now();
+      const entry: SystemLogEntry = {
+        id: 'log-invalid-date-filter',
+        timestamp: formatLogTimestamp(new Date(now)),
+        createdAt: now,
+        level: 'INFO',
+        message: '不应在非法日期筛选下返回',
+      };
+      await storage.saveLogs([entry]);
+
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const bounds = parseDateBounds('2026-02-31');
+
+      expect(matchesLogFilter(entry, undefined, bounds)).toBe(false);
+      await expect(storage.queryLogs({ startDate: '2026-02-31' })).resolves.toEqual([]);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[LogStorage] 日期筛选值非法，必须为有效的 YYYY-MM-DD:',
+        '2026-02-31'
+      );
+    });
+  });
+
+  describe('IndexedDB runtime failure handling', () => {
+    it('rejects queryLogs and reports the original transaction error instead of using memory fallback', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const transactionError = installFailingIndexedDBStub();
+      const indexedStorage = new LogStorageService();
+
+      await expect(indexedStorage.queryLogs()).rejects.toThrow(transactionError.message);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[LogStorage] queryLogs IndexedDB 操作失败:',
+        transactionError
+      );
+    });
+
+    it('rejects saveLogs and reports the original transaction error instead of using memory fallback', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const transactionError = installFailingIndexedDBStub();
+      const indexedStorage = new LogStorageService();
+      const entry: SystemLogEntry = {
+        id: 'log-idb-save-failure',
+        timestamp: formatLogTimestamp(),
+        createdAt: Date.now(),
+        level: 'ERROR',
+        message: '运行时存储失败必须显式返回',
+      };
+
+      await expect(indexedStorage.saveLogs([entry])).rejects.toThrow(transactionError.message);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[LogStorage] saveLogs IndexedDB 操作失败:',
+        transactionError
+      );
+    });
   });
 
   it('saves log entries and retrieves them correctly', async () => {
@@ -99,10 +253,20 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       expect(errorLogs[0].id).toBe('log-1');
     });
 
-    it('filters by channelId accurately', async () => {
+    it('filters by channelId accurately (case-insensitive)', async () => {
       const meituanLogs = await storage.queryLogs({ channelId: 'meituan' });
       expect(meituanLogs.length).toBe(1);
       expect(meituanLogs[0].orderNo).toBe('MT-20260916-001');
+
+      // 验证大写查询依然命中存储为小写的 channelId
+      const upperMeituan = await storage.queryLogs({ channelId: 'MEITUAN' });
+      expect(upperMeituan.length).toBe(1);
+      expect(upperMeituan[0].id).toBe('log-1');
+
+      // 验证混合大小写查询
+      const mixedDouyin = await storage.queryLogs({ channelId: 'DouYin' });
+      expect(mixedDouyin.length).toBe(1);
+      expect(mixedDouyin[0].id).toBe('log-2');
     });
 
     it('filters by event accurately', async () => {
@@ -127,6 +291,232 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       const byDetails = await storage.queryLogs({ search: 'PMS-ATL-K01' });
       expect(byDetails.length).toBe(1);
       expect(byDetails[0].id).toBe('log-1');
+    });
+
+    it('filters by exact orderNo with case-insensitive substring match', async () => {
+      const exact = await storage.queryLogs({ orderNo: 'MT-20260916-001' });
+      expect(exact.length).toBe(1);
+      expect(exact[0].id).toBe('log-1');
+
+      const partialLower = await storage.queryLogs({ orderNo: 'mt-20260916' });
+      expect(partialLower.length).toBe(1);
+      expect(partialLower[0].id).toBe('log-1');
+
+      const nonExistent = await storage.queryLogs({ orderNo: 'NON_EXISTENT' });
+      expect(nonExistent.length).toBe(0);
+    });
+
+    it('filters by date range (startDate & endDate) and single date', async () => {
+      const d1 = new Date('2026-09-10T12:00:00.000Z').getTime();
+      const d2 = new Date('2026-09-15T12:00:00.000Z').getTime();
+      const d3 = new Date('2026-09-20T12:00:00.000Z').getTime();
+
+      await storage.saveLogs([
+        {
+          id: 'log-d1',
+          timestamp: formatLogTimestamp(new Date(d1)),
+          createdAt: d1,
+          level: 'INFO',
+          message: 'D1 log on 2026-09-10',
+        },
+        {
+          id: 'log-d2',
+          timestamp: formatLogTimestamp(new Date(d2)),
+          createdAt: d2,
+          level: 'INFO',
+          message: 'D2 log on 2026-09-15',
+        },
+        {
+          id: 'log-d3',
+          timestamp: formatLogTimestamp(new Date(d3)),
+          createdAt: d3,
+          level: 'INFO',
+          message: 'D3 log on 2026-09-20',
+        },
+      ]);
+
+      const date2Local = new Date(d2);
+      const date2Str = `${date2Local.getFullYear()}-${String(date2Local.getMonth() + 1).padStart(2, '0')}-${String(date2Local.getDate()).padStart(2, '0')}`;
+      const singleDateRes = await storage.queryLogs({ date: date2Str });
+      expect(singleDateRes.some((l) => l.id === 'log-d2')).toBe(true);
+      expect(singleDateRes.some((l) => l.id === 'log-d1')).toBe(false);
+      expect(singleDateRes.some((l) => l.id === 'log-d3')).toBe(false);
+
+      const date1Local = new Date(d1);
+      const date1Str = `${date1Local.getFullYear()}-${String(date1Local.getMonth() + 1).padStart(2, '0')}-${String(date1Local.getDate()).padStart(2, '0')}`;
+      const rangeRes = await storage.queryLogs({ startDate: date1Str, endDate: date2Str });
+      expect(rangeRes.some((l) => l.id === 'log-d1')).toBe(true);
+      expect(rangeRes.some((l) => l.id === 'log-d2')).toBe(true);
+      expect(rangeRes.some((l) => l.id === 'log-d3')).toBe(false);
+
+      // 验证平滑兼容非补零日期字符串与斜杠格式 (如 2026-9-15 与 2026/09/15)
+      const slashDateRes = await storage.queryLogs({
+        startDate: `${date1Local.getFullYear()}/${date1Local.getMonth() + 1}/${date1Local.getDate()}`,
+        endDate: `${date2Local.getFullYear()}/${date2Local.getMonth() + 1}/${date2Local.getDate()}`,
+      });
+      expect(slashDateRes.some((l) => l.id === 'log-d1')).toBe(true);
+      expect(slashDateRes.some((l) => l.id === 'log-d2')).toBe(true);
+      expect(slashDateRes.some((l) => l.id === 'log-d3')).toBe(false);
+    });
+
+    it('filters by taskActionStage (case-insensitive & hyphen/underscore normalized)', async () => {
+      const now = Date.now();
+      await storage.saveLogs([
+        {
+          id: 'log-stage-claim',
+          timestamp: formatLogTimestamp(new Date(now)),
+          createdAt: now,
+          level: 'INFO',
+          taskActionStage: 'claim',
+          message: '认领任务',
+        },
+        {
+          id: 'log-stage-import',
+          timestamp: formatLogTimestamp(new Date(now + 100)),
+          createdAt: now + 100,
+          level: 'INFO',
+          taskActionStage: 'order-import-submit',
+          message: '提交入单',
+        },
+        {
+          id: 'log-stage-result',
+          timestamp: formatLogTimestamp(new Date(now + 200)),
+          createdAt: now + 200,
+          level: 'SUCCESS',
+          taskActionStage: 'result',
+          message: '任务成功',
+        },
+      ]);
+
+      const claimRes = await storage.queryLogs({ taskActionStage: 'claim' });
+      expect(claimRes.some((l) => l.id === 'log-stage-claim')).toBe(true);
+      expect(claimRes.some((l) => l.id === 'log-stage-import')).toBe(false);
+
+      const importRes = await storage.queryLogs({ taskActionStage: 'ORDER_IMPORT_SUBMIT' });
+      expect(importRes.some((l) => l.id === 'log-stage-import')).toBe(true);
+      expect(importRes.some((l) => l.id === 'log-stage-claim')).toBe(false);
+
+      const resultRes = await storage.queryLogs({ taskActionStage: 'result' });
+      expect(resultRes.some((l) => l.id === 'log-stage-result')).toBe(true);
+      expect(resultRes.some((l) => l.id === 'log-stage-import')).toBe(false);
+    });
+
+    it('handles inverted date range (startDate > endDate) safely returning empty array', async () => {
+      const res = await storage.queryLogs({
+        startDate: '2026-09-30',
+        endDate: '2026-09-01',
+      });
+      expect(res).toEqual([]);
+    });
+
+    it('searches by keyword across apiUrl, apiParams, apiResponse, and msgType', async () => {
+      const now = Date.now();
+      await storage.saveLogs([
+        {
+          id: 'log-api-search',
+          timestamp: formatLogTimestamp(new Date(now)),
+          createdAt: now,
+          level: 'INFO',
+          module: 'API',
+          apiUrl: '/toolkit/orders/import',
+          apiMethod: 'POST',
+          apiParams: { customKey: 'SECRET_PARAM_VAL' },
+          apiResponse: { pmsOrderId: 'PMS_RESP_888' },
+          msgType: 'OTA_IMPORT_ORDER',
+          message: '提交入单请求',
+        },
+      ]);
+
+      const byUrl = await storage.queryLogs({ search: 'orders/import' });
+      expect(byUrl.some((l) => l.id === 'log-api-search')).toBe(true);
+
+      const byParam = await storage.queryLogs({ search: 'SECRET_PARAM_VAL' });
+      expect(byParam.some((l) => l.id === 'log-api-search')).toBe(true);
+
+      const byResp = await storage.queryLogs({ search: 'PMS_RESP_888' });
+      expect(byResp.some((l) => l.id === 'log-api-search')).toBe(true);
+
+      const byMsgType = await storage.queryLogs({ search: 'OTA_IMPORT_ORDER' });
+      expect(byMsgType.some((l) => l.id === 'log-api-search')).toBe(true);
+    });
+
+    it('matches orderNo when order number appears in message or details even if orderNo property is omitted', async () => {
+      const now = Date.now();
+      await storage.saveLogs([
+        {
+          id: 'log-ord-in-msg',
+          timestamp: formatLogTimestamp(new Date(now)),
+          createdAt: now,
+          level: 'INFO',
+          message: '入单处理中: 订单号 MT-99887766 处理完成',
+        },
+      ]);
+
+      const res = await storage.queryLogs({ orderNo: 'MT-99887766' });
+      expect(res.some((l) => l.id === 'log-ord-in-msg')).toBe(true);
+    });
+
+    it('keeps API module sniffing for entries carrying apiUrl without an explicit API module', async () => {
+      const now = Date.now();
+      await storage.saveLogs([
+        {
+          id: 'log-api-sniffed',
+          timestamp: formatLogTimestamp(new Date(now)),
+          createdAt: now,
+          level: 'INFO',
+          module: 'ORDER',
+          apiUrl: '/toolkit/orders/import',
+          message: '隐式 API 调用',
+        },
+        {
+          id: 'log-plain-order',
+          timestamp: formatLogTimestamp(new Date(now + 10)),
+          createdAt: now + 10,
+          level: 'INFO',
+          module: 'ORDER',
+          message: '纯业务日志',
+        },
+      ]);
+
+      const res = await storage.queryLogs({ module: 'API' });
+      expect(res.some((l) => l.id === 'log-api-sniffed')).toBe(true);
+      expect(res.some((l) => l.id === 'log-plain-order')).toBe(false);
+    });
+
+    it('composes module and taskActionStage filters with AND semantics', async () => {
+      const now = Date.now();
+      await storage.saveLogs([
+        {
+          id: 'log-order-claim',
+          timestamp: formatLogTimestamp(new Date(now)),
+          createdAt: now,
+          level: 'INFO',
+          module: 'ORDER',
+          taskActionStage: 'claim',
+          message: '订单认领',
+        },
+        {
+          id: 'log-duty-claim',
+          timestamp: formatLogTimestamp(new Date(now + 10)),
+          createdAt: now + 10,
+          level: 'INFO',
+          module: 'DUTY_TASK',
+          taskActionStage: 'claim',
+          message: '值守认领',
+        },
+        {
+          id: 'log-order-result',
+          timestamp: formatLogTimestamp(new Date(now + 20)),
+          createdAt: now + 20,
+          level: 'INFO',
+          module: 'ORDER',
+          taskActionStage: 'result',
+          message: '订单结果',
+        },
+      ]);
+
+      const res = await storage.queryLogs({ module: 'ORDER', taskActionStage: 'claim' });
+      expect(res.map((l) => l.id)).toEqual(['log-order-claim']);
     });
   });
 

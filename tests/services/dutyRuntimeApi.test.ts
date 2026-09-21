@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   unwrapDutyEnvelope,
   registerStation,
@@ -7,12 +7,10 @@ import {
   createDutyTasks,
   submitDutyTaskResult,
   importToolkitOrder,
-  syncDutyTokensHttp,
-  clearDutyTokensHttp,
   DUTY_ENDPOINTS,
 } from '../../src/services/dutyRuntimeApi';
 import * as platformApi from '../../src/services/platformApi';
-import type { PlatformAuthTokens } from '../../src/types';
+import type { DutyTaskResultPayload } from '../../src/types';
 
 vi.mock('../../src/services/platformApi', () => ({
   requestPlatformApi: vi.fn(),
@@ -177,7 +175,7 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
   });
 
   describe('createDutyTasks', () => {
-    it('调用 POST /toolkit/toolbox/tasks 批量创建下游任务', async () => {
+    it('调用 POST /toolkit/toolbox/tasks 批量创建下游任务，并自动转换 businessType 与 Base64 data', async () => {
       mockRequest.mockResolvedValueOnce({ code: '0000', success: true });
 
       await createDutyTasks({
@@ -188,45 +186,110 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
             msgType: 'OTA_IMPORT_ORDER',
             businessId: 'MT-10001',
             unitId: 'unit-88',
-            data: { channel: 'meituan' },
+            data: { channel: 'meituan', extUnitCode: 'unit-88' },
+          },
+          {
+            msgType: 'OTA_CANCEL_ORDER',
+            businessId: 'MT-10002',
+            unitId: 'unit-88', // 应该被过滤掉，不发送 unitId
+            data: { channel: 'meituan', reason: '客户退单' },
           },
         ],
       });
 
       expect(mockRequest).toHaveBeenCalledWith(
         DUTY_ENDPOINTS.TASKS,
-        expect.objectContaining({ method: 'POST' })
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            stationId: 'st-1',
+            appId: 'smart-link',
+            items: [
+              {
+                unitId: 'unit-88',
+                msgType: 'OTA_IMPORT_ORDER',
+                businessType: 'OTA_MIGRATION',
+                businessId: 'MT-10001',
+                data: Buffer.from(JSON.stringify({ channel: 'meituan', extUnitCode: 'unit-88' }), 'utf-8').toString('base64'),
+              },
+              {
+                msgType: 'OTA_CANCEL_ORDER',
+                businessType: 'OTA_MIGRATION',
+                businessId: 'MT-10002',
+                data: Buffer.from(JSON.stringify({ channel: 'meituan', reason: '客户退单' }), 'utf-8').toString('base64'),
+              },
+            ],
+          }),
+        })
       );
     });
   });
 
   describe('submitDutyTaskResult', () => {
-    it('调用 PUT /toolkit/toolbox/tasks/:id/result 提交执行结果', async () => {
+    it('调用 PUT /toolkit/toolbox/tasks/:id/result 提交标准线缆格式执行结果', async () => {
       mockRequest.mockResolvedValueOnce({ code: '0000', success: true });
 
-      await submitDutyTaskResult('task-101', {
-        taskId: 'task-101',
-        status: 'SUCCEEDED',
-        result: { pmsOrderId: 'PMS-888' },
-      });
+      const payload: DutyTaskResultPayload = {
+        station: 'st-1',
+        leaseToken: 'lease-999',
+        businessType: 'OTA_MIGRATION',
+        businessId: 'MT-10001',
+        scope: 'INTERFACE',
+        status: 'SUCCESS',
+        details: [
+          {
+            confirmNo: 'CONF-888',
+            businessId: 'MT-10001',
+            status: 'SUCCESS',
+            ackData: Buffer.from(JSON.stringify({ pmsOrderId: 'PMS-888' }), 'utf-8').toString('base64'),
+          },
+        ],
+      };
+
+      await submitDutyTaskResult('task-101', payload);
 
       expect(mockRequest).toHaveBeenCalledWith(
         DUTY_ENDPOINTS.TASK_RESULT('task-101'),
-        expect.objectContaining({ method: 'PUT' })
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
       );
     });
   });
 
   describe('importToolkitOrder', () => {
-    it('调用 POST /toolkit/orders/import 直接提交订单', async () => {
+    it('调用 POST /toolkit/orders/import 提交符合线缆标准的订单', async () => {
       mockRequest.mockResolvedValueOnce({
         code: '0000',
         success: true,
-        data: { pmsOrderId: 'PMS-999' },
+        data: { orders: [{ pmsOrderId: 'PMS-999', confirmationNo: 'CONF-123' }] },
       });
 
-      const res = await importToolkitOrder({ orders: [{ otaOrderId: 'MT-1' }] });
-      expect(res).toEqual({ success: true, pmsOrderId: 'PMS-999' });
+      const res = await importToolkitOrder({
+        extUnitCode: 'HOTEL-1',
+        orders: [
+          {
+            otaOrderId: 'MT-1',
+            otaChannel: 'MEITUAN',
+            contact: { name: '张三', mobile: '13800000000' },
+            booking: {
+              roomType: '大床房',
+              rateCode: 'OTA',
+              arrival: '2026-09-20',
+              departure: '2026-09-21',
+              roomTypeId: 'ROOM-1',
+              nights: 1,
+              quantity: 1,
+              totalPrice: 200,
+              paytype: '预付',
+              pricing: [{ date: '2026-09-20', price: 200 }],
+            },
+            remark: '',
+          },
+        ],
+      });
+      expect(res).toEqual({ success: true, pmsOrderId: 'PMS-999', confirmationNo: 'CONF-123' });
       expect(mockRequest).toHaveBeenCalledWith(
         DUTY_ENDPOINTS.ORDER_IMPORT,
         expect.objectContaining({ method: 'POST' })
@@ -234,80 +297,4 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
     });
   });
 
-  describe('syncDutyTokensHttp & clearDutyTokensHttp', () => {
-    const originalFetch = globalThis.fetch;
-
-    beforeEach(() => {
-      globalThis.fetch = vi.fn();
-    });
-
-    afterEach(() => {
-      globalThis.fetch = originalFetch;
-    });
-
-    it('POST /api/duty/tokens 同步平台 Token', async () => {
-      const mockFetch = vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ success: true }),
-      } as Response);
-
-      const tokens: PlatformAuthTokens = {
-        accessToken: 'token-1',
-        refreshToken: 'ref-1',
-        expiresAt: 12345,
-        tokenType: 'bearer',
-        platformBaseUrl: 'https://api.test.com',
-        tenantId: 'TENANT_HTTP',
-        authenticatedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      const res = await syncDutyTokensHttp(tokens);
-
-      expect(res.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledWith(
-        DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS,
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify(tokens),
-        })
-      );
-    });
-
-    it('DELETE /api/duty/tokens 清除平台 Token', async () => {
-      const mockFetch = vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ success: true }),
-      } as Response);
-
-      const res = await clearDutyTokensHttp();
-
-      expect(res.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledWith(
-        DUTY_ENDPOINTS.LOCAL_DUTY_TOKENS,
-        expect.objectContaining({
-          method: 'DELETE',
-        })
-      );
-    });
-
-    it('同步失败时抛出明确异常', async () => {
-      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response);
-
-      await expect(
-        syncDutyTokensHttp({
-          accessToken: 'a',
-          refreshToken: 'b',
-          expiresAt: 1,
-          tokenType: 'bearer',
-          platformBaseUrl: 'https://api.test.com',
-          tenantId: 'TENANT_HTTP',
-          authenticatedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        })
-      ).rejects.toThrow('同步 Token 失败 (500)');
-    });
-  });
 });

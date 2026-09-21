@@ -42,7 +42,6 @@ export interface ProtocolFieldMapping {
   /** 是否为核心必需字段（若缺失将触发 Fail-Fast 协议漂移报警） */
   required?: boolean;
 }
-
 export interface ChannelProtocolSchema {
   /** 渠道唯一标识，如 'meituan', 'douyin' */
   channelId: string;
@@ -68,4 +67,49 @@ export interface ProtocolDriftWarning {
   missingRequiredFields: string[];
   message: string;
   rawSampleSnippet: string;
+}
+
+/**
+ * 订单协议按日价格明细
+ */
+export interface OrderProtocolPricing {
+  date: string; // YYYY-MM-DD
+  price: number; // 元
+}
+
+/**
+ * 统一订单协议领域模型 (Unified Domain Order Protocol Model)
+ * 程序内部订单数据的唯一标准协议，承上由渠道报文清洗得出，启下驱动模版渲染与入单请求转换
+ */
+export interface OrderProtocolData {
+  // 核心标识
+  otaOrderId: string;
+  otaChannel: string;
+  unitId?: string;
+  unitName?: string;
+
+  // 住客与联系人
+  guestName: string;
+  guestMobile: string;
+
+  // 预订与房型
+  roomTypeName: string;
+  originRoomType?: string;
+  roomTypeId: string;
+  rateCode: string;
+  arrival: string; // YYYY-MM-DD
+  departure: string; // YYYY-MM-DD
+  nights: number;
+  quantity: number;
+
+  // 财务与结算
+  totalPrice: number;
+  floorPrice?: number;
+  paytype: string;
+  pricing: OrderProtocolPricing[];
+
+  // 派生与原始上下文 (用于模版表达式求值，如需酒店开票、是否含权益等)
+  contextVariables: CleanOrderContext;
+  rawRemark: string;
+  rawPayload?: unknown;
 }

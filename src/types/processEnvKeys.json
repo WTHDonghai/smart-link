@@ -1,0 +1,7 @@
+{
+  "mode": "MODE",
+  "startupMode": "SMARTLINK_START_MODE",
+  "disableHmr": "DISABLE_HMR",
+  "userDataDir": "SMARTLINK_USER_DATA_DIR",
+  "playwrightHeadless": "PLAYWRIGHT_HEADLESS"
+}

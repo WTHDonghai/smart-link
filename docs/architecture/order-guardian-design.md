@@ -1,7 +1,7 @@
 # 订单值守系统业务流程与设计规范 (Order Guardian Design)
 
-> 文档状态：设计完成，已对齐 `feat/store-collection` 分支的统一采集架构规范  
-> 目标分支：`feat/order-guardian` (基于 `feat/store-collection` 创建)
+> 文档状态：已对齐 Electron-Only 原生桌面架构与统一日志可信源规范
+> 适用模块：`src/components/orders/`, `src/store/slices/orderGuardianSlice.ts`, `src/crawler/duty/`
 
 ---
 
@@ -11,15 +11,19 @@
 
 ```mermaid
 flowchart TD
-    subgraph ChannelDutyControl["1. 渠道值守控制与状态上报"]
-      C1["用户点击『开始值守』(MEITUAN / DOUYIN / CTRIP)"] --> C2["调用 dutyBridge.startDuty(channelCode)"]
-      C2 --> C3["状态流转: STOPPED -> STARTING -> RUNNING"]
-      C3 --> C4["启动 60s 周期上报 POST /toolkit/toolbox/actual-state/report\n(若任一渠道 RUNNING，app 为 RUNNING，上报活跃 target 列表)"]
-      C5["用户点击『停止值守』"] --> C6["调用 dutyBridge.stopDuty(channelCode) -> 恢复 STOPPED"]
-      C6 --> C7["所有渠道停止时，立即上报 status=STOP, targets=[]"]
+    subgraph ChannelDutyControl["1. 渠道值守控制与状态流转 (Electron 原生 IPC)"]
+      C1["用户点击『开始值守』(MEITUAN / DOUYIN / CTRIP 等)"] --> C2["调用 dutyBridge.startDutyByChannel(channelCode)"]
+      C2 -->|"IPC: duty:start"| C3["主进程 DutyOrchestrationEngine 启动渠道 Runner"]
+      C3 --> C4["状态流转: STOPPED -> STARTING -> RUNNING"]
+      C4 --> C5["启动 60s 周期上报 POST /toolkit/toolbox/actual-state/report\n(若任一渠道 RUNNING，app 为 RUNNING，上报活跃 target 列表)"]
+      C6["用户点击『停止值守』"] --> C7["调用 dutyBridge.stopDutyByChannel(channelCode)"]
+      C7 -->|"IPC: duty:stop"| C8["主进程停止 Runner -> 恢复 STOPPED 状态"]
+      C8 --> C9["所有渠道停止时，立即上报 status=STOP, targets=[]"]
+
+      C3 -.->|"任务日志与调度事件"| LOGS["主进程 publishMainLog -> IPC 'host:log-entry' -> 前端 Redux -> IndexedDB"]
     end
 
-    subgraph OrderMonitoring["2. 文旅订单监控与人工操作"]
+    subgraph OrderMonitoring["2. 文旅订单监控与人工运维 (Client SDK -> 中台 REST)"]
       M1["挂载『订单值守』工作区"] --> M2["并发请求: GET /toolkit/orders/statistics 与 GET /toolkit/orders (首屏)"]
       M2 --> M3["多维筛选: 状态 Tabs (全部/待确认/成功/失败/取消/导入中) + 日期起止 + 搜索框"]
       M3 --> M4["重新拉取对应条件的订单列表"]
@@ -29,13 +33,13 @@ flowchart TD
       M5 -->|"状态为 SUCCESS"| ACT_SUCC["开放动作: 取消 (CANCEL)"]
       M5 -->|"PENDING / IMPORTING / CANCEL"| ACT_DIS["全部禁用并提示状态原因"]
 
-      ACT_FAIL -->|"点击『导入』"| OP_IMP["POST /toolkit/orders/:id/import -> Toast 提示 -> 刷新列表与统计"]
+      ACT_FAIL -->|"点击『重新导入』"| OP_IMP["POST /toolkit/orders/:id/import -> Toast 提示 -> 刷新列表与统计"]
       ACT_FAIL -->|"点击『删除』"| OP_DEL["二次确认 -> DELETE /toolkit/orders/:id -> 刷新列表"]
       ACT_SUCC -->|"点击『取消』"| OP_CAN["二次确认 -> PUT /toolkit/orders/:id/cancel -> 刷新列表"]
 
       ACT_FAIL -->|"点击『编辑』"| DRAWER["右侧滑出 EditOrderDrawer\n并发拉取订单详情与该酒店产品选项"]
       DRAWER --> EDIT_FORM["修改客人信息/电话，下拉选择文旅房型、房价码、预订类型，动态填写每日价格"]
-      EDIT_FORM --> EDIT_SAVE["点击『保存修改』-> PUT /toolkit/orders/:id -> 刷新列表与统计 -> 关闭抽屉"]
+      DRAWER --> EDIT_SAVE["点击『保存』-> PUT /toolkit/orders/:id -> 刷新列表与统计 -> 关闭抽屉"]
     end
 ```
 
@@ -57,28 +61,30 @@ flowchart TD
 
 ## 3. 对齐统一架构的模块分层设计
 
-严格遵循 `docs/architecture/unified-crawler-and-duty-architecture.md` 规范：
+系统完全运行于 Electron 宿主，不存在任何本地 HTTP 模拟中间件：
 
 ```
 src/
 ├── types/
-│   └── index.ts                     # 补充 ToolkitOrder, ToolkitOrderStatus, ChannelDutyState 等强类型
+│   ├── index.ts                     # 实体契约: ToolkitOrder, ToolkitOrderStatus, ChannelDutyInfo, DesktopOperationResult
+│   └── host.ts                      # 桌面桥接契约: HostBridgeApi, DutyBridgeApi
 ├── services/
-│   ├── toolkitOrderApi.ts           # 纯 Client SDK: 封装 /toolkit/orders 相关标准 REST 接口
-│   ├── dutyRuntimeApi.ts            # 纯 Client SDK: 封装 /toolkit/toolbox/actual-state/report 等接口
-│   └── dutyBridge.ts                # 双模网关: 抹平 Electron IPC (duty:*) 与本地 HTTP 差异
-├── server/
-│   └── dutyMiddleware.ts            # Vite 本地中间件: 响应 /api/duty/* 请求并协调本地进程/模拟器
+│   ├── toolkitOrderApi.ts           # 纯 Client SDK: 承载渲染层对 /toolkit/orders 相关 REST 接口调用
+│   ├── dutyRuntimeApi.ts            # 主进程服务: 承载任务认领 (claim)、实际状态上报 (report)、回执提交 (result)
+│   └── dutyBridge.ts                # 桌面 IPC 网关: 封装 window.host.duty，提供强类型 IPC 交互
 ├── utils/
-│   └── orderHelpers.ts              # 纯函数: getAllowedOrderActions, calculateNightsAndPricing, formatCurrency
+│   ├── orderHelpers.ts              # 纯函数: getAllowedOrderActions, calculateNightsAndPricing, formatCurrency
+│   └── template/
+│       ├── orderProtocolNormalizer.ts # 跨平台订单协议归一化算子
+│       └── orderPayloadTransformer.ts # 搬单载荷清洗与转换纯函数
 ├── store/
 │   └── slices/
-│       └── orderGuardianSlice.ts    # 扁平透明的 RTK 切片，管理订单、统计、值守渠道与抽屉状态
+│       └── orderGuardianSlice.ts    # 扁平透明的 RTK 切片，管理订单、指标统计、值守渠道与抽屉状态
 └── components/
     └── orders/
-        ├── OrderGuardianView.tsx    # 主视图: 整合渠道值守与文旅订单面板
+        ├── OrderGuardianView.tsx    # 主工作区视图: 整合渠道值守与文旅订单面板
         ├── ChannelDutyPanel.tsx     # 渠道值守卡片与协调器徽标 (复用 ChannelBadge)
-        ├── OrderStatsCards.tsx      # 4 个指标统计卡片 (今日导入、待确认、已导入、失败)
+        ├── OrderStatsCards.tsx      # 4 个关键指标卡片 (今日导入、待确认、已导入、失败)
         ├── OrderFilterBar.tsx       # 状态 Tabs + 日期起止 + 搜索输入
         ├── OrderTable.tsx           # 高密表格 (复用 TableRowActions 与 ChannelBadge)
         └── EditOrderDrawer.tsx      # 右侧滑出抽屉: 房型/房价码下拉联动 + 动态每日价格拆分计算
@@ -88,21 +94,22 @@ src/
 
 ## 4. 关键接口与数据契约
 
-### 4.1 Toolkit 订单接口
+### 4.1 Toolkit 订单管理接口 (由渲染层调用)
 - 列表查询：`GET /${TOOLKIT_MODULE}/orders`（参数：`current`, `size`, `status`, `query`, `arrivalStart`, `arrivalEnd`, `showAll: true`）
 - 指标统计：`GET /${TOOLKIT_MODULE}/orders/statistics`（返回：`todayTotal`, `pendingCount`, `successCount`, `failedCount`）
 - 订单详情：`GET /${TOOLKIT_MODULE}/orders/:id`
-- 订单编辑：`PUT /${TOOLKIT_MODULE}/orders/:id`
-- 单单导入：`POST /${TOOLKIT_MODULE}/orders/:id/import`
+- 订单编辑保存：`PUT /${TOOLKIT_MODULE}/orders/:id`（仅保存编辑修改草稿，不触发 PMS 导入）
+- 订单重新导入：`POST /${TOOLKIT_MODULE}/orders/:id/import`（请求体 `{ id: orderId }`，触发单条订单导入 PMS）
+- 自动任务入单：`POST /${TOOLKIT_MODULE}/orders/import`（自动化值守任务下发完整 `ImportPayload` 批量/单条入单）
 - 订单取消：`PUT /${TOOLKIT_MODULE}/orders/:id/cancel`
 - 订单删除：`DELETE /${TOOLKIT_MODULE}/orders/:id`
-- 产品选项目录：`GET /${TOOLKIT_MODULE}/orders/options`（按 `unitId` 查询对应的文旅房型、房价码、预订类型）
+- 产品选项目录：并发拉取中台产品中心真实字典接口（`fetchRoomTypes`, `fetchRatePlans`, `fetchReservationTypes`）
 
-### 4.2 实际状态上报接口
+### 4.2 实际状态上报接口 (由主进程值守引擎周期调用)
 - 路径：`POST /${TOOLKIT_MODULE}/toolbox/actual-state/report`
 - 载荷契约：
 ```typescript
-interface ActualStateReportPayload {
+export interface ActualStateReportPayload {
   stationId: string;
   apps: Array<{
     appId: string;
@@ -114,6 +121,13 @@ interface ActualStateReportPayload {
   }>;
 }
 ```
+
+### 4.3 任务回执报文契约 (由主进程执行器生成并提交)
+- 路径：`PUT /${TOOLKIT_MODULE}/toolbox/tasks/:id/result`
+- 特别约束：
+  - `ackData` 严格按照 Base64 编码的 JSON 对象封装；
+  - 成功时封装 `{ result: ... }`；
+  - 失败时严格仅包含 `{ errorCode: ... }`，`errorMessage` 位于顶层 DTO，严禁混入 `ackData`。
 
 ---
 

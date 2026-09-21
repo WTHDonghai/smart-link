@@ -18,6 +18,7 @@ export const ToastNotification: React.FC = () => {
   if (!toast || !toast.visible) return null;
 
   const isError = toast.type === 'error';
+  const isWarning = toast.type === 'warning';
   const isInfo = toast.type === 'info';
 
   return (
@@ -26,11 +27,13 @@ export const ToastNotification: React.FC = () => {
         <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
           isError 
             ? 'bg-[#ffdad6] text-[#ba1a1a]' 
+            : isWarning
+            ? 'bg-amber-100 text-amber-800'
             : isInfo 
             ? 'bg-[#dce9ff] text-[#004ac6]' 
             : 'bg-[#e2f9ee] text-[#007d55]'
         }`}>
-          {isError ? (
+          {isError || isWarning ? (
             <AlertCircle className="w-5 h-5" />
           ) : isInfo ? (
             <Info className="w-5 h-5" />

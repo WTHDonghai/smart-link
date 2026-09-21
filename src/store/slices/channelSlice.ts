@@ -16,16 +16,13 @@ import {
 } from '../../services/channelApi';
 import {
   DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
-  DEFAULT_MEITUAN_REMARK_TEMPLATE,
 } from '../../services/protocols/meituanProtocol';
 import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
-  DEFAULT_DOUYIN_REMARK_TEMPLATE,
 } from '../../services/protocols/douyinProtocol';
 import { getOtaChannelUrl } from '../../config/otaUrls';
 
 export const SCHEMA_STORAGE_PREFIX = 'smartlink_schema_';
-export const TEMPLATE_STORAGE_PREFIX = 'smartlink_template_';
 
 /**
  * 安全获取 LocalStorage 实例（兼顾 window.localStorage 与全局 localStorage）
@@ -89,46 +86,6 @@ export function removeProtocolSchemaFromStorage(channelId: string): void {
   }
 }
 
-/**
- * 从本地存储读取自定义备注模板
- */
-export function getSavedRemarkTemplate(channelId: string): string | null {
-  try {
-    const storage = getLocalStorage();
-    if (!storage) return null;
-    const item = storage.getItem(`${TEMPLATE_STORAGE_PREFIX}${channelId}`);
-    return typeof item === 'string' ? item : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 将自定义备注模板安全持久化至本地存储
- */
-export function saveRemarkTemplateToStorage(channelId: string, template: string): void {
-  try {
-    const storage = getLocalStorage();
-    if (!storage) return;
-    storage.setItem(`${TEMPLATE_STORAGE_PREFIX}${channelId}`, template);
-  } catch {
-    // 捕获 storage 异常防崩
-  }
-}
-
-/**
- * 从本地存储安全移除自定义备注模板缓存
- */
-export function removeRemarkTemplateFromStorage(channelId: string): void {
-  try {
-    const storage = getLocalStorage();
-    if (!storage) return;
-    storage.removeItem(`${TEMPLATE_STORAGE_PREFIX}${channelId}`);
-  } catch {
-    // 捕获 storage 异常防崩
-  }
-}
-
 export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'lastSyncTime'>[] = [
   {
     id: 'meituan',
@@ -143,7 +100,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'meituan_sub_01', label: '美团自营分销 01 (MEITUAN_S1)' },
       { val: 'meituan_sub_02', label: '美团直签通道 02 (MEITUAN_DIR)' }
     ],
-    remarkTemplate: DEFAULT_MEITUAN_REMARK_TEMPLATE,
+    remarkTemplate: '',
     protocolSchema: DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
     storeCrawlUrl: getOtaChannelUrl('MEITUAN'),
     status: 'active',
@@ -161,7 +118,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'meituanbiz', label: '美团商旅 (MEITUAN_BIZ)' },
       { val: 'meituanbiz_vip', label: '美团企业采购 VIP (MEITUAN_CORP)' }
     ],
-    remarkTemplate: '【企业商旅协议】OTA单号:{OTA订单号} | 企业统一结算 | {入住人} | 请提供增值税专用发票',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('MEITUAN_BIZ'),
     status: 'active',
     crawlerStatus: 'online'
@@ -178,7 +135,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'douyin', label: '抖音 (DOUYIN)' },
       { val: 'douyin_life', label: '抖音本地生活服务 (DOUYIN_LOCAL)' }
     ],
-    remarkTemplate: DEFAULT_DOUYIN_REMARK_TEMPLATE,
+    remarkTemplate: '',
     protocolSchema: DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
     storeCrawlUrl: getOtaChannelUrl('DOUYIN'),
     status: 'active',
@@ -197,7 +154,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'ctrip_corp', label: '携程商旅直通 (CTRIP_CORP)' },
       { val: 'ctrip_agent', label: '携程代理分销 (CTRIP_AGENT)' }
     ],
-    remarkTemplate: '【携程直销】订单号:{OTA订单号}，房型:{房型名称}，入住人:{入住人}，底价:{底价}，请及时排房。',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('CTRIP'),
     status: 'active',
     crawlerStatus: 'online'
@@ -214,7 +171,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'tongcheng_main', label: '同程艺龙直连 (TONGCHENG_MAIN)' },
       { val: 'tongcheng_b2b', label: '同程企业集采 (TC_B2B)' }
     ],
-    remarkTemplate: '【同程订单】外部单号:{OTA订单号}，客人:{入住人}，间夜:{间夜数}，无早。',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('TONGCHENG'),
     status: 'active',
     crawlerStatus: 'online'
@@ -231,7 +188,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'fliggy_open', label: '飞猪开放平台直连 (FLIGGY_OPEN)' },
       { val: 'fliggy_alitrip', label: '阿里商旅分销 (ALITRIP_CORP)' }
     ],
-    remarkTemplate: '【飞猪信用住】单号:{OTA订单号}，免押免查房，离店后自动结算。',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('FLIGGY'),
     status: 'active',
     crawlerStatus: 'online'
@@ -248,7 +205,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'qunar_hotel', label: '去哪儿酒店直连 (QUNAR_HOTEL)' },
       { val: 'qunar_b2b', label: '去哪儿同业分销 (QUNAR_B2B)' }
     ],
-    remarkTemplate: '【去哪儿】单号:{OTA订单号}，预留至20:00，房型:{房型名称}。',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('QUNAR'),
     status: 'active',
     crawlerStatus: 'online'
@@ -265,7 +222,7 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
       { val: 'red_store', label: '小红书自营店铺 (RED_STORE)' },
       { val: 'red_trips', label: '小红书文旅预订 (RED_TRIPS)' }
     ],
-    remarkTemplate: '【小红书种草单】单号:{OTA订单号}，网红探店客户，送欢迎水果礼遇。',
+    remarkTemplate: '',
     storeCrawlUrl: getOtaChannelUrl('RED'),
     status: 'active',
     crawlerStatus: 'online'
@@ -286,41 +243,16 @@ export interface ChannelState {
   error: string | null;
   selectedChannelForTemplate: string | null;
   isSavingTemplate: boolean;
+  savingTemplateRequestId: string | null;
+  savingTemplateChannelId: string | null;
+  templateSaveError: string | null;
   isLoadingTemplate: boolean;
+  loadingTemplateRequestId: string | null;
+  loadingTemplateChannelId: string | null;
+  templateLoadError: string | null;
 }
 
-export const createInitialChannels = (): OTAChannel[] => {
-  const initialBase = [
-    {
-      ...BASE_CHANNELS_CATALOG[0],
-      todayOrders: 428,
-      lastSyncTime: '3秒前',
-      isMapped: false,
-    },
-    {
-      ...BASE_CHANNELS_CATALOG[1],
-      todayOrders: 215,
-      lastSyncTime: '5秒前',
-      isMapped: false,
-    },
-    {
-      ...BASE_CHANNELS_CATALOG[2],
-      todayOrders: 362,
-      lastSyncTime: '1秒前',
-      isMapped: false,
-    }
-  ];
-
-  return initialBase.map((ch) => {
-    const savedSchema = getSavedProtocolSchema(ch.id);
-    const savedTemplate = getSavedRemarkTemplate(ch.id);
-    return {
-      ...ch,
-      remarkTemplate: savedTemplate !== null ? savedTemplate : ch.remarkTemplate,
-      protocolSchema: savedSchema !== null ? savedSchema : ch.protocolSchema,
-    };
-  });
-};
+export const createInitialChannels = (): OTAChannel[] => [];
 
 const initialState: ChannelState = {
   selectedChannelForTemplate: null,
@@ -332,7 +264,13 @@ const initialState: ChannelState = {
   error: null,
   channels: createInitialChannels(),
   isSavingTemplate: false,
+  savingTemplateRequestId: null,
+  savingTemplateChannelId: null,
+  templateSaveError: null,
   isLoadingTemplate: false,
+  loadingTemplateRequestId: null,
+  loadingTemplateChannelId: null,
+  templateLoadError: null,
 };
 
 // 异步 Thunk：加载文旅渠道候选与已映射记录
@@ -427,10 +365,16 @@ export const saveRemarkTemplateAsync = createAsyncThunk<
     const res = await saveChannelRemarkTemplate(param.otaChannelCode, {
       remarkTemplate: param.template,
     });
+    const savedTemplate = res.remarkTemplate;
+    const resolvedTemplate =
+      savedTemplate !== null
+        ? savedTemplate
+        : (await fetchChannelRemarkTemplate(param.otaChannelCode)).remarkTemplate ?? '';
+
     return {
       channelId: param.channelId,
       otaChannelCode: param.otaChannelCode,
-      template: param.template,
+      template: resolvedTemplate,
       message: res.message,
     };
   } catch (error) {
@@ -480,11 +424,10 @@ export const channelSlice = createSlice({
       );
 
       const savedSchema = getSavedProtocolSchema(catalogItem.id);
-      const savedTemplate = getSavedRemarkTemplate(catalogItem.id);
 
       const newChannel: OTAChannel = {
         ...catalogItem,
-        remarkTemplate: savedTemplate !== null ? savedTemplate : catalogItem.remarkTemplate,
+        remarkTemplate: '',
         protocolSchema: savedSchema !== null ? savedSchema : catalogItem.protocolSchema,
         targetSystem: existingMapping?.channelCode || catalogItem.targetSystem || '',
         channelId: existingMapping?.channelId,
@@ -539,12 +482,6 @@ export const channelSlice = createSlice({
           );
           ch.isMapped = !!existingMapping && existingMapping.channelId === action.payload.pmsChannelId;
         }
-      }
-    },
-    updateRemarkTemplate: (state, action: PayloadAction<{ channelId: string; template: string }>) => {
-      const ch = state.channels.find(c => c.id === action.payload.channelId);
-      if (ch) {
-        ch.remarkTemplate = action.payload.template;
       }
     },
     updateChannelFieldMapping: (
@@ -612,16 +549,13 @@ export const channelSlice = createSlice({
       if (ch) {
         if (ch.id === 'meituan') {
           ch.protocolSchema = JSON.parse(JSON.stringify(DEFAULT_MEITUAN_PROTOCOL_SCHEMA));
-          ch.remarkTemplate = DEFAULT_MEITUAN_REMARK_TEMPLATE;
         } else if (ch.id === 'douyin') {
           ch.protocolSchema = JSON.parse(JSON.stringify(DEFAULT_DOUYIN_PROTOCOL_SCHEMA));
-          ch.remarkTemplate = DEFAULT_DOUYIN_REMARK_TEMPLATE;
         } else {
           const baseItem = BASE_CHANNELS_CATALOG.find(c => c.id === ch.id);
           ch.protocolSchema = baseItem?.protocolSchema
             ? JSON.parse(JSON.stringify(baseItem.protocolSchema))
             : JSON.parse(JSON.stringify(DEFAULT_MEITUAN_PROTOCOL_SCHEMA));
-          ch.remarkTemplate = baseItem?.remarkTemplate || '';
         }
       }
     },
@@ -662,83 +596,90 @@ export const channelSlice = createSlice({
         state.culturalTourismChannels = action.payload.culturalTourismChannels;
         state.mappings = action.payload.mappings;
 
-        // 1. 若远程已配置某些渠道映射（如携程、同程等）且未在当前列表中，自动补齐展示
+        // 保留用户在界面上通过「添加渠道」新增、正在编辑但尚未保存的草稿渠道
+        const localDrafts = state.channels.filter(
+          (c) => !c.isMapped && (!c.mappingId || c.mappingId === '')
+        );
+
+        const newChannels: OTAChannel[] = [];
+        const seenCodes = new Set<string>();
+
+        // 1. 基于远程真实映射数据构建已映射渠道
         for (const mapping of action.payload.mappings) {
-          const mCode = mapping.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
-          const exists = state.channels.some(
-            c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
-                 c.id.toUpperCase().replace(/[-_]/g, '') === mCode
+          const rawCode = (mapping.otaChannelCode || '').trim().toUpperCase();
+          if (!rawCode) continue;
+          const normalizedCode = rawCode.replace(/[-_]/g, '');
+          if (seenCodes.has(normalizedCode)) continue;
+          seenCodes.add(normalizedCode);
+
+          // 优先复用 state.channels 中已有的对象（保留本地已设置的 remarkTemplate 等状态）
+          const existing = state.channels.find(
+            (c) =>
+              c.code.toUpperCase().replace(/[-_]/g, '') === normalizedCode ||
+              c.id.toUpperCase().replace(/[-_]/g, '') === normalizedCode
           );
-          if (!exists) {
-            const catalogItem = ALL_CHANNELS_CATALOG.find(
-              c => c.code.toUpperCase().replace(/[-_]/g, '') === mCode ||
-                   c.id.toUpperCase().replace(/[-_]/g, '') === mCode
-            );
-            if (catalogItem) {
-              const savedSchema = getSavedProtocolSchema(catalogItem.id);
-              const savedTemplate = getSavedRemarkTemplate(catalogItem.id);
-              state.channels.push({
-                ...catalogItem,
-                remarkTemplate: savedTemplate !== null ? savedTemplate : catalogItem.remarkTemplate,
-                protocolSchema: savedSchema !== null ? savedSchema : catalogItem.protocolSchema,
-                targetSystem: mapping.channelCode,
-                channelId: mapping.channelId,
-                channelCode: mapping.channelCode,
-                channelName: mapping.channelName,
-                mappingId: mapping.mappingId || mapping.id,
-                isMapped: true,
-                todayOrders: 0,
-                lastSyncTime: '已同步',
-              });
-            } else {
-              state.channels.push({
-                id: mapping.otaChannelCode.toLowerCase(),
-                name: mapping.otaChannelName || mapping.otaChannelCode,
-                code: mapping.otaChannelCode,
-                short: (mapping.otaChannelName || mapping.otaChannelCode).slice(0, 1),
-                bgColor: 'bg-blue-50',
-                textColor: 'text-blue-700',
-                targetSystem: mapping.channelCode,
-                channelId: mapping.channelId,
-                channelCode: mapping.channelCode,
-                channelName: mapping.channelName,
-                mappingId: mapping.mappingId || mapping.id,
-                isMapped: true,
-                remarkTemplate: '',
-                status: 'active',
-                crawlerStatus: 'online',
-                todayOrders: 0,
-                lastSyncTime: '已同步',
-              });
-            }
+
+          const catalogItem = ALL_CHANNELS_CATALOG.find(
+            (c) =>
+              c.code.toUpperCase().replace(/[-_]/g, '') === normalizedCode ||
+              c.id.toUpperCase().replace(/[-_]/g, '') === normalizedCode
+          );
+
+          if (existing) {
+            existing.channelId = mapping.channelId;
+            existing.channelCode = mapping.channelCode;
+            existing.channelName = mapping.channelName;
+            existing.mappingId = mapping.mappingId || mapping.id;
+            existing.targetSystem = mapping.channelCode;
+            existing.isMapped = true;
+            newChannels.push(existing);
+          } else if (catalogItem) {
+            const savedSchema = getSavedProtocolSchema(catalogItem.id);
+            newChannels.push({
+              ...catalogItem,
+              remarkTemplate: '',
+              protocolSchema: savedSchema !== null ? savedSchema : catalogItem.protocolSchema,
+              targetSystem: mapping.channelCode,
+              channelId: mapping.channelId,
+              channelCode: mapping.channelCode,
+              channelName: mapping.channelName,
+              mappingId: mapping.mappingId || mapping.id,
+              isMapped: true,
+              todayOrders: 0,
+              lastSyncTime: '已同步',
+            });
+          } else {
+            newChannels.push({
+              id: mapping.otaChannelCode.toLowerCase(),
+              name: mapping.otaChannelName || mapping.otaChannelCode,
+              code: mapping.otaChannelCode,
+              short: (mapping.otaChannelName || mapping.otaChannelCode).slice(0, 1),
+              bgColor: 'bg-blue-50',
+              textColor: 'text-blue-700',
+              targetSystem: mapping.channelCode,
+              channelId: mapping.channelId,
+              channelCode: mapping.channelCode,
+              channelName: mapping.channelName,
+              mappingId: mapping.mappingId || mapping.id,
+              isMapped: true,
+              remarkTemplate: '',
+              status: 'active',
+              crawlerStatus: 'online',
+              todayOrders: 0,
+              lastSyncTime: '已同步',
+            });
           }
         }
 
-        // 2. 将远程真实映射数据匹配更新到 channels 中
-        for (const ch of state.channels) {
-          const chCode = ch.code.toUpperCase().replace(/[-_]/g, '');
-          const chId = ch.id.toUpperCase().replace(/[-_]/g, '');
-          const mapping = action.payload.mappings.find(
-            m => {
-              const mCode = m.otaChannelCode.toUpperCase().replace(/[-_]/g, '');
-              return mCode === chCode || mCode === chId;
-            }
-          );
-          if (mapping) {
-            ch.channelId = mapping.channelId;
-            ch.channelCode = mapping.channelCode;
-            ch.channelName = mapping.channelName;
-            ch.mappingId = mapping.mappingId || mapping.id;
-            ch.targetSystem = mapping.channelCode;
-            ch.isMapped = true;
-          } else {
-            ch.isMapped = false;
-            ch.channelId = '';
-            ch.channelCode = '';
-            ch.channelName = '';
-            ch.targetSystem = '';
+        // 2. 将用户未保存的本地草稿渠道追加在后面（若远程尚未包含该渠道）
+        for (const draft of localDrafts) {
+          const draftCode = draft.code.toUpperCase().replace(/[-_]/g, '');
+          if (!seenCodes.has(draftCode)) {
+            newChannels.push(draft);
           }
         }
+
+        state.channels = newChannels;
       })
       .addCase(fetchChannelMappingData.rejected, (state, action) => {
         state.isLoading = false;
@@ -804,12 +745,20 @@ export const channelSlice = createSlice({
       })
 
       // saveRemarkTemplateAsync
-      .addCase(saveRemarkTemplateAsync.pending, (state) => {
+      .addCase(saveRemarkTemplateAsync.pending, (state, action) => {
         state.isSavingTemplate = true;
+        state.savingTemplateRequestId = action.meta.requestId;
+        state.savingTemplateChannelId = action.meta.arg.channelId;
+        state.templateSaveError = null;
         state.error = null;
       })
       .addCase(saveRemarkTemplateAsync.fulfilled, (state, action) => {
+        if (action.meta.requestId !== state.savingTemplateRequestId) return;
+
         state.isSavingTemplate = false;
+        state.savingTemplateRequestId = null;
+        state.savingTemplateChannelId = null;
+        state.templateSaveError = null;
         const ch = state.channels.find(
           (c) =>
             c.id === action.payload.channelId ||
@@ -820,31 +769,42 @@ export const channelSlice = createSlice({
         }
       })
       .addCase(saveRemarkTemplateAsync.rejected, (state, action) => {
+        if (action.meta.requestId !== state.savingTemplateRequestId) return;
+
         state.isSavingTemplate = false;
-        state.error = action.payload || action.error.message || '保存渠道备注模板失败';
+        state.savingTemplateRequestId = null;
+        state.templateSaveError = action.payload || action.error.message || '保存渠道备注模板失败';
       })
 
       // fetchRemarkTemplateAsync
-      .addCase(fetchRemarkTemplateAsync.pending, (state) => {
+      .addCase(fetchRemarkTemplateAsync.pending, (state, action) => {
         state.isLoadingTemplate = true;
-        state.error = null;
+        state.loadingTemplateRequestId = action.meta.requestId;
+        state.loadingTemplateChannelId = action.meta.arg.channelId;
+        state.templateLoadError = null;
       })
       .addCase(fetchRemarkTemplateAsync.fulfilled, (state, action) => {
+        if (action.meta.requestId !== state.loadingTemplateRequestId) return;
+
         state.isLoadingTemplate = false;
-        if (action.payload.remarkTemplate !== null) {
-          const ch = state.channels.find(
-            (c) =>
-              c.id === action.payload.channelId ||
-              c.code.toUpperCase() === action.payload.otaChannelCode.toUpperCase()
-          );
-          if (ch) {
-            ch.remarkTemplate = action.payload.remarkTemplate;
-          }
+        state.loadingTemplateRequestId = null;
+        state.loadingTemplateChannelId = null;
+        state.templateLoadError = null;
+        const ch = state.channels.find(
+          (c) =>
+            c.id === action.payload.channelId ||
+            c.code.toUpperCase() === action.payload.otaChannelCode.toUpperCase()
+        );
+        if (ch) {
+          ch.remarkTemplate = action.payload.remarkTemplate ?? '';
         }
       })
       .addCase(fetchRemarkTemplateAsync.rejected, (state, action) => {
+        if (action.meta.requestId !== state.loadingTemplateRequestId) return;
+
         state.isLoadingTemplate = false;
-        state.error = action.payload || action.error.message || '获取渠道备注模板失败';
+        state.loadingTemplateRequestId = null;
+        state.templateLoadError = action.payload || action.error.message || '获取渠道备注模板失败';
       });
   }
 });
@@ -854,7 +814,6 @@ export const {
   removeChannel,
   updateChannelTargetSystem,
   selectCulturalTourismChannel,
-  updateRemarkTemplate,
   updateChannelFieldMapping,
   toggleChannelField,
   resetChannelProtocol,

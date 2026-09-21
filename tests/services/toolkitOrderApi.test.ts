@@ -7,18 +7,23 @@ import {
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
   updateToolkitOrder,
-  importToolkitOrder,
+  retryToolkitOrderImport,
   deleteToolkitOrder,
   cancelToolkitOrder,
   fetchPropertyProductOptions,
   ORDER_ENDPOINTS,
 } from '../../src/services/toolkitOrderApi';
 import * as platformApi from '../../src/services/platformApi';
+import type { ToolkitOrder } from '../../src/types';
 
-vi.mock('../../src/services/platformApi', () => ({
-  requestPlatformApi: vi.fn(),
-  TOOLKIT_MODULE: 'toolkit',
-}));
+vi.mock('../../src/services/platformApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/platformApi')>();
+  return {
+    ...actual,
+    requestPlatformApi: vi.fn(),
+    TOOLKIT_MODULE: 'toolkit',
+  };
+});
 
 describe('toolkitOrderApi', () => {
   const mockRequest = vi.mocked(platformApi.requestPlatformApi);
@@ -265,43 +270,196 @@ describe('toolkitOrderApi', () => {
   });
 
   describe('order action methods', () => {
-    it('updateToolkitOrder sends PUT request', async () => {
-      mockRequest.mockResolvedValueOnce(undefined);
+    it('updateToolkitOrder merges draft into ToolkitOrder and posts to /toolkit/orders/import', async () => {
+      mockRequest.mockResolvedValueOnce({
+        success: true,
+        code: 200,
+        data: { pmsOrderId: 'PMS_999' },
+      });
+
+      const baseOrder: ToolkitOrder = {
+        id: 'ord_1',
+        unitId: 'HOTEL_01',
+        unitName: '隐居江南',
+        otaChannel: 'MEITUAN',
+        otaOrderId: 'MT_1001',
+        contact: { name: '旧名字', mobile: '13800000000' },
+        booking: {
+          arrival: '2026-10-01',
+          departure: '2026-10-02',
+          roomType: '旧房型',
+          roomTypeId: 'OLD_RT',
+          rateCode: 'OLD_RATE',
+          paytype: '预付全额',
+          nights: 1,
+          quantity: 1,
+          totalPrice: 100,
+          pricing: [{ date: '2026-10-01', price: 100 }],
+        },
+        status: 'FAILED',
+        allowedActions: ['EDIT', 'IMPORT', 'DELETE'],
+      };
+
       const draft = {
-        otaOrderId: 'OTA_1',
-        contact: { name: '李四', mobile: '13900002222' },
+        otaOrderId: 'MT_1001',
+        contact: { name: '张三', mobile: '13800001111' },
         booking: {
           roomType: '大床房',
           roomTypeId: 'RT_01',
-          rateCode: 'BAR',
-          paytype: 'PREPAY',
+          rateCode: 'OTA',
+          paytype: '预付全额',
           arrival: '2026-10-01',
           departure: '2026-10-02',
           quantity: 1,
           pricing: [{ date: '2026-10-01', price: 200 }],
         },
+        remark: '加急处理',
       };
 
-      await updateToolkitOrder('ord_1', draft);
+      await updateToolkitOrder(baseOrder, draft);
       expect(mockRequest).toHaveBeenCalledWith(
         `${ORDER_ENDPOINTS.ORDERS}/ord_1`,
         expect.objectContaining({
           method: 'PUT',
-          body: JSON.stringify(draft),
+          body: JSON.stringify({
+            ...baseOrder,
+            otaOrderId: 'MT_1001',
+            contact: { name: '张三', mobile: '13800001111' },
+            booking: {
+              ...baseOrder.booking,
+              roomType: '大床房',
+              roomTypeId: 'RT_01',
+              rateCode: 'OTA',
+              paytype: '预付全额',
+              arrival: '2026-10-01',
+              departure: '2026-10-02',
+              nights: 1,
+              quantity: 1,
+              pricing: [{ date: '2026-10-01', price: 200 }],
+              totalPrice: 200,
+            },
+            remark: '加急处理',
+          }),
         })
       );
     });
 
-    it('importToolkitOrder sends POST import request', async () => {
-      mockRequest.mockResolvedValueOnce(undefined);
-      await importToolkitOrder('ord_1');
+    it('updateToolkitOrder fetches details first if given an id string before sending PUT', async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: 'ord_1',
+        unitId: 'HOTEL_01',
+        unitName: '隐居江南',
+        otaChannel: 'MEITUAN',
+        otaOrderId: 'MT_1001',
+        contact: { name: '张三', mobile: '13800001111' },
+        status: 'FAILED',
+        booking: {
+          roomType: '标准间',
+          rateCode: 'RACK',
+          paytype: '预付全额',
+        },
+      });
+      mockRequest.mockResolvedValueOnce({
+        success: true,
+        code: 200,
+      });
+
+      const draft = {
+        otaOrderId: 'MT_1001',
+        contact: { name: '李四', mobile: '13900002222' },
+        booking: {
+          roomType: '大床房',
+          roomTypeId: 'RT_01',
+          rateCode: 'OTA',
+          paytype: '预付全额',
+          arrival: '2026-10-01',
+          departure: '2026-10-02',
+          quantity: 1,
+          pricing: [{ date: '2026-10-01', price: 250 }],
+        },
+      };
+
+      await updateToolkitOrder('ord_1', draft);
+      expect(mockRequest).toHaveBeenCalledWith('/toolkit/orders/ord_1');
       expect(mockRequest).toHaveBeenCalledWith(
-        `${ORDER_ENDPOINTS.ORDERS}/ord_1/import`,
+        '/toolkit/orders/ord_1',
+        expect.objectContaining({ method: 'PUT' })
+      );
+    });
+
+    it('retryToolkitOrderImport calls POST /toolkit/orders/:id/import with record id', async () => {
+      mockRequest.mockResolvedValueOnce({
+        success: true,
+        code: 200,
+        data: { pmsOrderId: 'PMS_888' },
+      });
+
+      const orderToImport: ToolkitOrder = {
+        id: 'ord_1',
+        unitId: 'HOTEL_01',
+        unitName: '隐居江南',
+        otaChannel: 'MEITUAN',
+        otaOrderId: 'MT_1001',
+        contact: { name: '张三', mobile: '13800001111' },
+        booking: {
+          arrival: '2026-10-01',
+          departure: '2026-10-02',
+          roomType: '大床房',
+          roomTypeId: 'RT_01',
+          rateCode: 'OTA',
+          paytype: '预付全额',
+          nights: 1,
+          quantity: 1,
+          totalPrice: 200,
+          pricing: [{ date: '2026-10-01', price: 200 }],
+        },
+        status: 'FAILED',
+        allowedActions: ['EDIT', 'IMPORT', 'DELETE'],
+      };
+
+      const result = await retryToolkitOrderImport(orderToImport);
+      expect(mockRequest).toHaveBeenCalledWith(
+        '/toolkit/orders/ord_1/import',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ id: 'ord_1' }),
         })
       );
+      expect(result.pmsOrderId).toBe('PMS_888');
+    });
+
+    it('retryToolkitOrderImport fetches details when given id string before importing', async () => {
+      // First call for details
+      mockRequest.mockResolvedValueOnce({
+        id: 'ord_2',
+        unitId: 'HOTEL_02',
+        otaChannel: 'CTRIP',
+        otaOrderId: 'CT_2002',
+        guestName: '李四',
+        guestMobile: '13900002222',
+        roomType: '双床房',
+        rateCode: 'RACK',
+        arrival: '2026-10-03',
+        departure: '2026-10-04',
+        status: 'FAILED',
+      });
+      // Second call for import
+      mockRequest.mockResolvedValueOnce({
+        success: true,
+        code: 200,
+        data: { confirmationNo: 'CONF_999' },
+      });
+
+      const result = await retryToolkitOrderImport('ord_2');
+      expect(mockRequest).toHaveBeenCalledWith('/toolkit/orders/ord_2');
+      expect(mockRequest).toHaveBeenCalledWith(
+        '/toolkit/orders/ord_2/import',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ id: 'ord_2' }),
+        })
+      );
+      expect(result.confirmationNo).toBe('CONF_999');
     });
 
     it('deleteToolkitOrder sends DELETE request', async () => {
@@ -324,24 +482,49 @@ describe('toolkitOrderApi', () => {
   });
 
   describe('fetchPropertyProductOptions', () => {
-    it('fetches room types, rate codes, and reservation types', async () => {
-      mockRequest.mockResolvedValueOnce({
-        roomTypes: [{ code: 'R1', name: '大床房' }],
-        rateCodes: [{ rateCode: 'BAR', name: '标准门市价' }],
-        reservationTypes: [{ code: 'P1', name: '预付' }],
-      });
+    it('fetches room types, rate codes, and reservation types concurrently via product APIs', async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          code: 0,
+          data: [{ roomType: 'R1', roomTypeName: '大床房' }],
+        })
+        .mockResolvedValueOnce({
+          code: 0,
+          data: [{ rateCode: 'BAR', rateName: '标准门市价' }],
+        })
+        .mockResolvedValueOnce({
+          code: 0,
+          data: [{ code: 'P1', name: '预付' }],
+        });
 
       const options = await fetchPropertyProductOptions('unit_100');
-      expect(mockRequest).toHaveBeenCalledWith(
-        `${ORDER_ENDPOINTS.OPTIONS}?unitId=unit_100`
-      );
+      expect(mockRequest).toHaveBeenCalledTimes(3);
+
       expect(options.roomTypes).toHaveLength(1);
+      expect(options.roomTypes[0].code).toBe('R1');
       expect(options.rateCodes).toHaveLength(1);
+      expect(options.rateCodes[0].rateCode).toBe('BAR');
       expect(options.reservationTypes).toHaveLength(1);
+      expect(options.reservationTypes[0].code).toBe('P1');
     });
 
     it('throws error when unitId is empty', async () => {
       await expect(fetchPropertyProductOptions('')).rejects.toThrow('酒店单位 unitId 不能为空');
+    });
+
+    it('throws error when any sub-request fails (Fail-Fast)', async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          code: 0,
+          data: [{ roomType: 'R1', roomTypeName: '大床房' }],
+        })
+        .mockRejectedValueOnce(new Error('RatePlans service unavailable'))
+        .mockResolvedValueOnce({
+          code: 0,
+          data: [{ code: 'P1', name: '预付' }],
+        });
+
+      await expect(fetchPropertyProductOptions('unit_100')).rejects.toThrow('RatePlans service unavailable');
     });
   });
 

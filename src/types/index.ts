@@ -73,9 +73,11 @@ export interface HotelMapping {
   otaHotelName: string;
   otaHotelId: string;
   extUnitCode?: string;
+  unitId?: string;
   pmsHotelName: string;
   pmsHotelId: string;
   unitCode?: string;
+  unitName?: string;
   unitType?: string;
   city?: string;
   starRating?: string;
@@ -120,22 +122,82 @@ export interface PlatformProperty {
   type?: string;
 }
 
-export interface ProductMapping {
-  id: string;
-  hotelId: string;
-  hotelName: string;
-  otaChannelId: string;
-  otaProductName: string;
-  otaProductCode: string;
-  otaPhysicalRoomName: string;
-  otaPhysicalRoomCode: string;
-  internalRoomType: string;
+export interface RoomTypeOption {
+  id?: string;
+  code: string;
+  name: string;
+  displayLabel: string;
+}
+
+export interface RatePlanOption {
+  id?: string;
   rateCode: string;
-  bookingType: string;
+  rateName: string;
+  displayLabel: string;
+}
+
+export interface ReservationTypeOption {
+  id?: string;
+  code: string;
+  label: string;
+  displayLabel: string;
+}
+
+export interface ProductMapping {
+  id?: string;
+  mappingId?: string;
+  channelCode: string;
+  extUnitCode: string;
+  unitId: string;
+  unitType: string;
+  otaChannelId?: string;
+  otaChannelCode?: string;
+  hotelId?: string;
+  hotelName?: string;
+  // OTA 字段
+  otaRoomTypeId: string;
+  otaRoomTypeName: string;
+  otaBasicRoomId?: string;
+  otaBasicRoomName?: string;
+  otaRateCodeId?: string;
+  otaPayType?: string;
+  // 视图兼容字段
+  otaProductName?: string;
+  otaProductCode?: string;
+  otaPhysicalRoomName?: string;
+  otaPhysicalRoomCode?: string;
+  // 内部映射字段 (允许为空字符串)
+  roomType: string;
+  rateCode: string;
+  payType: string;
+  internalRoomType?: string;
+  bookingType?: string;
+  // 状态与来源
   status: 'completed' | 'pending' | 'active' | 'inactive';
+  source?: 'remote-platform' | 'ota-collection' | 'merged';
+  otaProductPresent?: boolean;
   priceRule?: 'direct' | 'markup_fixed' | 'markup_percent';
   markupValue?: number;
   autoSyncInventory?: boolean;
+}
+
+export interface SaveProductMappingPayloadItem {
+  id?: string;
+  channelCode: string;
+  extUnitCode: string;
+  unitId: string | number;
+  unitType: string;
+  otaRoomTypeId: string;
+  otaRoomTypeName: string;
+  otaBasicRoomId?: string;
+  otaBasicRoomName?: string;
+  otaRateCodeId?: string;
+  otaPayType: string;
+  roomType: string;
+  rateCode: string;
+  payType: string;
+  otaProductPresent?: boolean;
+  status?: string;
 }
 
 export type OrderStatus = 'transferred' | 'processing' | 'confirmed' | 'failed' | 'manual_review' | 'pending' | 'success' | 'cancelled' | 'importing';
@@ -213,11 +275,14 @@ export type LogEventType =
   | 'PLAYWRIGHT_CAPTCHA_DETECTED'
   | 'PLAYWRIGHT_CAPTCHA_SOLVED'
   | 'PLAYWRIGHT_HEARTBEAT'
+  | 'CRAWLER_LOG'
   // 任务驱动值守 (Duty Task)
   | 'DUTY_STATION_REGISTER'
   | 'DUTY_ACTUAL_STATE_REPORT'
   | 'DUTY_TASK_CLAIM'
   | 'DUTY_TASK_EXECUTE_START'
+  | 'DUTY_TASK_ORDER_IMPORT_SUBMIT'
+  | 'DUTY_TASK_ORDER_IMPORT_SUBMIT_FAILED'
   | 'DUTY_TASK_EXECUTE_SUCCESS'
   | 'DUTY_TASK_EXECUTE_FAILED'
   | 'DUTY_TASK_CREATE_DOWNSTREAM'
@@ -232,6 +297,14 @@ export type LogEventType =
   | 'SYS_STORAGE_PURGE'
   | 'SYS_NETWORK_ONLINE'
   | 'SYS_NETWORK_OFFLINE';
+
+export type TaskActionStage =
+  | 'claim'
+  | 'execute'
+  | 'result'
+  | 'report'
+  | 'order-import-submit'
+  | 'downstream-create';
 
 export interface SystemLogEntry {
   id: string;
@@ -250,7 +323,7 @@ export interface SystemLogEntry {
   // 任务上下文专有元字段 (Task Metadata)
   taskId?: string;
   msgType?: DutyTaskMessageType | string;
-  taskActionStage?: 'CLAIM' | 'EXECUTE' | 'RESULT' | 'REPORT';
+  taskActionStage?: TaskActionStage | string;
   taskStatus?: 'SUCCEEDED' | 'FAILED' | 'PROCESSING' | 'PENDING';
   taskResult?: unknown;
 
@@ -268,6 +341,11 @@ export interface LogFilterParams {
   event?: string;
   channelId?: string;
   orderNo?: string;
+  taskId?: string;
+  taskActionStage?: 'ALL' | string;
+  date?: string;
+  startDate?: string;
+  endDate?: string;
   timeRange?: 'ALL' | '1D' | '3D' | '7D';
   onlyErrors?: boolean;
   search?: string;
@@ -374,9 +452,9 @@ export interface ToolkitOrderPageResult {
  * 酒店内部产品选项目录 (用于订单编辑绑定)
  */
 export interface InternalProductOptions {
-  roomTypes: Array<{ code: string; name: string }>;
-  rateCodes: Array<{ rateCode: string; name: string }>;
-  reservationTypes: Array<{ code: string; name: string }>;
+  roomTypes: RoomTypeOption[];
+  rateCodes: RatePlanOption[];
+  reservationTypes: ReservationTypeOption[];
 }
 
 /**
@@ -425,6 +503,16 @@ export interface ChannelDutyInfo {
   channelCode: string;
   status: ChannelDutyStatus;
   lastStartedAt?: number;
+  error?: string;
+  manualVerificationRequired?: boolean;
+  manualVerificationReason?: string;
+}
+
+/**
+ * Desktop IPC acknowledgement. Operation failures use one stable error field.
+ */
+export interface DesktopOperationResult {
+  success: boolean;
   error?: string;
 }
 
@@ -501,7 +589,7 @@ export type DutyTaskMessageType =
 export interface DutyTaskClaimRequest {
   stationId: string;
   appId: string;
-  direction?: 'FORWARD' | 'BACKWARD' | 'INBOUND';
+  direction?: 'INBOUND' | 'FORWARD' | 'BACKWARD';
 }
 
 /**
@@ -515,18 +603,50 @@ export interface DutyClaimedTask {
   stationId: string;
   leaseToken: string;
   data: string; // Base64 encoded JSON
+  msgId?: string;
+  unitId?: string;
+  unitType?: string;
+  direction?: string;
   createdTime?: string;
+  delaySendTime?: number;
+}
+
+/**
+ * 任务执行状态枚举 (符合文旅中台线缆标准)
+ */
+export type DutyTaskWireStatus = 'SUCCESS' | 'FAIL';
+
+/**
+ * 任务执行结果明细
+ */
+export interface DutyTaskResultDetail {
+  confirmNo?: string;
+  businessId: string;
+  status: DutyTaskWireStatus;
+  ackData?: string; // Base64 encoded JSON
 }
 
 /**
  * 任务执行结果提交载荷 (PUT /toolkit/toolbox/tasks/:id/result)
  */
 export interface DutyTaskResultPayload {
-  taskId: string;
-  status: 'SUCCEEDED' | 'FAILED';
-  result?: Record<string, unknown>;
-  errorCode?: string;
+  station: string;
+  leaseToken: string;
+  businessType: string; // 固定 'OTA_MIGRATION'
+  businessId: string;
+  scope: 'INTERFACE';
+  status: DutyTaskWireStatus;
+  msgId?: string;
+  msgType?: string;
+  unitId?: string;
+  unitType?: string;
+  direction?: string;
+  createdTime?: string;
+  delaySendTime?: number;
+  details: DutyTaskResultDetail[];
   errorMessage?: string;
+  retryable?: boolean;
+  retryDelayMillis?: number;
 }
 
 /**
@@ -537,10 +657,63 @@ export interface DutyTaskCreationBatch {
   appId: string;
   items: Array<{
     msgType: 'OTA_IMPORT_ORDER' | 'OTA_CANCEL_ORDER';
+    businessType?: string; // 固定 'OTA_MIGRATION'
     businessId: string;
     unitId?: string;
-    data: unknown;
+    data: string | unknown; // Base64 编码字符串或原始业务对象 (在 API 层转为 Base64)
   }>;
+}
+
+/**
+ * 文旅中台订单导入联系人结构
+ */
+export interface ImportOrderContact {
+  name: string;
+  mobile: string;
+}
+
+/**
+ * 文旅中台订单导入按日价格明细
+ */
+export interface ImportOrderPricing {
+  date: string; // YYYY-MM-DD
+  price: number; // 元
+}
+
+/**
+ * 文旅中台订单导入预订结构
+ */
+export interface ImportOrderBooking {
+  roomType: string;
+  originRoomType?: string;
+  rateCode: string;
+  arrival: string; // YYYY-MM-DD
+  departure: string; // YYYY-MM-DD
+  roomTypeId: string;
+  nights: number;
+  quantity: number;
+  totalPrice: number;
+  paytype: string;
+  pricing: ImportOrderPricing[];
+}
+
+/**
+ * 文旅中台订单导入订单项
+ */
+export interface ImportOrder {
+  otaOrderId: string;
+  otaChannel: string;
+  contact: ImportOrderContact;
+  booking: ImportOrderBooking;
+  remark: string;
+}
+
+/**
+ * 提交订单导入文旅中台载荷 (POST /toolkit/orders/import)
+ */
+export interface ImportPayload {
+  extUnitCode: string | null;
+  orders: ImportOrder[];
 }
 
 export interface PlatformAuthTokens {
@@ -586,12 +759,21 @@ export type {
 } from './error';
 
 export type {
+  CrawlerBridgeApi,
+  DutyBridgeApi,
+  HostBridgeApi,
+  PlatformBridgeRequestOptions,
+  PlatformBridgeResponse,
+  PlatformBridgeApi,
+} from './host';
+
+export type {
   ProtocolFieldCategory,
   ProtocolFieldTransform,
   ProtocolFieldMapping,
   ChannelProtocolSchema,
   CleanOrderContext,
   ProtocolDriftWarning,
+  OrderProtocolPricing,
+  OrderProtocolData,
 } from './template';
-
-

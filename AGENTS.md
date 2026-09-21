@@ -25,12 +25,26 @@
 - **外部集成与自动化引擎 (`src/crawler/` 及集成模块)**：
   - 隔离管理外部进程、后台无感自动化、网络监听及会话生命周期调度。
 - **客户端通信与服务调用层 (`src/services/`)**：
-  - 承载前端对外部网络或本地中转网关的异步请求，面向前端调用的 Client SDK 统一采用 `*Api.ts` 命名（如 `channelApi.ts`、`hotelApi.ts`、`crawlerApi.ts`）。
-  - 跨进程或双模（Electron IPC / Web HTTP）通信抹平网关，统一采用 `*Bridge.ts` 命名（如 `crawlerBridge.ts`）。
-- **本地服务与中间件宿主层 (`src/server/`)**：
-  - 承载 Vite 开发/预览服务器的原生 Node.js 中间件或本地路由，统一采用 `*Middleware.ts` 命名（如 `crawlerMiddleware.ts`），严禁与客户端 Client API 同名混淆。
+  - 承载前端对外部网络或本地中转网关的异步请求，面向前端调用的 Client SDK 统一采用 `*Api.ts` 命名（如 `channelApi.ts`、`hotelApi.ts`）。
+  - Electron 渲染进程到主进程的 IPC 通信网关，统一采用 `*Bridge.ts` 命名（如 `crawlerBridge.ts`）。
 - **系统遥测与审计 (`src/components/logs/`)**：
   - 全链路运行日志流收集、级别过滤与异常可视化控制台。
+
+### 1.3 运行宿主与日志数据源唯一性 (Electron-Only Runtime & Single Source of Truth)
+
+> **【核心准则】桌面控制台只允许在 Electron 宿主中运行；运行宿主即数据源边界，严禁出现第二个日志数据源。**
+
+1. **唯一运行宿主 (Electron-Only Runtime)**：
+   - 本系统的正式运行宿主是 Electron 桌面应用。值守调度、订单守护、日志采集都依赖主进程与渲染进程的分工，只有在该宿主下才成立。
+   - 本应用不支持独立 Web 宿主。Vite 只作为 Electron 渲染层的构建与开发资源服务，禁止通过 Chrome / Safari 直接访问 `http://localhost:3000` 执行业务。
+   - Electron IPC 缺失时，业务网关必须立即失败；严禁增加本地 HTTP fallback 或伪造成功结果。
+
+2. **唯一日志数据源 (Single Source of Truth for Logs)**：
+   - 日志持久化的唯一数据源是 Electron 渲染进程的 IndexedDB（库名 `SmartLink_LogDB`）。**严禁**再引入文件、localStorage 或第二套 IndexedDB 作为日志存储。
+   - 所有进入 Redux 日志流的条目（本地埋点、主进程 IPC 推送、值守状态轮询补发、业务 slice 直接投递）必须且只能经由 `src/store/logPersistenceMiddleware.ts` 落库。**严禁**绕过它单独写库，否则会出现「界面可见但重启即丢失」的日志。
+   - 落库必须以 `entry.id` 幂等。同一条日志可能同时经 IPC 推送与轮询补发到达，重复投递必须收敛为一次写入；`LoggerService.persist` 的幂等账本与 IndexedDB 以 `id` 为主键的 `put` 共同保证这一点。
+
+3. **新增采集点的前置校验**：新增任何日志采集点前，先确认它是否已经进入 Redux 日志流。已在流内的不要再手工落库；不在流内的，必须让它经 `addLog` / `addLogs` 进入。
 
 ---
 
@@ -270,11 +284,10 @@
    - 仅引入真正为系统提供不可替代核心价值的高质量依赖库。
    - 严禁引入项目未实际使用或已有轻量原生方案的重型依赖包（例如能用 Tailwind 原生 transition 实现的桌面微交互，不要额外引入沉重的动画运行时库）。
 5. **文件命名与端层职责隔离规范 (File Naming & Boundary Discipline)**：
-   - **彻底杜绝跨层同名文件 (Zero Cross-Layer Filename Collision)**：严禁在不同分层目录中创建相同文件名的模块（例如：**严禁同时存在 `src/server/crawlerApi.ts` 与 `src/services/crawlerApi.ts`**）。同名文件不仅会在 IDE 全局搜索和文件跳转时带来极大的认知混淆，还会引发关于“代码重复或未清理”的技术怀疑。
+   - **彻底杜绝跨层同名文件 (Zero Cross-Layer Filename Collision)**：严禁在不同分层目录中创建相同文件名的模块。同名文件不仅会在 IDE 全局搜索和文件跳转时带来极大的认知混淆，还会引发关于“代码重复或未清理”的技术怀疑。
    - **分层命名后缀语义严谨**：
-     - 前端向外发起请求的客户端 SDK 位于 `src/services/`，统一以 `*Api.ts` 结尾（如 `channelApi.ts`、`hotelApi.ts`、`crawlerApi.ts`）；
-     - 抹平运行环境（Electron IPC 与 Web HTTP）的网关位于 `src/services/`，统一以 `*Bridge.ts` 结尾（如 `crawlerBridge.ts`）；
-     - 服务端与原生 Node.js / Vite 宿主中间件位于 `src/server/`，统一以 `*Middleware.ts` 结尾（如 `crawlerMiddleware.ts`）；
+     - 前端向外发起请求的客户端 SDK 位于 `src/services/`，统一以 `*Api.ts` 结尾（如 `channelApi.ts`、`hotelApi.ts`）；
+     - Electron 渲染进程到主进程的 IPC 网关位于 `src/services/`，统一以 `*Bridge.ts` 结尾（如 `crawlerBridge.ts`）；
      - 自动化采集器与调度器位于 `src/crawler/`，统一以 `*Collector.ts`、`*Engine.ts` 等领域模型命名。
 
 ---
@@ -285,7 +298,7 @@
 
 - [ ] **技术栈与架构基线**：是否严格基于 React 19 + TypeScript + Redux Toolkit + Tailwind CSS v4？是否无未经批准的第三方冗余依赖引入？
 - [ ] **强类型与类型治理**：是否杜绝了所有显式与隐式 `any`？跨模块领域实体是否在 `src/types/` 中集中定义与维护？
-- [ ] **分层架构与无同名冲突**：是否存在跨目录同名文件（如 `server/xxxApi.ts` 与 `services/xxxApi.ts`）？命名后缀是否严格契合分层定位（`*Api.ts` vs `*Middleware.ts` vs `*Bridge.ts`）？
+- [ ] **分层架构与无同名冲突**：是否存在跨目录同名文件？命名后缀是否严格契合分层定位（`*Api.ts` vs `*Bridge.ts`）？
 - [ ] **代码极简与零死代码**：
   - 代码是否直观易读？是否存在为了模式而模式的过度抽象？
   - 是否已彻底清理所有未使用的 import、未使用的变量/常量与废弃导出？是否无遗留注释代码与调试日志？
@@ -296,6 +309,9 @@
 - [ ] **严密诚实的测试工程**：
   - 编写的测试用例是否具有具体的状态与数值断言？是否存在 `expect(true).toBe(true)` 或仅断言非空的伪用例？
   - 是否真实执行了待测源码，而不是将核心待测逻辑全部 Mock 掉？
+- [ ] **运行宿主与单一数据源**：
+  - 该改动是否仍然只在 Electron 宿主下成立？是否引入了 Chrome / Electron 双数据源的分叉？
+  - 新增的日志是否都经 `logPersistenceMiddleware` 落库？落库是否以 `entry.id` 幂等？
 - [ ] **终端去技术暴露与体验纯粹性**：
   - 是否彻底消除了面向普通用户的底层网关 URL 输入框、端口与底层参数展示区？
   - 是否杜绝了开发环境标识（如 `.env` / `dev` / `prod`）与底层协议技术代号的界面暴露？

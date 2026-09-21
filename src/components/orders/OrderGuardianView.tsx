@@ -22,17 +22,8 @@ import { OrderFilterBar } from './OrderFilterBar';
 import { OrderTable } from './OrderTable';
 import { EditOrderDrawer } from './EditOrderDrawer';
 import { Pagination } from '../common/Pagination';
-import { Modal } from '../common/Modal';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import { showToast } from '../../store/slices/appSlice';
-
-interface ConfirmModalState {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  isDanger?: boolean;
-  onConfirm: () => void;
-}
 
 export const OrderGuardianView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -59,8 +50,8 @@ export const OrderGuardianView: React.FC = () => {
   const [localArrivalStart, setLocalArrivalStart] = useState(filters.arrivalStart);
   const [localArrivalEnd, setLocalArrivalEnd] = useState(filters.arrivalEnd);
 
-  // Confirmation modal state
-  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
+  // Drawer read-only mode state
+  const [isDrawerReadOnly, setIsDrawerReadOnly] = useState<boolean>(false);
 
   // Initial fetch on mount
   useEffect(() => {
@@ -133,7 +124,13 @@ export const OrderGuardianView: React.FC = () => {
   };
 
   // Handlers for order actions
+  const handleViewDetail = (order: ToolkitOrder) => {
+    setIsDrawerReadOnly(true);
+    void dispatch(loadOrderEditorThunk(order.id));
+  };
+
   const handleEdit = (order: ToolkitOrder) => {
+    setIsDrawerReadOnly(false);
     void dispatch(loadOrderEditorThunk(order.id));
   };
 
@@ -143,49 +140,34 @@ export const OrderGuardianView: React.FC = () => {
       level: 'INFO',
       channelId: order.otaChannel,
       orderNo: order.otaOrderId,
+      taskActionStage: 'order-import-submit',
       message: `[OrderGuardian] 用户手动导入订单 ${order.otaOrderId}`,
       details: `酒店: ${order.unitName} | 房型: ${order.booking.roomType} | 客人: ${order.contact.name}`,
       meta: { otaOrderId: order.otaOrderId, pmsOrderId: order.pmsOrderId, price: order.booking.totalPrice },
     });
-    void dispatch(executeOrderActionThunk({ id: order.id, action: 'IMPORT' }));
+    void dispatch(executeOrderActionThunk({ id: order.id, action: 'IMPORT', order }));
   };
 
   const handleDelete = (order: ToolkitOrder) => {
-    setConfirmModal({
-      isOpen: true,
-      title: '确认删除失败订单',
-      message: `确定要删除 OTA 订单「${order.otaOrderId}」吗？此操作不可逆。`,
-      isDanger: true,
-      onConfirm: () => {
-        logger.track('ORDER_DELETE_CONFIRM', {
-          module: 'ORDER',
-          level: 'WARN',
-          channelId: order.otaChannel,
-          orderNo: order.otaOrderId,
-          message: `[OrderGuardian] 用户确认删除失败订单 ${order.otaOrderId}`,
-        });
-        void dispatch(executeOrderActionThunk({ id: order.id, action: 'DELETE' }));
-      },
+    logger.track('ORDER_DELETE_CONFIRM', {
+      module: 'ORDER',
+      level: 'WARN',
+      channelId: order.otaChannel,
+      orderNo: order.otaOrderId,
+      message: `[OrderGuardian] 用户确认删除失败订单 ${order.otaOrderId}`,
     });
+    void dispatch(executeOrderActionThunk({ id: order.id, action: 'DELETE' }));
   };
 
   const handleCancel = (order: ToolkitOrder) => {
-    setConfirmModal({
-      isOpen: true,
-      title: '确认取消订单',
-      message: `确定要在中台发起取消订单「${order.otaOrderId}」吗？`,
-      isDanger: false,
-      onConfirm: () => {
-        logger.track('ORDER_CANCEL_CONFIRM', {
-          module: 'ORDER',
-          level: 'INFO',
-          channelId: order.otaChannel,
-          orderNo: order.otaOrderId,
-          message: `[OrderGuardian] 用户发起取消中台订单 ${order.otaOrderId}`,
-        });
-        void dispatch(executeOrderActionThunk({ id: order.id, action: 'CANCEL' }));
-      },
+    logger.track('ORDER_CANCEL_CONFIRM', {
+      module: 'ORDER',
+      level: 'INFO',
+      channelId: order.otaChannel,
+      orderNo: order.otaOrderId,
+      message: `[OrderGuardian] 用户发起取消中台订单 ${order.otaOrderId}`,
     });
+    void dispatch(executeOrderActionThunk({ id: order.id, action: 'CANCEL' }));
   };
 
   const handleSaveDraft = (id: string, draft: ToolkitOrderDraft) => {
@@ -196,7 +178,7 @@ export const OrderGuardianView: React.FC = () => {
       message: `[OrderGuardian] 用户保存订单草稿 ${draft.otaOrderId}`,
       details: `房型: ${draft.booking.roomType} | 房价码: ${draft.booking.rateCode} | 入住人: ${draft.contact.name}`,
     });
-    void dispatch(saveOrderDraftThunk({ id, draft }));
+    void dispatch(saveOrderDraftThunk({ id, draft, order: activeEditOrder || undefined }));
   };
 
   return (
@@ -244,6 +226,7 @@ export const OrderGuardianView: React.FC = () => {
       <OrderTable
         orders={orders}
         actionLoadingId={actionLoadingId}
+        onViewDetail={handleViewDetail}
         onEdit={handleEdit}
         onImport={handleImport}
         onDelete={handleDelete}
@@ -263,56 +246,22 @@ export const OrderGuardianView: React.FC = () => {
         />
       </div>
 
-      {/* 模块 6: 编辑抽屉 */}
+      {/* 模块 6: 订单详情 / 编辑抽屉 */}
       <EditOrderDrawer
         order={activeEditOrder}
         productOptions={productOptions}
         isOpen={!!activeEditOrder}
         isLoading={drawerLoading}
         isSaving={drawerSaving}
+        isReadOnly={isDrawerReadOnly}
         error={drawerError}
-        onClose={() => dispatch(closeEditDrawer())}
+        onClose={() => {
+          setIsDrawerReadOnly(false);
+          dispatch(closeEditDrawer());
+        }}
         onSave={handleSaveDraft}
+        onSwitchToEdit={() => setIsDrawerReadOnly(false)}
       />
-
-      {/* 模块 7: 二次确认对话框 */}
-      {confirmModal && (
-        <Modal
-          isOpen={confirmModal.isOpen}
-          onClose={() => setConfirmModal(null)}
-          title={confirmModal.title}
-          maxWidth="sm"
-          footer={
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmModal(null)}
-                className="px-3.5 py-1.5 bg-white hover:bg-[#eff4ff] border border-[#dce9ff] text-[#434655] rounded-lg text-xs font-medium cursor-pointer transition-colors"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  confirmModal.onConfirm();
-                  setConfirmModal(null);
-                }}
-                className={`px-3.5 py-1.5 text-white rounded-lg text-xs font-semibold shadow-2xs cursor-pointer transition-colors ${
-                  confirmModal.isDanger
-                    ? 'bg-[#ba1a1a] hover:bg-[#93000a]'
-                    : 'bg-[#004ac6] hover:bg-[#003da6]'
-                }`}
-              >
-                确认
-              </button>
-            </div>
-          }
-        >
-          <p className="text-xs text-[#434655] leading-relaxed py-2">
-            {confirmModal.message}
-          </p>
-        </Modal>
-      )}
     </div>
   );
 };
