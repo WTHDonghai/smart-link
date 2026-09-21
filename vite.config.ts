@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+      conditions: ['browser'],
     },
     server: {
       port: rendererServerConfig.port,

@@ -9,6 +9,7 @@ describe('renderer asset server configuration', () => {
 
       expect(config.envPrefix).toEqual([]);
       expect(config.define).toBeUndefined();
+      expect(config.resolve?.conditions).toEqual(['browser']);
     }
   });
 

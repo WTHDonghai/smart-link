@@ -1,6 +1,7 @@
 import { afterEach, vi } from 'vitest';
 import { loadProjectEnv } from '../src/config/envLoader';
 import type { HostBridgeApi } from '../src/types';
+import type { AppUpdateBridgeApi } from '../src/types/update';
 
 Object.assign(process.env, loadProjectEnv('test', process.cwd()));
 
@@ -20,6 +21,12 @@ const desktopHost: HostBridgeApi = {
     takePendingLogs: () => Promise.resolve([]),
     onLog: () => () => undefined,
   },
+  update: {
+    getState: () => Promise.reject(new Error('测试未预期查询更新状态')),
+    checkForUpdate: () => Promise.reject(new Error('测试未预期检查更新')),
+    installUpdate: () => Promise.reject(new Error('测试未预期安装更新')),
+    onUpdateState: () => () => undefined,
+  } satisfies AppUpdateBridgeApi,
   env: {},
 };
 

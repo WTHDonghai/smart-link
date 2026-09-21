@@ -1,4 +1,9 @@
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  createAsyncThunk,
+  createSelector,
+  createSlice,
+  type PayloadAction,
+} from '@reduxjs/toolkit';
 import type {
   ToolkitOrder,
   ToolkitOrderStatistics,
@@ -469,11 +474,13 @@ export const orderGuardianSlice = createSlice({
 /**
  * 保持向下兼容 Sidebar 统计指标选择器
  */
-export const selectGuardianStats = (state: {
+type GuardianStatsRootState = {
   orderGuardian: { statistics: ToolkitOrderStatistics };
-}): GuardianStats => {
-  const stats = state.orderGuardian.statistics;
-  return {
+};
+
+export const selectGuardianStats = createSelector(
+  (state: GuardianStatsRootState) => state.orderGuardian.statistics,
+  (stats): GuardianStats => ({
     todayImported: stats.today,
     pendingConfirm: stats.pending,
     imported: stats.success,
@@ -481,10 +488,9 @@ export const selectGuardianStats = (state: {
     todayTotal: stats.today,
     todaySuccess: stats.success,
     todayFailed: stats.failed,
-    pendingManual: stats.failed,
     avgTransferSeconds: undefined,
-  };
-};
+  })
+);
 
 export const {
   setFilterStatus,

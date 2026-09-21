@@ -24,6 +24,7 @@ build/
 coverage/
 test-results/
 playwright-report/
+release/
 
 # Logs
 /logs/

@@ -2,13 +2,23 @@ import { describe, it, expect } from 'vitest';
 import appReducer, {
   setCurrentTab,
   toggleSidebar,
-  startAutoUpdate,
-  setUpdateProgress,
-  finishAutoUpdate,
-  resetUpdateDemo,
+  setUpdateState,
   showToast,
   clearToast,
 } from '../../../src/store/slices/appSlice';
+import type { AppUpdateState } from '../../../src/types/update';
+
+function createUpdateState(overrides: Partial<AppUpdateState> = {}): AppUpdateState {
+  return {
+    canUpdate: true,
+    status: 'idle',
+    currentVersion: '1.0.0',
+    targetVersion: '',
+    progressPercent: null,
+    message: '',
+    ...overrides,
+  };
+}
 
 describe('appSlice', () => {
   it('initializes with default state values', () => {
@@ -16,11 +26,14 @@ describe('appSlice', () => {
 
     expect(state.currentTab).toBe('channel-mapping');
     expect(state.sidebarCollapsed).toBe(false);
-    expect(state.version).toBe('v2.4.1');
-    expect(state.hasUpdate).toBe(true);
-    expect(state.latestVersion).toBe('v2.5.0');
-    expect(state.isUpdating).toBe(false);
-    expect(state.updateProgress).toBe(0);
+    expect(state.update).toEqual({
+      canUpdate: false,
+      status: 'unavailable',
+      currentVersion: '',
+      targetVersion: '',
+      progressPercent: null,
+      message: '',
+    });
     expect(state.toast).toBeNull();
   });
 
@@ -48,34 +61,22 @@ describe('appSlice', () => {
     });
   });
 
-  describe('Auto Update Lifecycle (startAutoUpdate, setUpdateProgress, finishAutoUpdate, resetUpdateDemo)', () => {
-    it('handles entire update lifecycle with precise state transitions', () => {
+  describe('App update state', () => {
+    it('replaces the host-owned update state without deriving fake progress', () => {
       const initialState = appReducer(undefined, { type: '@@INIT' });
+      const downloading = appReducer(
+        initialState,
+        setUpdateState(createUpdateState({
+          status: 'downloading',
+          targetVersion: '1.1.0',
+          progressPercent: 42,
+        }))
+      );
 
-      // 1. 开始自动更新
-      const updatingState = appReducer(initialState, startAutoUpdate());
-      expect(updatingState.isUpdating).toBe(true);
-      expect(updatingState.updateProgress).toBe(0);
-
-      // 2. 推进更新进度
-      const progressState = appReducer(updatingState, setUpdateProgress(55));
-      expect(progressState.updateProgress).toBe(55);
-      expect(progressState.isUpdating).toBe(true);
-
-      // 3. 完成更新
-      const finishedState = appReducer(progressState, finishAutoUpdate());
-      expect(finishedState.isUpdating).toBe(false);
-      expect(finishedState.hasUpdate).toBe(false);
-      expect(finishedState.version).toBe('v2.5.0');
-      expect(finishedState.latestVersion).toBe('v2.5.0');
-      expect(finishedState.updateProgress).toBe(100);
-
-      // 4. 重置演示状态
-      const resetState = appReducer(finishedState, resetUpdateDemo());
-      expect(resetState.hasUpdate).toBe(true);
-      expect(resetState.version).toBe('v2.4.1');
-      expect(resetState.isUpdating).toBe(false);
-      expect(resetState.updateProgress).toBe(0);
+      expect(downloading.update.status).toBe('downloading');
+      expect(downloading.update.targetVersion).toBe('1.1.0');
+      expect(downloading.update.progressPercent).toBe(42);
+      expect(downloading.sidebarCollapsed).toBe(initialState.sidebarCollapsed);
     });
   });
 
