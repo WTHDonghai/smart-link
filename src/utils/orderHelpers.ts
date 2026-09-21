@@ -1,4 +1,4 @@
-import type { OrderStatus, ToolkitOrderAction, NightlyPricing } from '../types';
+import type { OrderStatus, ToolkitOrderAction, NightlyPricing, ToolkitOrder, ImportPayload } from '../types';
 
 export const isOrderSuccess = (status: OrderStatus): boolean => {
   return status === 'success' || status === 'confirmed' || status === 'transferred';
@@ -147,4 +147,80 @@ export function getOrderStatusMeta(status: string): {
     default:
       return { label: status || '未知', tone: 'neutral' };
   }
+}
+
+/**
+ * 将前端/中台 ToolkitOrder 实体转换为中台统一入单接口 (POST /toolkit/orders/import) 载荷 (ImportPayload)
+ */
+export function buildImportPayloadFromOrder(order: ToolkitOrder): ImportPayload {
+  if (!order) {
+    throw new Error('订单数据不能为空');
+  }
+  const otaOrderId = (order.otaOrderId || order.id || '').trim();
+  if (!otaOrderId) {
+    throw new Error('订单编号不能为空');
+  }
+
+  const rateCode = (order.booking?.rateCode || '').trim();
+  if (!rateCode) {
+    throw new Error(`订单「${otaOrderId}」缺少房价方案代码 (rateCode)，请编辑指定后再重新导入`);
+  }
+
+  const arrival = (order.booking?.arrival || '').slice(0, 10);
+  const departure = (order.booking?.departure || '').slice(0, 10);
+  const existingPricing = (order.booking?.pricing || []).map((p) => ({
+    date: (p.date || '').slice(0, 10),
+    price: Number(p.price) || 0,
+  }));
+
+  let defaultNightPrice = existingPricing[0]?.price || 0;
+  const rawTotalPrice = Number(order.booking?.totalPrice);
+  if (existingPricing.length === 0 && Number.isFinite(rawTotalPrice) && rawTotalPrice > 0) {
+    const diffMs = Date.parse(`${departure}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`);
+    const nightsFromDates = Number.isFinite(diffMs) && diffMs > 0 ? Math.round(diffMs / 86400000) : 0;
+    const estimatedNights = Math.max(1, Number(order.booking?.nights) || nightsFromDates || 1);
+    defaultNightPrice = Math.round((rawTotalPrice / estimatedNights) * 100) / 100;
+  }
+
+  const pricingResult =
+    arrival && departure && arrival < departure
+      ? calculateNightsAndPricing(arrival, departure, existingPricing, defaultNightPrice)
+      : {
+          nights: Number(order.booking?.nights) || 1,
+          pricing: existingPricing,
+          totalPrice: Number(order.booking?.totalPrice) || 0,
+        };
+
+  const quantity = Math.max(1, Number(order.booking?.quantity) || 1);
+  const totalPrice = Number(order.booking?.totalPrice) || pricingResult.totalPrice * quantity;
+  const roomType = (order.booking?.roomType || order.booking?.roomTypeId || '').trim();
+  const roomTypeId = (order.booking?.roomTypeId || order.booking?.roomType || '').trim();
+
+  return {
+    extUnitCode: order.unitId ? order.unitId.trim() : null,
+    orders: [
+      {
+        otaOrderId,
+        otaChannel: (order.otaChannel || '').trim().toUpperCase(),
+        contact: {
+          name: (order.contact?.name || '').trim(),
+          mobile: (order.contact?.mobile || '').trim(),
+        },
+        booking: {
+          roomType,
+          originRoomType: order.booking?.roomType ? order.booking.roomType.trim() : undefined,
+          rateCode,
+          arrival,
+          departure,
+          roomTypeId,
+          nights: pricingResult.nights || 1,
+          quantity,
+          totalPrice,
+          paytype: (order.booking?.paytype || '预付全额').trim(),
+          pricing: pricingResult.pricing,
+        },
+        remark: (order.remark || '').trim(),
+      },
+    ],
+  };
 }

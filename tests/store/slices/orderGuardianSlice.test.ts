@@ -171,7 +171,7 @@ describe('orderGuardianSlice reducer', () => {
         payload: {
           order: mockOrder,
           productOptions: {
-            roomTypes: [{ code: 'R1', name: '大床房' }],
+            roomTypes: [{ code: 'R1', name: '大床房', displayLabel: '大床房（R1）' }],
             rateCodes: [],
             reservationTypes: [],
           },

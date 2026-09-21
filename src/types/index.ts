@@ -77,6 +77,7 @@ export interface HotelMapping {
   pmsHotelName: string;
   pmsHotelId: string;
   unitCode?: string;
+  unitName?: string;
   unitType?: string;
   city?: string;
   starRating?: string;
@@ -451,9 +452,9 @@ export interface ToolkitOrderPageResult {
  * 酒店内部产品选项目录 (用于订单编辑绑定)
  */
 export interface InternalProductOptions {
-  roomTypes: Array<{ code: string; name: string }>;
-  rateCodes: Array<{ rateCode: string; name: string }>;
-  reservationTypes: Array<{ code: string; name: string }>;
+  roomTypes: RoomTypeOption[];
+  rateCodes: RatePlanOption[];
+  reservationTypes: ReservationTypeOption[];
 }
 
 /**

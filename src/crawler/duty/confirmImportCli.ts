@@ -102,7 +102,7 @@ async function main() {
       if (!orderCard) {
         console.log('[DutyConfirmImport:CLI] 未直接找到卡片，尝试刷新列表...');
         await runner.refreshOrderList(page);
-        await humanDelay(page, 500, 800);
+        await humanDelay(page, 1000, 2000);
         orderCard = await (runner as unknown as { locateOrderCard: (p: unknown, s: unknown, id: string) => Promise<import('playwright').Locator | null> }).locateOrderCard(page, scope, targetOrderId);
       }
 
@@ -114,7 +114,7 @@ async function main() {
       if (!isCurrentDetail) {
         console.log('[DutyConfirmImport:CLI] 点击订单卡片激活右侧详情展示...');
         await visualClickLocator(page, orderCard, `点击订单「${targetOrderId}」卡片激活详情展示`);
-        await humanDelay(page, 400, 700);
+        await humanDelay(page, 1000, 2000);
       }
 
       // 2. 定位详情头部「接受」接单操作按钮
@@ -130,7 +130,7 @@ async function main() {
       }
       console.log('[DutyConfirmImport:CLI] ✅ 成功定位到「接受」按钮，正在点击以展开弹窗...');
       await visualClickLocator(page, acceptBtn, `点击订单「${targetOrderId}」接受按钮弹出确认回填框`);
-      await humanDelay(page, 500, 800);
+      await humanDelay(page, 1000, 2000);
 
       // 3. 等待「确认号回填」模态弹窗就绪
       console.log('[DutyConfirmImport:CLI] [3/5] 验证「酒店确认号」模态对话框...');

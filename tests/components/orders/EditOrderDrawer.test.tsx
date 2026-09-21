@@ -32,15 +32,15 @@ describe('EditOrderDrawer 编辑订单抽屉组件', () => {
 
   const mockOptions: InternalProductOptions = {
     roomTypes: [
-      { code: 'RT-KING', name: '豪华大床房' },
-      { code: 'RT-TWIN', name: '豪华双床房' },
+      { code: 'RT-KING', name: '豪华大床房', displayLabel: '豪华大床房（RT-KING）' },
+      { code: 'RT-TWIN', name: '豪华双床房', displayLabel: '豪华双床房（RT-TWIN）' },
     ],
     rateCodes: [
-      { rateCode: 'OTA', name: '在线分销净价' },
-      { rateCode: 'RACK', name: '门市挂牌价' },
+      { rateCode: 'OTA', rateName: '在线分销净价', displayLabel: '在线分销净价（OTA）' },
+      { rateCode: 'RACK', rateName: '门市挂牌价', displayLabel: '门市挂牌价（RACK）' },
     ],
     reservationTypes: [
-      { code: 'PREPAID', name: '预付在线全额扣款' },
+      { code: 'PREPAID', label: '预付在线全额扣款', displayLabel: '预付在线全额扣款（PREPAID）' },
     ],
   };
 
@@ -73,7 +73,7 @@ describe('EditOrderDrawer 编辑订单抽屉组件', () => {
     expect(html).toContain('2026-10-01');
     expect(html).toContain('2026-10-02');
     expect(html).toContain('¥600.00');
-    expect(html).toContain('保存修改');
+    expect(html).toContain('保存并导入');
   });
 
   it('在 loading 状态下展示沉浸式加载动画而隐藏表单', () => {
@@ -91,5 +91,44 @@ describe('EditOrderDrawer 编辑订单抽屉组件', () => {
     );
 
     expect(html).toContain('保存修改失败: 接口响应超时');
+  });
+
+  it('在 isReadOnly 只读模式下展示详情标题、禁用输入框并隐藏保存按钮', () => {
+    const html = renderToStaticMarkup(
+      <EditOrderDrawer
+        {...defaultProps}
+        isReadOnly={true}
+        onSwitchToEdit={vi.fn()}
+      />
+    );
+
+    // 标题变更为“文旅订单详情”
+    expect(html).toContain('文旅订单详情');
+    expect(html).not.toContain('编辑文旅订单');
+
+    // 含有只读/禁用标识
+    expect(html).toContain('disabled=""');
+
+    // 底部只读 footer 展现“关闭”与“转为编辑”按钮，不出现“保存并导入”
+    expect(html).toContain('关闭');
+    expect(html).toContain('转为编辑');
+    expect(html).not.toContain('保存并导入');
+  });
+
+  it('在 isReadOnly 只读模式下若订单失败展示失败错误提示', () => {
+    const failedOrder: ToolkitOrder = {
+      ...mockOrder,
+      errorMessage: '房型映射缺失或已被下架',
+    };
+
+    const html = renderToStaticMarkup(
+      <EditOrderDrawer
+        {...defaultProps}
+        order={failedOrder}
+        isReadOnly={true}
+      />
+    );
+
+    expect(html).toContain('房型映射缺失或已被下架');
   });
 });

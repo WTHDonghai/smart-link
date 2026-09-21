@@ -1,5 +1,7 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
-import { getAllowedOrderActions } from '../utils/orderHelpers';
+import { fetchRoomTypes, fetchRatePlans, fetchReservationTypes } from './productApi';
+import { importToolkitOrder } from './dutyRuntimeApi';
+import { getAllowedOrderActions, buildImportPayloadFromOrder } from '../utils/orderHelpers';
 import type {
   ToolkitOrder,
   ToolkitOrderStatus,
@@ -13,7 +15,6 @@ import type {
 export const ORDER_ENDPOINTS = {
   ORDERS: `/${TOOLKIT_MODULE}/orders`,
   STATISTICS: `/${TOOLKIT_MODULE}/orders/statistics`,
-  OPTIONS: `/${TOOLKIT_MODULE}/orders/options`,
 } as const;
 
 /**
@@ -263,25 +264,79 @@ export async function fetchToolkitOrderDetails(id: string): Promise<ToolkitOrder
 }
 
 /**
- * 编辑更新订单草稿 (PUT /toolkit/orders/:id)
+ * 保存修改并重新导入订单 (复用中台统一真实导入接口 POST /toolkit/orders/import)
  */
-export async function updateToolkitOrder(id: string, draft: ToolkitOrderDraft): Promise<void> {
-  if (!id?.trim()) throw new Error('订单 ID 不能为空');
-  await requestPlatformApi<void>(`${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(id.trim())}`, {
-    method: 'PUT',
-    body: JSON.stringify(draft),
-  });
+export async function updateToolkitOrder(
+  orderOrId: ToolkitOrder | string,
+  draft: ToolkitOrderDraft
+): Promise<{ success: boolean; pmsOrderId?: string; confirmationNo?: string; batchId?: string }> {
+  let targetOrder: ToolkitOrder;
+  if (typeof orderOrId === 'string') {
+    if (!orderOrId?.trim()) throw new Error('订单 ID 不能为空');
+    targetOrder = await fetchToolkitOrderDetails(orderOrId.trim());
+  } else {
+    if (!orderOrId) throw new Error('订单数据不能为空');
+    targetOrder = orderOrId;
+  }
+
+  const arrival = (draft.booking.arrival || targetOrder.booking?.arrival || '').slice(0, 10);
+  const departure = (draft.booking.departure || targetOrder.booking?.departure || '').slice(0, 10);
+  const quantity = Math.max(1, Number(draft.booking.quantity) || 1);
+  const pricing = (draft.booking.pricing || []).map((p) => ({
+    date: (p.date || '').slice(0, 10),
+    price: Number(p.price) || 0,
+  }));
+  const nightlySum = pricing.reduce((sum, p) => sum + p.price, 0);
+  const totalPrice = nightlySum > 0 ? nightlySum * quantity : Number(targetOrder.booking?.totalPrice) || 0;
+
+  const totalNights =
+    pricing.length ||
+    (arrival && departure && arrival < departure
+      ? Math.max(1, Math.round((Date.parse(`${departure}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`)) / 86400000))
+      : Number(targetOrder.booking?.nights) || 1);
+
+  const mergedOrder: ToolkitOrder = {
+    ...targetOrder,
+    contact: {
+      name: draft.contact.name.trim(),
+      mobile: draft.contact.mobile.trim(),
+    },
+    booking: {
+      ...targetOrder.booking,
+      roomType: draft.booking.roomType.trim(),
+      roomTypeId: (draft.booking.roomTypeId || draft.booking.roomType).trim(),
+      rateCode: draft.booking.rateCode.trim(),
+      paytype: (draft.booking.paytype || targetOrder.booking?.paytype || '预付全额').trim(),
+      arrival,
+      departure,
+      nights: totalNights,
+      quantity,
+      pricing,
+      totalPrice,
+    },
+    remark: (draft.remark !== undefined ? draft.remark : targetOrder.remark || '').trim(),
+  };
+
+  const payload = buildImportPayloadFromOrder(mergedOrder);
+  return await importToolkitOrder(payload);
 }
 
 /**
- * 人工重试导入失败订单 (POST /toolkit/orders/:id/import)
+ * 人工重试导入失败订单 (复用中台统一真实导入接口 POST /toolkit/orders/import)
  */
-export async function retryToolkitOrderImport(id: string): Promise<void> {
-  if (!id?.trim()) throw new Error('订单 ID 不能为空');
-  await requestPlatformApi<void>(`${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(id.trim())}/import`, {
-    method: 'POST',
-    body: JSON.stringify({ id: id.trim() }),
-  });
+export async function retryToolkitOrderImport(
+  orderOrId: ToolkitOrder | string
+): Promise<{ success: boolean; pmsOrderId?: string; confirmationNo?: string; batchId?: string }> {
+  let targetOrder: ToolkitOrder;
+  if (typeof orderOrId === 'string') {
+    if (!orderOrId?.trim()) throw new Error('订单 ID 不能为空');
+    targetOrder = await fetchToolkitOrderDetails(orderOrId.trim());
+  } else {
+    if (!orderOrId) throw new Error('订单数据不能为空');
+    targetOrder = orderOrId;
+  }
+  const payload = buildImportPayloadFromOrder(targetOrder);
+  return await importToolkitOrder(payload);
 }
 
 /**
@@ -312,16 +367,16 @@ export async function fetchPropertyProductOptions(
   unitId: string,
   unitType?: string
 ): Promise<InternalProductOptions> {
-  if (!unitId?.trim()) throw new Error('酒店单位 unitId 不能为空');
-  const query = new URLSearchParams({ unitId: unitId.trim() });
-  if (unitType) query.set('unitType', unitType.trim());
+  const cleanUnitId = String(unitId || '').trim();
+  if (!cleanUnitId) throw new Error('酒店单位 unitId 不能为空');
 
-  const response = await requestPlatformApi<unknown>(`${ORDER_ENDPOINTS.OPTIONS}?${query.toString()}`);
-  const data = unwrapPlatformEnvelope<Record<string, unknown>>(response);
+  const cleanUnitType = unitType ? String(unitType).trim() : 'Property';
 
-  return {
-    roomTypes: Array.isArray(data.roomTypes) ? (data.roomTypes as Array<{ code: string; name: string }>) : [],
-    rateCodes: Array.isArray(data.rateCodes) ? (data.rateCodes as Array<{ rateCode: string; name: string }>) : [],
-    reservationTypes: Array.isArray(data.reservationTypes) ? (data.reservationTypes as Array<{ code: string; name: string }>) : [],
-  };
+  const [roomTypes, rateCodes, reservationTypes] = await Promise.all([
+    fetchRoomTypes({ unitId: cleanUnitId, unitType: cleanUnitType }),
+    fetchRatePlans({ unitId: cleanUnitId, unitType: cleanUnitType }),
+    fetchReservationTypes({ unitId: cleanUnitId }),
+  ]);
+
+  return { roomTypes, rateCodes, reservationTypes };
 }

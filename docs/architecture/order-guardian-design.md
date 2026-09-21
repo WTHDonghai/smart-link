@@ -33,13 +33,13 @@ flowchart TD
       M5 -->|"状态为 SUCCESS"| ACT_SUCC["开放动作: 取消 (CANCEL)"]
       M5 -->|"PENDING / IMPORTING / CANCEL"| ACT_DIS["全部禁用并提示状态原因"]
 
-      ACT_FAIL -->|"点击『导入』"| OP_IMP["POST /toolkit/orders/:id/import -> Toast 提示 -> 刷新列表与统计"]
+      ACT_FAIL -->|"点击『导入』"| OP_IMP["组装 ImportPayload -> POST /toolkit/orders/import -> Toast 提示 -> 刷新列表与统计"]
       ACT_FAIL -->|"点击『删除』"| OP_DEL["二次确认 -> DELETE /toolkit/orders/:id -> 刷新列表"]
       ACT_SUCC -->|"点击『取消』"| OP_CAN["二次确认 -> PUT /toolkit/orders/:id/cancel -> 刷新列表"]
 
       ACT_FAIL -->|"点击『编辑』"| DRAWER["右侧滑出 EditOrderDrawer\n并发拉取订单详情与该酒店产品选项"]
       DRAWER --> EDIT_FORM["修改客人信息/电话，下拉选择文旅房型、房价码、预订类型，动态填写每日价格"]
-      EDIT_FORM --> EDIT_SAVE["点击『保存修改』-> PUT /toolkit/orders/:id -> 刷新列表与统计 -> 关闭抽屉"]
+      DRAWER --> EDIT_SAVE["点击『保存并导入』-> 合并草稿组装 ImportPayload -> POST /toolkit/orders/import -> 刷新列表与统计 -> 关闭抽屉"]
     end
 ```
 
@@ -98,11 +98,11 @@ src/
 - 列表查询：`GET /${TOOLKIT_MODULE}/orders`（参数：`current`, `size`, `status`, `query`, `arrivalStart`, `arrivalEnd`, `showAll: true`）
 - 指标统计：`GET /${TOOLKIT_MODULE}/orders/statistics`（返回：`todayTotal`, `pendingCount`, `successCount`, `failedCount`）
 - 订单详情：`GET /${TOOLKIT_MODULE}/orders/:id`
-- 订单编辑：`PUT /${TOOLKIT_MODULE}/orders/:id`
-- 单单导入：`POST /${TOOLKIT_MODULE}/orders/:id/import`
+- 订单编辑与重新入单：复用中台统一入单接口 `POST /${TOOLKIT_MODULE}/orders/import`（合并草稿组装标准 `ImportPayload`）
+- 单单导入：`POST /${TOOLKIT_MODULE}/orders/import`（组装标准 `ImportPayload`）
 - 订单取消：`PUT /${TOOLKIT_MODULE}/orders/:id/cancel`
 - 订单删除：`DELETE /${TOOLKIT_MODULE}/orders/:id`
-- 产品选项目录：`GET /${TOOLKIT_MODULE}/orders/options`（按 `unitId` 查询对应的文旅房型、房价码、预订类型）
+- 产品选项目录：并发拉取中台产品中心真实字典接口（`fetchRoomTypes`, `fetchRatePlans`, `fetchReservationTypes`）
 
 ### 4.2 实际状态上报接口 (由主进程值守引擎周期调用)
 - 路径：`POST /${TOOLKIT_MODULE}/toolbox/actual-state/report`

@@ -7,8 +7,9 @@ import {
   formatCurrency,
   calculateNightsAndPricing,
   getOrderStatusMeta,
+  buildImportPayloadFromOrder,
 } from '../../src/utils/orderHelpers';
-import type { OrderStatus } from '../../src/types';
+import type { OrderStatus, ToolkitOrder } from '../../src/types';
 
 describe('orderHelpers', () => {
   describe('isOrderSuccess', () => {
@@ -147,13 +148,126 @@ describe('orderHelpers', () => {
     });
   });
 
+  describe('buildImportPayloadFromOrder', () => {
+    it('converts ToolkitOrder into complete ImportPayload with pricing and room details', () => {
+      const order: ToolkitOrder = {
+        id: 'ord_99',
+        unitId: 'HOTEL_U1',
+        unitName: '隐居度假酒店',
+        otaChannel: 'MEITUAN',
+        otaOrderId: 'MT_888999',
+        contact: { name: '赵六', mobile: '13700003333' },
+        booking: {
+          arrival: '2026-10-01',
+          departure: '2026-10-03',
+          roomType: '大床房',
+          roomTypeId: 'RT_KING',
+          rateCode: 'OTA_BAR',
+          paytype: '预付在线',
+          nights: 2,
+          quantity: 2,
+          totalPrice: 600,
+          pricing: [
+            { date: '2026-10-01', price: 150 },
+            { date: '2026-10-02', price: 150 },
+          ],
+        },
+        remark: '无烟房需求',
+        status: 'FAILED' as const,
+        allowedActions: ['EDIT', 'IMPORT', 'DELETE'],
+      };
+
+      const payload = buildImportPayloadFromOrder(order);
+      expect(payload.extUnitCode).toBe('HOTEL_U1');
+      expect(payload.orders).toHaveLength(1);
+      const imported = payload.orders[0];
+      expect(imported.otaOrderId).toBe('MT_888999');
+      expect(imported.otaChannel).toBe('MEITUAN');
+      expect(imported.contact).toEqual({ name: '赵六', mobile: '13700003333' });
+      expect(imported.booking.roomType).toBe('大床房');
+      expect(imported.booking.roomTypeId).toBe('RT_KING');
+      expect(imported.booking.rateCode).toBe('OTA_BAR');
+      expect(imported.booking.arrival).toBe('2026-10-01');
+      expect(imported.booking.departure).toBe('2026-10-03');
+      expect(imported.booking.nights).toBe(2);
+      expect(imported.booking.quantity).toBe(2);
+      expect(imported.booking.totalPrice).toBe(600);
+      expect(imported.booking.pricing).toEqual([
+        { date: '2026-10-01', price: 150 },
+        { date: '2026-10-02', price: 150 },
+      ]);
+      expect(imported.remark).toBe('无烟房需求');
+    });
+
+    it('throws error when order is missing or otaOrderId is empty', () => {
+      expect(() => buildImportPayloadFromOrder(null as unknown as ToolkitOrder)).toThrow('订单数据不能为空');
+      expect(() => buildImportPayloadFromOrder({} as unknown as ToolkitOrder)).toThrow('订单编号不能为空');
+    });
+
+    it('throws error when rateCode is missing or empty', () => {
+      const orderWithoutRateCode: ToolkitOrder = {
+        id: 'ord_empty_rate',
+        otaOrderId: 'MT_1001',
+        booking: {
+          arrival: '2026-10-01',
+          departure: '2026-10-02',
+          rateCode: '',
+        },
+      } as unknown as ToolkitOrder;
+
+      expect(() => buildImportPayloadFromOrder(orderWithoutRateCode)).toThrow(
+        '订单「MT_1001」缺少房价方案代码 (rateCode)，请编辑指定后再重新导入'
+      );
+    });
+
+    it('calculates default nightly price by spreading totalPrice across nights when pricing is empty', () => {
+      const orderWithoutPricing: ToolkitOrder = {
+        id: 'ord_spread',
+        otaOrderId: 'MT_SPREAD_1',
+        unitId: 'HOTEL_U1',
+        unitName: '隐居度假酒店',
+        otaChannel: 'MEITUAN',
+        contact: { name: '王五', mobile: '13900004444' },
+        booking: {
+          arrival: '2026-10-01',
+          departure: '2026-10-03',
+          roomType: '大床房',
+          rateCode: 'OTA_BAR',
+          paytype: '预付在线',
+          nights: 2,
+          quantity: 1,
+          totalPrice: 500,
+          pricing: [],
+        },
+        status: 'FAILED',
+        allowedActions: ['EDIT', 'IMPORT'],
+      };
+
+      const payload = buildImportPayloadFromOrder(orderWithoutPricing);
+      const importedBooking = payload.orders[0].booking;
+      expect(importedBooking.nights).toBe(2);
+      expect(importedBooking.totalPrice).toBe(500);
+      expect(importedBooking.pricing).toEqual([
+        { date: '2026-10-01', price: 250 },
+        { date: '2026-10-02', price: 250 },
+      ]);
+    });
+  });
+
   describe('getOrderStatusMeta', () => {
     it('returns correct label and tone for each status', () => {
       expect(getOrderStatusMeta('SUCCESS')).toEqual({ label: '成功', tone: 'success' });
+      expect(getOrderStatusMeta('CONFIRMED')).toEqual({ label: '成功', tone: 'success' });
       expect(getOrderStatusMeta('FAILED')).toEqual({ label: '失败', tone: 'failed' });
       expect(getOrderStatusMeta('PENDING')).toEqual({ label: '待确认', tone: 'warning' });
       expect(getOrderStatusMeta('IMPORTING')).toEqual({ label: '导入中', tone: 'info' });
+      expect(getOrderStatusMeta('PROCESSING')).toEqual({ label: '导入中', tone: 'info' });
       expect(getOrderStatusMeta('CANCEL')).toEqual({ label: '已取消', tone: 'neutral' });
+      expect(getOrderStatusMeta('CANCELLED')).toEqual({ label: '已取消', tone: 'neutral' });
+      expect(getOrderStatusMeta('UNKNOWN_STATUS' as unknown as OrderStatus)).toEqual({
+        label: 'UNKNOWN_STATUS',
+        tone: 'neutral',
+      });
     });
   });
 });

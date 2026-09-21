@@ -80,16 +80,22 @@ export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
 }
 
 /**
- * 拟真人随机微延迟函数，打破机械等长时钟
+ * 拟真人随机延迟函数，以毫秒为单位（默认 3000~8000 毫秒），确保接口调用完毕并规避风控
+ * @param page Playwright Page
+ * @param minMs 最小等待毫秒数
+ * @param maxMs 最大等待毫秒数
  */
-export async function humanDelay(page: Page, minMs = 2000, maxMs = 5000): Promise<void> {
-  const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+export async function humanDelay(page: Page, minMs = 3000, maxMs = 8000): Promise<void> {
+  const min = Math.round(minMs);
+  const max = Math.round(maxMs);
+  const delay = Math.floor(Math.random() * (max - min + 1)) + min;
   if (page && typeof page.waitForTimeout === 'function') {
     await page.waitForTimeout(delay);
   } else {
     await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
+
 
 export class MeituanDutyRunner implements ChannelDutyRunner {
   public readonly channelCode = 'MEITUAN';
@@ -247,7 +253,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       const elapsed = now - this.lastListRefreshTime;
       if (elapsed < 3000) {
         const remainMs = 3000 - elapsed;
-        await humanDelay(page, remainMs, remainMs + 200);
+        await humanDelay(page, remainMs, remainMs + 500);
       }
 
       // 2. 进入任务互斥锁，执行单页面交互与网络拦截
@@ -391,7 +397,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       // 容错类名变体（如 mtd-tabs-item-active），等待网络响应即可
     }
     await allOrdersResponse;
-    await humanDelay(page, 600, 1200);
+    await humanDelay(page, 1000, 2000);
 
     // 仅在最终触发待确认列表前挂响应监听，避免消费“全部订单”请求。
     const pendingResponse = this.waitForMeituanListResponse(page, '待确认订单最终列表');
@@ -493,7 +499,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         const candidate = items.nth(i);
         if (!await candidate.isVisible().catch(() => false)) continue;
         await candidate.click({ timeout: 2000 }).catch(() => {});
-        await humanDelay(page, 1000, 3000);
+        await humanDelay(page, 1500, 3000);
 
         const matches = await scope
           .locator(
@@ -551,7 +557,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       if (!orderCard) {
         await updateVisualTrackerStatus(page, `🔄 待确认列表中未直接发现订单「${otaOrderId}」，正在刷新待确认列表...`, 'action');
         await this.refreshOrderList(page);
-        await humanDelay(page, 1000, 3000);
+        await humanDelay(page, 1500, 3000);
         orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       }
 
@@ -646,7 +652,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       try {
         // 3. 点击订单卡片触发右侧详情展示与网络拦截（美团真实 DOM 中左侧卡片为整体可点击项，无独立“详情”按钮）
         await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片展示详情`);
-        await humanDelay(page, 500, 800);
+        await humanDelay(page, 1000, 2000);
 
         // 4. 姓名脱敏解除交互（基于美团详情页真实 DOM 结构精准定位，无二次确认弹窗）
         // 真实 DOM 结构:
@@ -672,7 +678,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
           if (await revealNameBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
             await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
-            await humanDelay(page, 400, 700);
+            await humanDelay(page, 1500, 2500);
           }
         } catch {
           // 容错姓名脱敏交互
@@ -704,7 +710,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
             if (await revealPhoneBtn.isVisible({ timeout: 800 }).catch(() => false)) {
               await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
-              await humanDelay(page, 400, 700);
+              await humanDelay(page, 1500, 2500);
             }
           } catch {
             // 容错电话解密交互
@@ -780,7 +786,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       let orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       if (!orderCard) {
         await this.refreshOrderList(page);
-        await humanDelay(page, 400, 800);
+        await humanDelay(page, 1000, 2000);
         orderCard = await this.locateOrderCard(page, scope, otaOrderId);
       }
 
@@ -804,7 +810,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       const isCurrentDetail = await scope.locator(`.detail-header:has-text("${otaOrderId}")`).first().isVisible({ timeout: 500 }).catch(() => false);
       if (!isCurrentDetail) {
         await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片激活详情展示`);
-        await humanDelay(page, 400, 700);
+        await humanDelay(page, 1000, 2000);
       }
 
       // 3. 定位详情头部「接受」接单操作按钮并点击，触发展开模态确认对话框
@@ -835,7 +841,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       await visualClickLocator(page, acceptBtn, `点击订单「${otaOrderId}」接受按钮弹出确认回填框`);
-      await humanDelay(page, 400, 700);
+      await humanDelay(page, 1000, 2000);
 
       // 4. 等待并严格限定「确认号回填」模态弹窗（必须包含“酒店确认号”，杜绝匹配到页面其他业务弹窗）
       // 真实 DOM 结构:
@@ -922,7 +928,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       await visualClickLocator(page, dialogConfirmBtn, `点击弹窗「确认接受」按钮确认订单「${otaOrderId}」`);
-      await humanDelay(page, 400, 600);
+      await humanDelay(page, 1500, 3000);
     });
   }
 
@@ -944,7 +950,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       let orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
       if (!orderCard) {
         await this.refreshOrderList(page);
-        await humanDelay(page, 500, 800);
+        await humanDelay(page, 1000, 2000);
         orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
       }
 
@@ -960,7 +966,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       const isCurrentDetail = await scope.locator(`.detail-header:has-text("${cleanOrderId}")`).first().isVisible({ timeout: 500 }).catch(() => false);
       if (!isCurrentDetail) {
         await visualClickLocator(page, orderCard, `点击订单「${cleanOrderId}」卡片激活详情展示`);
-        await humanDelay(page, 400, 700);
+        await humanDelay(page, 1000, 2000);
       }
 
       // 3. 定位详情头部操作按钮区域中的「我已知晓」按钮
@@ -983,7 +989,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
       // 4. 点击「我已知晓」执行取消确认
       await visualClickLocator(page, ackBtn, `点击「我已知晓」按钮确认取消订单「${cleanOrderId}」`);
-      await humanDelay(page, 400, 600);
+      await humanDelay(page, 1500, 3000);
     });
   }
 

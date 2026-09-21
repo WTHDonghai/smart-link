@@ -27,7 +27,8 @@ import {
   queryDutyStatus,
 } from '../../services/dutyBridge';
 import { showToast } from './appSlice';
-import { addLogs } from './systemLogSlice';
+import { addLog, addLogs } from './systemLogSlice';
+import type { HotelState } from './hotelSlice';
 
 export interface OrderGuardianState {
   orders: ToolkitOrder[];
@@ -139,13 +140,17 @@ export const fetchStatisticsThunk = createAsyncThunk(
 export const executeOrderActionThunk = createAsyncThunk(
   'orderGuardian/executeAction',
   async (
-    { id, action }: { id: string; action: ToolkitOrderAction },
-    { dispatch, rejectWithValue }
+    { id, action, order }: { id: string; action: ToolkitOrderAction; order?: ToolkitOrder },
+    { getState, dispatch, rejectWithValue }
   ) => {
     try {
       if (action === 'IMPORT') {
-        await retryToolkitOrderImport(id);
-        dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功提交重新导入` }));
+        const state = getState() as { orderGuardian: OrderGuardianState };
+        const targetOrder = order || state.orderGuardian.orders.find((o) => o.id === id);
+        const importRes = await retryToolkitOrderImport(targetOrder || id);
+        const pmsInfo = importRes.pmsOrderId ? ` (PMS单号: ${importRes.pmsOrderId})` : '';
+        const orderNo = targetOrder?.otaOrderId || id;
+        dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功重新导入${pmsInfo}` }));
       } else if (action === 'DELETE') {
         await deleteToolkitOrder(id);
         dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功删除` }));
@@ -170,21 +175,48 @@ export const executeOrderActionThunk = createAsyncThunk(
  */
 export const loadOrderEditorThunk = createAsyncThunk(
   'orderGuardian/loadEditor',
-  async (orderId: string, { rejectWithValue }) => {
+  async (orderId: string, { getState, dispatch, rejectWithValue }) => {
     try {
       const order = await fetchToolkitOrderDetails(orderId);
+      let targetUnitId = order.unitId?.trim();
+      let targetUnitType = 'Property';
+
+      if (!targetUnitId) {
+        const state = getState() as { hotel?: HotelState };
+        const hotels = state.hotel?.hotels || [];
+        const matchedHotel = hotels.find(
+          (h) =>
+            (h.unitName && order.unitName && h.unitName === order.unitName) ||
+            (h.otaHotelName && order.unitName && h.otaHotelName === order.unitName)
+        );
+        if (matchedHotel?.unitId) {
+          targetUnitId = String(matchedHotel.unitId).trim();
+          targetUnitType = matchedHotel.unitType || 'Property';
+        }
+      }
+
       let productOptions: InternalProductOptions = {
         roomTypes: [],
         rateCodes: [],
         reservationTypes: [],
       };
-      if (order.unitId) {
+
+      if (targetUnitId) {
         try {
-          productOptions = await fetchPropertyProductOptions(order.unitId);
-        } catch {
-          // 产品选项若失败保留空列表并在抽屉内提示
+          productOptions = await fetchPropertyProductOptions(targetUnitId, targetUnitType);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          dispatch(
+            addLog({
+              level: 'WARN',
+              module: 'ORDER',
+              message: `[OrderGuardian] 加载酒店 (${targetUnitId}) 产品选项失败`,
+              details: errMsg,
+            })
+          );
         }
       }
+
       return { order, productOptions };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : '加载订单编辑详情失败');
@@ -193,23 +225,28 @@ export const loadOrderEditorThunk = createAsyncThunk(
 );
 
 /**
- * 保存编辑订单草稿
+ * 保存编辑订单并直接重新导入文旅中台
  */
 export const saveOrderDraftThunk = createAsyncThunk(
   'orderGuardian/saveDraft',
   async (
-    { id, draft }: { id: string; draft: ToolkitOrderDraft },
-    { dispatch, rejectWithValue }
+    { id, draft, order }: { id: string; draft: ToolkitOrderDraft; order?: ToolkitOrder },
+    { getState, dispatch, rejectWithValue }
   ) => {
     try {
-      await updateToolkitOrder(id, draft);
-      dispatch(showToast({ type: 'success', title: '订单修改已成功保存' }));
+      const state = getState() as { orderGuardian: OrderGuardianState };
+      const baseOrder = order || state.orderGuardian.activeEditOrder || state.orderGuardian.orders.find((o) => o.id === id);
+      const targetOrder = baseOrder || id;
+      const res = await updateToolkitOrder(targetOrder, draft);
+      const pmsInfo = res.pmsOrderId ? ` (PMS单号: ${res.pmsOrderId})` : '';
+      const orderNo = draft.otaOrderId || id;
+      dispatch(showToast({ type: 'success', title: `订单 ${orderNo} 已成功保存并导入${pmsInfo}` }));
       void dispatch(fetchOrdersThunk());
       void dispatch(fetchStatisticsThunk());
       return id;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '保存修改失败';
-      dispatch(showToast({ type: 'error', title: '保存修改失败', description: msg }));
+      const msg = error instanceof Error ? error.message : '保存并导入失败';
+      dispatch(showToast({ type: 'error', title: '保存并导入失败', description: msg }));
       return rejectWithValue(msg);
     }
   }

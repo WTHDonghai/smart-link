@@ -381,15 +381,33 @@ describe('meituanDutyRunner', () => {
   });
 
   describe('humanDelay', () => {
-    it('humanDelay should wait within the specified delay range', async () => {
+    it('humanDelay should wait within the default range [3000, 8000] ms when no range specified', async () => {
       const waitForTimeout = vi.fn().mockResolvedValue(undefined);
       const mockPage = { waitForTimeout };
 
-      await humanDelay(mockPage as unknown as Parameters<typeof humanDelay>[0], 100, 200);
+      await humanDelay(mockPage as unknown as Parameters<typeof humanDelay>[0]);
       expect(waitForTimeout).toHaveBeenCalledTimes(1);
       const calledDelay = waitForTimeout.mock.calls[0][0] as number;
-      expect(calledDelay).toBeGreaterThanOrEqual(100);
-      expect(calledDelay).toBeLessThanOrEqual(200);
+      expect(calledDelay).toBeGreaterThanOrEqual(3000);
+      expect(calledDelay).toBeLessThanOrEqual(8000);
+    });
+
+    it('humanDelay should wait within the custom range in milliseconds', async () => {
+      const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+      const mockPage = { waitForTimeout };
+
+      await humanDelay(mockPage as unknown as Parameters<typeof humanDelay>[0], 1000, 2000);
+      expect(waitForTimeout).toHaveBeenCalledTimes(1);
+      const calledDelay = waitForTimeout.mock.calls[0][0] as number;
+      expect(calledDelay).toBeGreaterThanOrEqual(1000);
+      expect(calledDelay).toBeLessThanOrEqual(2000);
+    });
+
+    it('humanDelay should fallback to setTimeout when waitForTimeout is missing', async () => {
+      const start = Date.now();
+      await humanDelay({} as unknown as Parameters<typeof humanDelay>[0], 10, 20);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(5);
     });
   });
 
@@ -645,8 +663,8 @@ describe('meituanDutyRunner', () => {
       expect(locatorSpy).toHaveBeenCalledWith('.tab-container .mtd-tabs-item.mtd-tab-active:has-text("全部订单")');
       expect(waitForResponse).toHaveBeenCalledTimes(2);
       const [delayMs] = waitForTimeout.mock.calls[0];
-      expect(delayMs).toBeGreaterThanOrEqual(600);
-      expect(delayMs).toBeLessThanOrEqual(1200);
+      expect(delayMs).toBeGreaterThanOrEqual(1000);
+      expect(delayMs).toBeLessThanOrEqual(2000);
       expect(actions).toEqual(['all', 'pending']);
       expect(response).toBe(pendingResponse);
       expect(reloadSpy).not.toHaveBeenCalled();

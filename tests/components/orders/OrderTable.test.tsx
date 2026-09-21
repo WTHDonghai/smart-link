@@ -77,6 +77,7 @@ describe('OrderTable 高密订单表格组件', () => {
 
   const defaultProps = {
     orders: mockOrders,
+    onViewDetail: vi.fn(),
     onEdit: vi.fn(),
     onImport: vi.fn(),
     onDelete: vi.fn(),
@@ -97,6 +98,7 @@ describe('OrderTable 高密订单表格组件', () => {
 
     expect(html).toContain('隐居江南度假酒店');
     expect(html).toContain('MT-987654321');
+    expect(html).toContain('title="点击查看订单详情"');
     expect(html).toContain('2026-10-01');
     expect(html).toContain('至 2026-10-03 (2晚)');
     expect(html).toContain('¥400.00');
@@ -149,5 +151,37 @@ describe('OrderTable 高密订单表格组件', () => {
 
     expect(html).toContain('处理中...');
     expect(html).toContain('animate-spin');
+  });
+
+  it('操作按钮弹出二次确认：取消操作原位弹出气泡确认卡片与确定/取消按钮', () => {
+    const html = renderToStaticMarkup(
+      <OrderTable
+        {...defaultProps}
+        initialOpenMenuId="ord-success"
+        initialConfirmAction={{ orderId: 'ord-success', action: 'CANCEL' }}
+      />
+    );
+
+    expect(html).toContain('确认取消订单？');
+    expect(html).toContain('确定在中台发起取消订单「CT-123456789」？');
+    expect(html).toContain('确认取消');
+    expect(html).toContain('取消');
+    expect(html).not.toContain('确定删除订单');
+  });
+
+  it('操作按钮弹出二次确认：删除操作原位弹出不可逆警告与确定/取消按钮', () => {
+    const html = renderToStaticMarkup(
+      <OrderTable
+        {...defaultProps}
+        initialOpenMenuId="ord-failed"
+        initialConfirmAction={{ orderId: 'ord-failed', action: 'DELETE' }}
+      />
+    );
+
+    expect(html).toContain('确认删除订单？');
+    expect(html).toContain('确定删除订单「MT-987654321」吗？此操作不可逆。');
+    expect(html).toContain('确认删除');
+    expect(html).toContain('取消');
+    expect(html).not.toContain('确定在中台发起取消订单');
   });
 });

@@ -93,7 +93,7 @@ async function main() {
       if (!orderCard) {
         console.log('[DutyConfirmCancel:CLI] 未直接找到卡片，尝试刷新列表...');
         await runner.refreshOrderList(page);
-        await humanDelay(page, 500, 800);
+        await humanDelay(page, 1000, 2000);
         orderCard = await (runner as unknown as { locateOrderCard: (p: unknown, s: unknown, id: string) => Promise<import('playwright').Locator | null> }).locateOrderCard(page, scope, targetOrderId);
       }
 
@@ -105,7 +105,7 @@ async function main() {
       if (!isCurrentDetail) {
         console.log('[DutyConfirmCancel:CLI] 点击订单卡片激活右侧详情展示...');
         await visualClickLocator(page, orderCard, `点击订单「${targetOrderId}」卡片激活详情展示`);
-        await humanDelay(page, 400, 700);
+        await humanDelay(page, 1000, 2000);
       }
 
       // 2. 定位详情头部「我已知晓」取消确认操作按钮

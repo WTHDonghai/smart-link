@@ -8,12 +8,14 @@ import {
   getAllowedOrderActions,
   getOrderStatusMeta,
 } from '../../utils/orderHelpers';
-import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check, MoreVertical } from 'lucide-react';
+import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check, MoreVertical, AlertCircle } from 'lucide-react';
 
 export interface OrderTableProps {
   orders: ToolkitOrder[];
   actionLoadingId?: string;
   initialOpenMenuId?: string;
+  initialConfirmAction?: { orderId: string; action: 'CANCEL' | 'DELETE' };
+  onViewDetail: (order: ToolkitOrder) => void;
   onEdit: (order: ToolkitOrder) => void;
   onImport: (order: ToolkitOrder) => void;
   onDelete: (order: ToolkitOrder) => void;
@@ -24,6 +26,8 @@ export const OrderTable: React.FC<OrderTableProps> = ({
   orders,
   actionLoadingId,
   initialOpenMenuId,
+  initialConfirmAction,
+  onViewDetail,
   onEdit,
   onImport,
   onDelete,
@@ -31,6 +35,10 @@ export const OrderTable: React.FC<OrderTableProps> = ({
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(initialOpenMenuId || null);
+  const [confirmAction, setConfirmAction] = useState<{
+    orderId: string;
+    action: 'CANCEL' | 'DELETE';
+  } | null>(initialConfirmAction || null);
 
   useEffect(() => {
     if (initialOpenMenuId !== undefined) {
@@ -39,15 +47,23 @@ export const OrderTable: React.FC<OrderTableProps> = ({
   }, [initialOpenMenuId]);
 
   useEffect(() => {
+    if (initialConfirmAction !== undefined) {
+      setConfirmAction(initialConfirmAction);
+    }
+  }, [initialConfirmAction]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveMenuId(null);
+        setConfirmAction(null);
       }
     };
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target?.closest('[data-order-actions-menu]')) {
         setActiveMenuId(null);
+        setConfirmAction(null);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -153,16 +169,19 @@ export const OrderTable: React.FC<OrderTableProps> = ({
                       <div className="flex flex-col min-w-0">
                         <div className="flex items-center gap-1">
                           <span
-                            onClick={() => handleCopy(ord.otaOrderId)}
+                            onClick={() => onViewDetail(ord)}
                             className="font-mono font-bold text-[#004ac6] hover:text-[#003da6] text-xs hover:underline cursor-pointer tracking-tight truncate select-text"
-                            title="点击复制 OTA 订单号"
+                            title="点击查看订单详情"
                           >
                             {ord.otaOrderId}
                           </span>
                           <button
                             type="button"
-                            onClick={() => handleCopy(ord.otaOrderId)}
-                            className="text-[#94a3b8] hover:text-[#004ac6] p-0.5"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopy(ord.otaOrderId);
+                            }}
+                            className="text-[#94a3b8] hover:text-[#004ac6] p-0.5 cursor-pointer rounded"
                             title="复制订单号"
                           >
                             {isCopied ? (
@@ -277,9 +296,10 @@ export const OrderTable: React.FC<OrderTableProps> = ({
                       <div className="relative inline-block text-left" data-order-actions-menu>
                         <button
                           type="button"
-                          onClick={() =>
-                            setActiveMenuId((prev) => (prev === ord.id ? null : ord.id))
-                          }
+                          onClick={() => {
+                            setActiveMenuId((prev) => (prev === ord.id ? null : ord.id));
+                            setConfirmAction(null);
+                          }}
                           className={`p-1.5 rounded-lg text-[#737686] hover:text-[#0b1c30] hover:bg-[#eff4ff] transition-colors cursor-pointer inline-flex items-center justify-center ${
                             activeMenuId === ord.id ? 'bg-[#eff4ff] text-[#004ac6]' : ''
                           }`}
@@ -292,77 +312,122 @@ export const OrderTable: React.FC<OrderTableProps> = ({
 
                         {activeMenuId === ord.id && (
                           <div
-                            className={`absolute right-0 w-32 bg-white rounded-xl border border-[#e2e8f0] shadow-lg py-1 z-50 ${
+                            className={`absolute right-0 ${
+                              confirmAction?.orderId === ord.id ? 'w-56' : 'w-32'
+                            } bg-white rounded-xl border border-[#e2e8f0] shadow-lg py-1 z-50 transition-all ${
                               isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'
                             }`}
                             role="menu"
                             aria-orientation="vertical"
                           >
-                            {/* 编辑 (仅 FAILED) */}
-                            {allowedActions.includes('EDIT') && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveMenuId(null);
-                                  onEdit(ord);
-                                }}
-                                className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
-                                role="menuitem"
-                              >
-                                <Edit3 className="w-3.5 h-3.5 text-[#004ac6]" />
-                                <span>编辑订单</span>
-                              </button>
-                            )}
-
-                            {/* 导入 (仅 FAILED) */}
-                            {allowedActions.includes('IMPORT') && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveMenuId(null);
-                                  onImport(ord);
-                                }}
-                                className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
-                                role="menuitem"
-                              >
-                                <Download className="w-3.5 h-3.5 text-[#004ac6]" />
-                                <span>重新导入</span>
-                              </button>
-                            )}
-
-                            {/* 删除 (仅 FAILED) */}
-                            {allowedActions.includes('DELETE') && (
+                            {confirmAction?.orderId === ord.id ? (
+                              <div className="p-3 text-left">
+                                <div className="flex items-start gap-2">
+                                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-semibold text-[#0b1c30]">
+                                      {confirmAction.action === 'CANCEL' ? '确认取消订单？' : '确认删除订单？'}
+                                    </p>
+                                    <p className="text-[11px] text-[#737686] mt-1 leading-snug">
+                                      {confirmAction.action === 'CANCEL'
+                                        ? `确定在中台发起取消订单「${ord.otaOrderId}」？`
+                                        : `确定删除订单「${ord.otaOrderId}」吗？此操作不可逆。`}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-end gap-1.5 mt-3 pt-2 border-t border-[#f1f5f9]">
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmAction(null)}
+                                    className="px-2.5 py-1 text-xs font-medium text-[#434655] hover:bg-[#eff4ff] border border-[#dce9ff] rounded-md transition-colors cursor-pointer"
+                                  >
+                                    取消
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const act = confirmAction.action;
+                                      setConfirmAction(null);
+                                      setActiveMenuId(null);
+                                      if (act === 'CANCEL') {
+                                        onCancel(ord);
+                                      } else {
+                                        onDelete(ord);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 text-xs font-semibold text-white bg-[#ba1a1a] hover:bg-[#93000a] rounded-md transition-colors cursor-pointer shadow-2xs"
+                                  >
+                                    {confirmAction.action === 'CANCEL' ? '确认取消' : '确认删除'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
                               <>
-                                <div className="h-px bg-[#e2e8f0] my-1" />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveMenuId(null);
-                                    onDelete(ord);
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
-                                  role="menuitem"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                                  <span>删除订单</span>
-                                </button>
-                              </>
-                            )}
+                                {/* 编辑 (仅 FAILED) */}
+                                {allowedActions.includes('EDIT') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveMenuId(null);
+                                      onEdit(ord);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
+                                    role="menuitem"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5 text-[#004ac6]" />
+                                    <span>编辑订单</span>
+                                  </button>
+                                )}
 
-                            {/* 取消 (仅 SUCCESS) */}
-                            {allowedActions.includes('CANCEL') && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveMenuId(null);
-                                  onCancel(ord);
-                                }}
-                                className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
-                                role="menuitem"
-                              >
-                                <Ban className="w-3.5 h-3.5 text-rose-600" />
-                                <span>取消订单</span>
-                              </button>
+                                {/* 导入 (仅 FAILED) */}
+                                {allowedActions.includes('IMPORT') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveMenuId(null);
+                                      onImport(ord);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-xs text-[#0b1c30] hover:bg-[#eff4ff] hover:text-[#004ac6] flex items-center gap-2 cursor-pointer transition-colors"
+                                    role="menuitem"
+                                  >
+                                    <Download className="w-3.5 h-3.5 text-[#004ac6]" />
+                                    <span>重新导入</span>
+                                  </button>
+                                )}
+
+                                {/* 删除 (仅 FAILED) */}
+                                {allowedActions.includes('DELETE') && (
+                                  <>
+                                    <div className="h-px bg-[#e2e8f0] my-1" />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setConfirmAction({ orderId: ord.id, action: 'DELETE' });
+                                      }}
+                                      className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
+                                      role="menuitem"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                      <span>删除订单</span>
+                                    </button>
+                                  </>
+                                )}
+
+                                {/* 取消 (仅 SUCCESS) */}
+                                {allowedActions.includes('CANCEL') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setConfirmAction({ orderId: ord.id, action: 'CANCEL' });
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
+                                    role="menuitem"
+                                  >
+                                    <Ban className="w-3.5 h-3.5 text-rose-600" />
+                                    <span>取消订单</span>
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
