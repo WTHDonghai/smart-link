@@ -7,6 +7,7 @@ Object.assign(process.env, loadProjectEnv('test', process.cwd()));
 const desktopHost: HostBridgeApi = {
   crawler: {
     collectHotels: () => Promise.reject(new Error('测试未预期调用门店采集')),
+    collectProducts: () => Promise.reject(new Error('测试未预期调用产品采集')),
     syncProfile: () => Promise.reject(new Error('测试未预期调用登录态同步')),
   },
   duty: {

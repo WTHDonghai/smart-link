@@ -11,6 +11,7 @@ import type {
 import type { DutyClaimedTask } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
+import { hotelCollectionEngine } from '../../../src/crawler/engine';
 
 class MockChannelRunner implements ChannelDutyRunner {
   public channelCode: string;
@@ -120,6 +121,15 @@ describe('dutyOrchestrationEngine', () => {
     it('should fail fast when stopping an unregistered channel', async () => {
       await expect(engine.stopDuty('UNKNOWN_CHANNEL')).rejects.toThrow('未知渠道「UNKNOWN_CHANNEL」');
     });
+
+    it('isChannelActive should reflect runner and channel active status', async () => {
+      expect(engine.isChannelActive('MOCK_OTA')).toBe(false);
+      await engine.startDuty('MOCK_OTA');
+      expect(engine.isChannelActive('MOCK_OTA')).toBe(true);
+      expect(engine.isChannelActive('mock_ota')).toBe(true);
+      await engine.stopDuty('MOCK_OTA');
+      expect(engine.isChannelActive('MOCK_OTA')).toBe(false);
+    });
   });
 
   describe('startDuty & stopDuty lifecycle', () => {
@@ -196,6 +206,14 @@ describe('dutyOrchestrationEngine', () => {
       const status = engine.getChannelDutyStatus();
       expect(status['FAIL_OTA'].status).toBe('DEGRADED');
       expect(status['FAIL_OTA'].error).toContain('浏览器驱动启动失败');
+    });
+
+    it('should fail fast when channel is currently running crawler task', async () => {
+      vi.spyOn(hotelCollectionEngine, 'isChannelActive').mockReturnValue(true);
+
+      await expect(engine.startDuty('MOCK_OTA')).rejects.toThrow(
+        '渠道「MOCK_OTA」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启值守。'
+      );
     });
   });
 

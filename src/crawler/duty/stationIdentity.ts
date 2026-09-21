@@ -273,6 +273,15 @@ export class StationIdentityManager {
    */
   public load(): StationIdentity | null {
     try {
+      // 动态补充 platformBaseUrl (若此前尚未初始化)
+      if (!this.platformBaseUrl) {
+        try {
+          this.platformBaseUrl = normalizeBaseUrl(getPlatformBaseUrl());
+        } catch {
+          // 尚未配置环境时保持
+        }
+      }
+
       if (!fs.existsSync(this.cacheFilePath)) {
         return null;
       }
@@ -290,6 +299,7 @@ export class StationIdentityManager {
 
       // 严格校验：appId 匹配且 stationId 非空
       if (!stationId || appId !== this.appId) {
+        this.clearCache();
         return null;
       }
 
@@ -303,6 +313,7 @@ export class StationIdentityManager {
             currentUrl: this.platformBaseUrl,
           },
         });
+        this.clearCache();
         return null;
       }
 

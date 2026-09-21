@@ -28,6 +28,7 @@ describe('application entry host guard', () => {
     const host: HostBridgeApi = {
       crawler: {
         collectHotels: () => Promise.reject(new Error('not called')),
+        collectProducts: () => Promise.reject(new Error('not called')),
         syncProfile: () => Promise.reject(new Error('not called')),
       },
       duty: {

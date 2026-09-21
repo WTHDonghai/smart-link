@@ -59,10 +59,12 @@ import {
   teardownApplicationResources,
   resetTeardownStateForTest,
   registerDutyIpcHandlers,
+  registerCrawlerIpcHandlers,
   resolveProcessEnvironment,
   createMainWindow,
 } from '../../electron/main';
 import * as platformAuthModule from '../../src/services/platformAuth';
+import { hotelCollectionEngine } from '../../src/crawler/engine';
 import { dutyOrchestrationEngine } from '../../src/crawler/duty/dutyOrchestrationEngine';
 import * as browserManager from '../../src/crawler/browserManager';
 import { logger } from '../../src/services/logger';
@@ -431,3 +433,114 @@ describe('Electron main 视窗安全防护 (configureWindowSecurity)', () => {
     delete process.env[PROCESS_ENV_KEYS.startupMode];
   });
 });
+
+describe('registerCrawlerIpcHandlers 采集日志流转与调度', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    registerCrawlerIpcHandlers();
+  });
+
+  it('crawler:collect-hotels 触发采集时向 onLog 注入回调并流转至 logger.track', async () => {
+    const handler = ipcHandlers.get('crawler:collect-hotels');
+    expect(handler).toBeDefined();
+
+    const trackSpy = vi.spyOn(logger, 'track').mockImplementation(vi.fn() as never);
+    vi.spyOn(hotelCollectionEngine, 'collectHotels').mockImplementation(
+      async (_request, onLog) => {
+        if (onLog) {
+          onLog({
+            level: 'PLAYWRIGHT',
+            message: '开始门店采集',
+            details: '启动浏览器中',
+          });
+          onLog({
+            level: 'SUCCESS',
+            message: '门店采集成功',
+          });
+        }
+        return {
+          success: true,
+          channelCode: 'MEITUAN',
+          hotels: [],
+          diagnostics: {
+            targetUrl: 'https://test',
+            source: 'test',
+            scannedCount: 0,
+            discoveredCount: 0,
+            verifiedEmpty: true,
+            durationMs: 100,
+            warnings: [],
+          },
+        };
+      }
+    );
+
+    const result = await handler!({}, { channelCode: 'meituan' });
+    expect((result as { success: boolean }).success).toBe(true);
+
+    expect(trackSpy).toHaveBeenCalledWith('CRAWLER_LOG', {
+      module: 'HOTEL',
+      level: 'INFO',
+      message: '开始门店采集',
+      details: '启动浏览器中',
+    });
+
+    expect(trackSpy).toHaveBeenCalledWith('CRAWLER_LOG', {
+      module: 'HOTEL',
+      level: 'SUCCESS',
+      message: '门店采集成功',
+      details: undefined,
+    });
+  });
+
+  it('crawler:collect-products 触发采集时向 onLog 注入回调并流转至 logger.track', async () => {
+    const handler = ipcHandlers.get('crawler:collect-products');
+    expect(handler).toBeDefined();
+
+    const trackSpy = vi.spyOn(logger, 'track').mockImplementation(vi.fn() as never);
+    vi.spyOn(hotelCollectionEngine, 'collectProducts').mockImplementation(
+      async (_request, onLog) => {
+        if (onLog) {
+          onLog({
+            level: 'PLAYWRIGHT',
+            message: '开始商品采集',
+            details: '导航到商品列表',
+          });
+          onLog({
+            level: 'ERROR',
+            message: '采集部分失败',
+            details: '网络波动',
+          });
+        }
+        return {
+          success: true,
+          channelCode: 'MEITUAN',
+          extUnitCode: 'POI-1',
+          products: [],
+        };
+      }
+    );
+
+    const result = await handler!(
+      {},
+      { channelCode: 'meituan', extUnitCode: 'POI-1' }
+    );
+    expect((result as { success: boolean }).success).toBe(true);
+
+    expect(trackSpy).toHaveBeenCalledWith('CRAWLER_LOG', {
+      module: 'PRODUCT',
+      level: 'INFO',
+      message: '开始商品采集',
+      details: '导航到商品列表',
+    });
+
+    expect(trackSpy).toHaveBeenCalledWith('CRAWLER_LOG', {
+      module: 'PRODUCT',
+      level: 'ERROR',
+      message: '采集部分失败',
+      details: '网络波动',
+    });
+  });
+});
+
