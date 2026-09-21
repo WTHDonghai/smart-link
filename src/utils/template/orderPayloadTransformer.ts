@@ -8,6 +8,7 @@
 import type { ImportPayload } from '../../types';
 import type { OrderProtocolData } from '../../types/template';
 import { renderTemplate } from './templateEngine';
+import { logger } from '../../services/logger';
 
 /**
  * 基于订单协议数据实体求值并渲染备注文本
@@ -32,8 +33,18 @@ export function renderRemarkFromProtocol(
       return rendered.trim();
     }
     return fallbackRemark;
-  } catch {
-    // 模版语法编译错误或求值异常，安全降级回原备注
+  } catch (error) {
+    // 模版语法编译错误或求值异常，记录警告日志并安全降级回原备注
+    logger.warn('[模版求值] 订单备注模版渲染异常，降级使用原始备注', {
+      module: 'DUTY_TASK',
+      orderNo: protocolData.otaOrderId,
+      details: error instanceof Error ? error.message : String(error),
+      meta: {
+        template,
+        error: error instanceof Error ? error.stack || error.message : String(error),
+        otaOrderId: protocolData.otaOrderId,
+      },
+    });
     return fallbackRemark;
   }
 }

@@ -32,10 +32,6 @@ describe('desktop preload log subscription', () => {
       createdAt: 1,
     } as SystemLogEntry;
     const callback = vi.fn();
-    const listener = (...args: unknown[]) => {
-      const invokeCallback = args[1] as unknown as typeof callback;
-      invokeCallback(entry);
-    };
     ipcRendererMock.on.mockReturnValue(undefined);
     ipcRendererMock.on.mockImplementationOnce(() => undefined);
 

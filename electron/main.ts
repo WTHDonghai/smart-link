@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
-import { syncChromeProfile, syncChromeSessionViaCDP } from '../src/crawler/profileSync';
+import { syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
@@ -206,7 +206,6 @@ export function registerCrawlerIpcHandlers(): void {
         const result = await syncChromeSessionViaCDP({ channelCode: code });
         return result;
       } catch (error) {
-        const code = (channelCode || 'MEITUAN').trim().toUpperCase();
         return {
           success: false,
           sourceDir: '',

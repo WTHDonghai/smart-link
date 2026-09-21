@@ -11,7 +11,6 @@ import channelReducer, {
   removeProtocolSchemaFromStorage,
   ALL_CHANNELS_CATALOG,
   SCHEMA_STORAGE_PREFIX,
-  createInitialChannels,
   addChannelById,
 } from '../../../src/store/slices/channelSlice';
 import { createAppStore } from '../../../src/store';

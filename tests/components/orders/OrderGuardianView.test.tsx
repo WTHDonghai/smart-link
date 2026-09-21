@@ -20,7 +20,7 @@ vi.mock('../../../src/services/toolkitOrderApi', () => ({
   }),
   fetchToolkitOrderDetails: vi.fn(),
   updateToolkitOrder: vi.fn(),
-  importToolkitOrder: vi.fn(),
+  retryToolkitOrderImport: vi.fn(),
   deleteToolkitOrder: vi.fn(),
   cancelToolkitOrder: vi.fn(),
   fetchPropertyProductOptions: vi.fn().mockResolvedValue({

@@ -23,7 +23,6 @@ import {
   submitDutyTaskResult,
 } from '../../services/dutyRuntimeApi';
 import { registerApiLogListener } from '../../services/platformApi';
-import { logger } from '../../services/logger';
 import { formatLogTimestamp } from '../../services/logStorage';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';

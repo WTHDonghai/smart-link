@@ -274,9 +274,9 @@ export async function updateToolkitOrder(id: string, draft: ToolkitOrderDraft): 
 }
 
 /**
- * 单单重新导入 (POST /toolkit/orders/:id/import)
+ * 人工重试导入失败订单 (POST /toolkit/orders/:id/import)
  */
-export async function importToolkitOrder(id: string): Promise<void> {
+export async function retryToolkitOrderImport(id: string): Promise<void> {
   if (!id?.trim()) throw new Error('订单 ID 不能为空');
   await requestPlatformApi<void>(`${ORDER_ENDPOINTS.ORDERS}/${encodeURIComponent(id.trim())}/import`, {
     method: 'POST',

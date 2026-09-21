@@ -7,7 +7,6 @@ import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
   DutyUnhandledOrderSummary,
-  ExtractedOrderDetail,
 } from '../../../src/crawler/duty/dutyContracts';
 import type { DutyClaimedTask } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';

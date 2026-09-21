@@ -7,7 +7,7 @@ import {
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
   updateToolkitOrder,
-  importToolkitOrder,
+  retryToolkitOrderImport,
   deleteToolkitOrder,
   cancelToolkitOrder,
   fetchPropertyProductOptions,
@@ -292,9 +292,9 @@ describe('toolkitOrderApi', () => {
       );
     });
 
-    it('importToolkitOrder sends POST import request', async () => {
+    it('retryToolkitOrderImport sends POST import request', async () => {
       mockRequest.mockResolvedValueOnce(undefined);
-      await importToolkitOrder('ord_1');
+      await retryToolkitOrderImport('ord_1');
       expect(mockRequest).toHaveBeenCalledWith(
         `${ORDER_ENDPOINTS.ORDERS}/ord_1/import`,
         expect.objectContaining({

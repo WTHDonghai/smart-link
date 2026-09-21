@@ -16,7 +16,6 @@ import {
   isMeituanOrderTabListUrl,
   isMeituanDetailUrl,
   isMeituanSensitiveUrl,
-  isMeituanRiskControlText,
   parseMeituanOrderListResponse,
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
@@ -909,23 +908,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         }
       }
 
-      // 6. 注册确认接口网络监听
-      const confirmResponsePromise = typeof page.waitForResponse === 'function'
-        ? page
-            .waitForResponse(
-              (res) =>
-                res.status() === 200 &&
-                (res.url().includes('confirm') ||
-                 res.url().includes('order') ||
-                 res.url().includes('accept') ||
-                 res.url().includes('operate')),
-              { timeout: 6000 }
-            )
-            .then(() => true)
-            .catch(() => true) // 容错非标准响应
-        : Promise.resolve(true);
-
-      // 7. 严格限定在接单弹窗底部（.modal-container-footer）定位「确认接受」按钮并点击，杜绝误触其他弹窗
+      // 6. 严格限定在接单弹窗底部（.modal-container-footer）定位「确认接受」按钮并点击，杜绝误触其他弹窗
       const dialogConfirmBtn = dialog.locator(
         '.modal-container-footer button.mtd-btn.btn-item.mtd-btn-primary:has-text("确认接受")'
       ).first();
@@ -939,8 +922,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       await visualClickLocator(page, dialogConfirmBtn, `点击弹窗「确认接受」按钮确认订单「${otaOrderId}」`);
-      // [TODO]: 暂时不需要监听确认提交的网络
-      // await confirmResponsePromise;
       await humanDelay(page, 400, 600);
     });
   }

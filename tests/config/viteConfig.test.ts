@@ -3,17 +3,17 @@ import viteConfig from '../../vite.config';
 import rendererServerConfig from '../../src/config/rendererServer.json';
 
 describe('renderer asset server configuration', () => {
-  it('disables Vite built-in environment exposure for every command', async () => {
+  it('disables Vite built-in environment exposure for every command', () => {
     for (const command of ['serve', 'build'] as const) {
-      const config = await viteConfig({ command, mode: 'development' });
+      const config = viteConfig({ command, mode: 'development' });
 
       expect(config.envPrefix).toEqual([]);
       expect(config.define).toBeUndefined();
     }
   });
 
-  it('binds the local renderer asset server to localhost only', async () => {
-    const config = await viteConfig({ command: 'serve', mode: 'development' });
+  it('binds the local renderer asset server to localhost only', () => {
+    const config = viteConfig({ command: 'serve', mode: 'development' });
 
     expect(config.server?.host).toBe('127.0.0.1');
     expect(config.server?.port).toBe(3000);

@@ -16,7 +16,7 @@ import {
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
   updateToolkitOrder,
-  importToolkitOrder,
+  retryToolkitOrderImport,
   deleteToolkitOrder,
   cancelToolkitOrder,
   fetchPropertyProductOptions,
@@ -144,7 +144,7 @@ export const executeOrderActionThunk = createAsyncThunk(
   ) => {
     try {
       if (action === 'IMPORT') {
-        await importToolkitOrder(id);
+        await retryToolkitOrderImport(id);
         dispatch(showToast({ type: 'success', title: `订单 ${id} 已成功提交重新导入` }));
       } else if (action === 'DELETE') {
         await deleteToolkitOrder(id);
@@ -445,7 +445,7 @@ export const selectGuardianStats = (state: {
     todaySuccess: stats.success,
     todayFailed: stats.failed,
     pendingManual: stats.failed,
-    avgTransferSeconds: 1.2,
+    avgTransferSeconds: undefined,
   };
 };
 
