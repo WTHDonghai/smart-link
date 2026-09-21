@@ -6,8 +6,7 @@ import type {
   CollectorLogPayload,
 } from './types';
 import { PROCESS_ENV_KEYS } from '../types/env';
-import { hotelCollectorRegistry } from './registry';
-import { meituanProductCollector } from './collectors/meituan/meituanProductCollector';
+import { hotelCollectorRegistry, productCollectorRegistry } from './registry';
 import { createPersistentBrowserSession } from './browserManager';
 import { dutyOrchestrationEngine } from './duty/dutyOrchestrationEngine';
 
@@ -193,20 +192,22 @@ export class HotelCollectionEngine {
       message: `[CrawlerEngine] 收到渠道「${code}」门店「${request.otaHotelName || extUnitCode}」产品采集任务，启动流水线...`,
     });
 
+    const collector = productCollectorRegistry.get(code);
+    if (!collector) {
+      const errorMsg = `渠道「${code}」暂未开放产品自动化采集适配器。`;
+      log({ level: 'ERROR', message: `[CrawlerEngine] ${errorMsg}` });
+      throw new Error(errorMsg);
+    }
+
     this.activeChannelJobs.add(channelJobKey);
 
     try {
-      // [TODO]: 赢编码，后续接入更多渠道，需要进行清理
-      if (code !== 'MEITUAN' && code !== 'MEITUAN_BIZ') {
-        throw new Error(`渠道「${code}」暂未开放产品自动化采集适配器。`);
-      }
-
       const session = await createPersistentBrowserSession({
         channelCode: code,
         headless: request.headless,
       });
 
-      const products = await meituanProductCollector.collect(
+      const products = await collector.collect(
         session.page,
         session.context,
         request,

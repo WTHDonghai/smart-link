@@ -6,6 +6,7 @@ import {
   getMeituanOrderUrl,
   getOtaProductUrl,
   getMeituanProductUrl,
+  getDouyinProductUrl,
 } from '../../src/config/otaUrls';
 import { APP_ENV_KEYS } from '../../src/types/env';
 import { resolveMeituanTargetUrl } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
@@ -117,11 +118,17 @@ describe('otaUrls config & single source of truth', () => {
     });
   });
 
-  describe('getOtaProductUrl & getMeituanProductUrl', () => {
+  describe('getOtaProductUrl & getMeituanProductUrl & getDouyinProductUrl', () => {
     it('returns custom product URL when SMARTLINK_OTA_MEITUAN_PRODUCT_URL is configured', () => {
       process.env[APP_ENV_KEYS.otaProductMeituan] = 'https://custom.meituan.com/hotel/products';
       expect(getMeituanProductUrl()).toBe('https://custom.meituan.com/hotel/products');
       expect(getOtaProductUrl('MEITUAN')).toBe('https://custom.meituan.com/hotel/products');
+    });
+
+    it('returns custom Douyin product URL when SMARTLINK_OTA_DOUYIN_PRODUCT_URL is configured', () => {
+      process.env[APP_ENV_KEYS.otaProductDouyin] = 'https://custom.douyin.com/p/goods-list';
+      expect(getDouyinProductUrl()).toBe('https://custom.douyin.com/p/goods-list');
+      expect(getOtaProductUrl('DOUYIN')).toBe('https://custom.douyin.com/p/goods-list');
     });
 
     it('falls back to getOtaChannelUrl when product specific env is not set', () => {
@@ -144,3 +151,4 @@ describe('otaUrls config & single source of truth', () => {
     });
   });
 });
+

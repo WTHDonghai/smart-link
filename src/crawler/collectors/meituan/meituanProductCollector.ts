@@ -1,14 +1,19 @@
 import type { Page, BrowserContext, Response } from 'playwright';
-import type { DiscoveredProductCandidate, ProductCrawlRequest, CollectorLogPayload } from '../../types';
+import {
+  type DiscoveredProductCandidate,
+  type ProductCrawlRequest,
+  resolveWaitMs,
+  resolveWaitSeconds,
+  resolveTimeoutMs,
+} from '../../types';
+import type { ChannelProductCollector, ProductCollectorOptions } from '../base';
 import { parseMeituanProductCandidates } from './meituanProductMapper';
 import { updateVisualTrackerStatus } from '../../visualTracker';
 import { getMeituanProductUrl } from '../../../config/otaUrls';
 
-export interface MeituanProductCollectorOptions {
-  onLog?: (log: CollectorLogPayload) => void;
-}
+export type MeituanProductCollectorOptions = ProductCollectorOptions;
 
-export class MeituanProductCollector {
+export class MeituanProductCollector implements ChannelProductCollector {
   public readonly channelCode = 'MEITUAN';
 
   public resolveTargetUrl(customUrl?: string, poiId?: string, partnerId?: string): string {
@@ -37,8 +42,9 @@ export class MeituanProductCollector {
     const poiId = (request.poiId || request.extUnitCode || '').trim();
     const partnerId = (request.partnerId || '').trim();
     const targetUrl = this.resolveTargetUrl(request.targetUrl, poiId, partnerId);
-    const timeoutMs = request.timeoutMs ?? 30000;
-    const waitMs = request.waitMs ?? 3000;
+    const timeoutMs = resolveTimeoutMs(request, 30);
+    const waitSeconds = resolveWaitSeconds(request, 3);
+    const waitMs = resolveWaitMs(request, 3);
 
     log({
       level: 'PLAYWRIGHT',
@@ -105,7 +111,7 @@ export class MeituanProductCollector {
       // 4. 等待网络数据响应与稳定（纯通过网络拦截从返回中获取信息）
       log({
         level: 'PLAYWRIGHT',
-        message: `[MeituanProductCollector] 页面已加载，等待接口拦截响应 (${waitMs}ms)...`,
+        message: `[MeituanProductCollector] 页面已加载，等待接口拦截响应 (${waitSeconds} 秒)...`,
       });
       await updateVisualTrackerStatus(page, '🔍 正在通过接口拦截获取美团房型与商品数据...', 'info');
       await page.waitForTimeout(waitMs);
