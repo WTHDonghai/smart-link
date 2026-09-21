@@ -58,7 +58,7 @@ export interface ChannelProtocolSchema {
 /** 清洗提炼后的标准化业务订单上下文 (键值对映射，值统一归一化为可打印文本或布尔标记) */
 export type CleanOrderContext = Record<
   string,
-  string | number | boolean | null | undefined | Record<string, unknown>
+  string | number | boolean | null | undefined | Record<string, unknown> | unknown[]
 >;
 
 /** 协议漂移警报 (当原始报文中关键字段缺失时抛出) */
@@ -77,39 +77,44 @@ export interface OrderProtocolPricing {
   price: number; // 元
 }
 
+
 /**
- * 统一订单协议领域模型 (Unified Domain Order Protocol Model)
- * 程序内部订单数据的唯一标准协议，承上由渠道报文清洗得出，启下驱动模版渲染与入单请求转换
+ * 统一订单导入协议 (Unified Order Import Protocol)
+ * 面向中台与 PMS 订单导入的唯一权威契约，与具体渠道特性彻底解耦
  */
-export interface OrderProtocolData {
-  // 核心标识
+export interface UnifiedOrderProtocol {
   otaOrderId: string;
   otaChannel: string;
   unitId?: string;
   unitName?: string;
-
-  // 住客与联系人
-  guestName: string;
-  guestMobile: string;
-
-  // 预订与房型
-  roomTypeName: string;
-  originRoomType?: string;
-  roomTypeId: string;
-  rateCode: string;
-  arrival: string; // YYYY-MM-DD
-  departure: string; // YYYY-MM-DD
-  nights: number;
-  quantity: number;
-
-  // 财务与结算
-  totalPrice: number;
-  floorPrice?: number;
-  paytype: string;
-  pricing: OrderProtocolPricing[];
-
-  // 派生与原始上下文 (用于模版表达式求值，如需酒店开票、是否含权益等)
-  contextVariables: CleanOrderContext;
-  rawRemark: string;
+  contact: {
+    name: string;
+    mobile: string;
+  };
+  booking: {
+    roomTypeName: string; // 产品名称: "早航双床房【无早】"
+    originRoomType?: string; // 物理房型名称: "早航双床房"
+    roomTypeId: string; // 物理房型ID 4384644012
+    rateCode: string;
+    arrival: string; // YYYY-MM-DD
+    departure: string; // YYYY-MM-DD
+    nights: number;
+    quantity: number;
+    totalPrice: number; // 元
+    floorPrice?: number; // 元
+    paytype: string;
+    pricing: OrderProtocolPricing[];
+  };
+  remark: string;
   rawPayload?: unknown;
+}
+
+/**
+ * 渠道专属订单协议统一能力契约 (Channel Order Protocol Interface)
+ * 各渠道订单协议实现此接口：对外输出模版上下文变量，并提供向 UnifiedOrderProtocol 的投影能力
+ */
+export interface IChannelOrderProtocol {
+  readonly channelCode: string;
+  getTemplateVariables(): CleanOrderContext;
+  toUnifiedOrder(renderedRemark: string): UnifiedOrderProtocol;
 }

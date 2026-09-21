@@ -2,18 +2,22 @@ import type { DutyClaimedTask, SystemLogEntry } from '../../types';
 import type {
   ChannelDutyRunner,
   DutyTaskExecutionResult,
-  ExtractedOrderDetail,
 } from './dutyContracts';
+import type {
+  CleanOrderContext,
+  IChannelOrderProtocol,
+  OrderProtocolPricing,
+  UnifiedOrderProtocol,
+} from '../../types/template';
 import { parseDutyTaskContext, isRiskControlError, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger } from './dutyTaskLogger';
 import { importToolkitOrder } from '../../services/dutyRuntimeApi';
 import { fetchChannelRemarkTemplate } from '../../services/channelApi';
-import { alignOrderToProtocol } from '../../utils/template/orderProtocolNormalizer';
+import { cleanChannelOrder } from '../../services/protocols';
 import {
-  renderRemarkFromProtocol,
-  buildImportPayloadFromProtocol,
+  renderRemarkFromVariables,
+  buildImportPayloadFromUnifiedOrder,
 } from '../../utils/template/orderPayloadTransformer';
-import { parseMeituanOrderDetailResponse } from './meituanOrderParsers';
 import { logger } from '../../services/logger';
 
 /**
@@ -23,47 +27,116 @@ import { logger } from '../../services/logger';
  * 2. OTA_IMPORT_ORDER: 解析任务入参 -> 路由至渠道执行页面查看详情并抓取字段 -> Fail-Fast 严格校验 -> 统一调用中台 importToolkitOrder -> 调度关闭详情；
  * 3. OTA_CONFIRM_IMPORT: 解析确认号 -> 路由至渠道执行页面回填；
  * 4. OTA_CONFIRM_CANCEL: 解析单号 -> 路由至渠道执行取消确认；
-/**
- * 渠道详情报文解析适配器：将渠道页面抓取的原始报文（已回写明文敏感数据）转换为程序内部统一的 ExtractedOrderDetail
  */
-function parseOrderDetailFromRaw(
+
+/**
+ * 兼容测试环境 MockRunner 或预结构化对象的模拟渠道协议包装器
+ */
+function createMockChannelOrderProtocol(
   channelCode: string,
-  rawOrExtracted: Record<string, unknown>,
+  detail: Record<string, unknown>,
   otaOrderId: string
-): ExtractedOrderDetail | null {
-  // 若已是完整结构化详情（如测试中的 MockRunner 或兼容适配层）
-  if (
-    typeof rawOrExtracted.guestName === 'string' &&
-    typeof rawOrExtracted.roomTypeName === 'string' &&
-    typeof rawOrExtracted.arrival === 'string' &&
-    typeof rawOrExtracted.departure === 'string'
-  ) {
-    return rawOrExtracted as unknown as ExtractedOrderDetail;
+): IChannelOrderProtocol {
+  const otaId = String(detail.otaOrderId || otaOrderId);
+  const guestName = String(detail.guestName || '');
+  const guestPhone = String(detail.guestMobile || '');
+  const roomName = String(detail.roomTypeName || '');
+  const arrival = String(detail.arrival || '');
+  const departure = String(detail.departure || '');
+  const nights = Math.max(1, Number(detail.nights || 1));
+  const quantity = Number(detail.quantity || 1);
+  const totalPrice = Number(detail.totalPrice || 0);
+
+  const rawRemark = String(
+    detail.remark ||
+      (detail.raw as Record<string, unknown> | undefined)?.remark ||
+      (detail.raw as Record<string, unknown> | undefined)?.memo ||
+      ''
+  );
+
+  const context: CleanOrderContext = {
+    'OTA订单号': otaId,
+    'otaOrderId': otaId,
+    'orderNo': otaId,
+    '美团单号': otaId,
+    '入住人': guestName,
+    '住客': guestName,
+    '住客姓名': guestName,
+    'guestName': guestName,
+    '联系电话': guestPhone,
+    'guestMobile': guestPhone,
+    'phone': guestPhone,
+    '房型名称': roomName,
+    'roomTypeName': roomName,
+    'roomName': roomName,
+    '间夜数': `${nights}间夜`,
+    'nights': nights,
+    '房间数': `${quantity}间`,
+    'quantity': quantity,
+    '底价': String(totalPrice),
+    'floorPrice': totalPrice,
+    'totalPrice': totalPrice,
+    '入住日期': arrival,
+    'arrival': arrival,
+    '离店日期': departure,
+    'departure': departure,
+    '入住离店日期': `${arrival}至${departure}`,
+    '渠道来源': channelCode,
+    'otaChannel': channelCode,
+    '备注': rawRemark,
+    'remark': rawRemark,
+    ...(detail.contextVariables && typeof detail.contextVariables === 'object'
+      ? (detail.contextVariables as Record<string, unknown>)
+      : {}),
+  };
+
+  if (detail.raw && typeof detail.raw === 'object') {
+    const rawObj = detail.raw as Record<string, unknown>;
+    context.raw = rawObj;
+    if (rawObj.data && typeof rawObj.data === 'object') {
+      context.data = rawObj.data as Record<string, unknown>;
+    }
   }
 
-  if (channelCode === 'MEITUAN') {
-    const parsed = parseMeituanOrderDetailResponse(rawOrExtracted, otaOrderId);
-    if (!parsed) return null;
-    return {
-      otaOrderId: parsed.otaOrderId || otaOrderId,
+  const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
+  const pricing = Array.isArray(detail.pricing)
+    ? (detail.pricing as OrderProtocolPricing[])
+    : Array.from({ length: nights }, (_, i) => {
+        const d = new Date(`${detail.arrival}T00:00:00.000Z`);
+        d.setUTCDate(d.getUTCDate() + i);
+        return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+      });
+
+  return {
+    channelCode,
+    getTemplateVariables: () => context,
+    toUnifiedOrder: (renderedRemark: string): UnifiedOrderProtocol => ({
+      otaOrderId: String(detail.otaOrderId || otaOrderId),
       otaChannel: channelCode,
-      unitId: parsed.unitId,
-      unitName: parsed.unitName,
-      guestName: parsed.guestName || '',
-      guestMobile: parsed.guestMobile || '',
-      roomTypeName: parsed.roomTypeName || '',
-      ratePlanName: parsed.ratePlanName || '',
-      arrival: parsed.arrival || '',
-      departure: parsed.departure || '',
-      nights: parsed.nights || 1,
-      quantity: parsed.quantity || 1,
-      totalPrice: parsed.totalPrice ?? 0,
-      remark: parsed.remark,
-      raw: rawOrExtracted,
-    };
-  }
-
-  return rawOrExtracted as unknown as ExtractedOrderDetail;
+      unitId: typeof detail.unitId === 'string' ? detail.unitId : undefined,
+      unitName: typeof detail.unitName === 'string' ? detail.unitName : undefined,
+      contact: {
+        name: String(detail.guestName || ''),
+        mobile: String(detail.guestMobile || ''),
+      },
+      booking: {
+        roomTypeName: String(detail.roomTypeName || ''),
+        originRoomType: String(detail.originRoomType || detail.roomTypeName || ''),
+        roomTypeId: String(detail.roomTypeId || 'ROOM_DEFAULT'),
+        rateCode: String(detail.ratePlanName || detail.rateCode || 'OTA'),
+        arrival: String(detail.arrival || ''),
+        departure: String(detail.departure || ''),
+        nights,
+        quantity: Number(detail.quantity || 1),
+        totalPrice,
+        floorPrice: totalPrice,
+        paytype: String(detail.paytype || '预付'),
+        pricing,
+      },
+      remark: renderedRemark,
+      rawPayload: detail,
+    }),
+  };
 }
 
 export async function dispatchDutyTask(
@@ -177,19 +250,57 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 2. 交由渠道解析器对原始报文统一进行结构化解析
-      const detail = parseOrderDetailFromRaw(runner.channelCode, rawDetail, otaOrderId);
-      if (!detail) {
+      // 2. 渠道协议清洗：得到强类型 IChannelOrderProtocol 实体
+      let channelOrder: IChannelOrderProtocol;
+      try {
+        if (
+          typeof rawDetail.guestName === 'string' &&
+          typeof rawDetail.roomTypeName === 'string' &&
+          typeof rawDetail.arrival === 'string' &&
+          typeof rawDetail.departure === 'string'
+        ) {
+          // 兼容测试环境 MockRunner 或预提取结构
+          channelOrder = createMockChannelOrderProtocol(runner.channelCode, rawDetail, otaOrderId);
+        } else {
+          channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, otaOrderId);
+        }
+      } catch (cleanErr) {
+        const errMsg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_PARSE_FAILED',
-          errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情原始报文解析失败`,
+          errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情原始报文解析失败: ${errMsg}`,
           retryable: false,
         };
       }
 
-      // 3. 顶层 Fail-Fast 严格校验：确保关键字段非空，绝不兜底假数据
-      if (!detail.guestName || !detail.roomTypeName || !detail.arrival || !detail.departure) {
+      // 3. 拉取远端模版 -> 基于渠道协议变量字典渲染 Remark
+      let template: string | null = null;
+      try {
+        const templateRes = await fetchChannelRemarkTemplate(channelOrder.channelCode);
+        template = templateRes.remarkTemplate;
+      } catch {
+        // 网络/服务异常时保持 template = null，触发协议原始备注兜底
+      }
+      const rawRemark = String(
+        rawDetail.remark ||
+          (rawDetail.raw as Record<string, unknown> | undefined)?.remark ||
+          (rawDetail.data as Record<string, unknown> | undefined)?.remark ||
+          (rawDetail.data as Record<string, unknown> | undefined)?.memo ||
+          ''
+      );
+      const remark = renderRemarkFromVariables(channelOrder.getTemplateVariables(), template, rawRemark);
+
+      // 4. 转换为统一入单协议 UnifiedOrderProtocol
+      const unifiedOrder = channelOrder.toUnifiedOrder(remark);
+
+      // 5. 顶层 Fail-Fast 严格校验：确保关键字段非空，绝不兜底假数据
+      if (
+        !unifiedOrder.contact.name ||
+        !unifiedOrder.booking.roomTypeName ||
+        !unifiedOrder.booking.arrival ||
+        !unifiedOrder.booking.departure
+      ) {
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_INVALID',
@@ -198,29 +309,16 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 3. 提取 extUnitCode
+      // 6. 提取 extUnitCode
       const extUnitCode =
         (typeof context.payload.extUnitCode === 'string' && context.payload.extUnitCode.trim())
           ? context.payload.extUnitCode.trim()
           : (typeof context.payload.unitId === 'string' && context.payload.unitId.trim())
             ? context.payload.unitId.trim()
-            : (task.unitId || detail.unitId || null);
+            : (task.unitId || unifiedOrder.unitId || null);
 
-      // 4. 数据清洗 -> 对齐程序内部统一订单协议
-      const protocolData = alignOrderToProtocol(detail, runner.channelCode);
-
-      // 5. 拉取远端模版 -> 基于订单协议渲染 Remark
-      let template: string | null = null;
-      try {
-        const templateRes = await fetchChannelRemarkTemplate(protocolData.otaChannel);
-        template = templateRes.remarkTemplate;
-      } catch {
-        // 网络/服务异常时保持 template = null，触发协议原始备注兜底
-      }
-      const remark = renderRemarkFromProtocol(protocolData, template);
-
-      // 6. 订单协议 -> 转换为中台入单请求 (ImportPayload)
-      const importPayload = buildImportPayloadFromProtocol(protocolData, extUnitCode, remark);
+      // 7. 统一导入协议 -> 转换为中台入单请求 (ImportPayload)
+      const importPayload = buildImportPayloadFromUnifiedOrder(unifiedOrder, extUnitCode);
 
       try {
         // 7. 调用统一中台入单接口

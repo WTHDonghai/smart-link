@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from './meituanDutyRunner';
-import { parseMeituanOrderDetailResponse } from './meituanOrderParsers';
-import type { ExtractedOrderDetail } from './dutyContracts';
 import { PROCESS_ENV_KEYS } from '../../types/env';
-import { alignOrderToProtocol } from '../../utils/template/orderProtocolNormalizer';
+import { cleanChannelOrder } from '../../services/protocols';
 import { fetchChannelRemarkTemplate } from '../../services/channelApi';
-import { renderRemarkFromProtocol } from '../../utils/template/orderPayloadTransformer';
+import { renderRemarkFromVariables } from '../../utils/template/orderPayloadTransformer';
 
 function parseArgs(argv: string[]) {
   let orderId: string | undefined;
@@ -79,61 +77,50 @@ async function main() {
     try {
       console.log(`[DutyInspectDetail:CLI] 正在执行 inspectOrderDetail(otaOrderId: 「${targetOrderId}」)...`);
       const rawDetail = await runner.inspectOrderDetail(targetOrderId);
-      const parsed = parseMeituanOrderDetailResponse(rawDetail, targetOrderId);
-      if (!parsed) {
-        throw new Error(`美团订单「${targetOrderId}」详情原始报文解析失败`);
-      }
-      const detail: ExtractedOrderDetail = {
-        otaOrderId: parsed.otaOrderId || targetOrderId,
-        otaChannel: 'MEITUAN',
-        unitId: parsed.unitId,
-        unitName: parsed.unitName,
-        guestName: parsed.guestName || '',
-        guestMobile: parsed.guestMobile || '',
-        roomTypeName: parsed.roomTypeName || '',
-        ratePlanName: parsed.ratePlanName || '',
-        arrival: parsed.arrival || '',
-        departure: parsed.departure || '',
-        nights: parsed.nights || 1,
-        quantity: parsed.quantity || 1,
-        totalPrice: parsed.totalPrice ?? 0,
-        remark: parsed.remark,
-        raw: rawDetail,
-      };
+      const channelOrder = cleanChannelOrder('MEITUAN', rawDetail, null, targetOrderId);
+      const tmplVars = channelOrder.getTemplateVariables();
 
-      // 3. 对齐统一订单协议并驱动模版引擎求值渲染备注
-      const protocolData = alignOrderToProtocol(detail, detail.otaChannel);
       let remoteTemplate: string | null = null;
       try {
-        const templateRes = await fetchChannelRemarkTemplate(protocolData.otaChannel);
+        const templateRes = await fetchChannelRemarkTemplate(channelOrder.channelCode);
         remoteTemplate = templateRes.remarkTemplate;
       } catch (tmplErr) {
         const errMsg = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
-        console.warn(`[DutyInspectDetail:CLI] 未能拉取到渠道「${protocolData.otaChannel}」远程备注模板 (将使用原备注兜底): ${errMsg}`);
+        console.warn(`[DutyInspectDetail:CLI] 未能拉取到渠道「${channelOrder.channelCode}」远程备注模板 (将使用原备注兜底): ${errMsg}`);
       }
+
+      const rawRemark = String(
+        rawDetail.remark ||
+          (rawDetail.data as Record<string, unknown> | undefined)?.remark ||
+          (rawDetail.data as Record<string, unknown> | undefined)?.memo ||
+          ''
+      );
 
       // 若指定了命令行 --template 则优先使用命令行测试模版，否则使用远程模版
       const effectiveTemplate = (customTemplate && customTemplate.trim()) ? customTemplate.trim() : remoteTemplate;
-      const renderedRemark = renderRemarkFromProtocol(protocolData, effectiveTemplate);
+      const renderedRemark = renderRemarkFromVariables(tmplVars, effectiveTemplate, rawRemark);
 
       // 预先使用常用模版算出一个示例预览，帮助直观核对变量提取与渲染能力
       const sampleDemoTemplate = '{{入住人}} / 电话:{{联系电话}} / {{房型名称}} / {{间夜数}}';
-      const sampleDemoRendered = renderRemarkFromProtocol(protocolData, sampleDemoTemplate);
+      const sampleDemoRendered = renderRemarkFromVariables(tmplVars, sampleDemoTemplate, rawRemark);
+
+      // 转换为统一订单导入协议 (UnifiedOrderProtocol)
+      const unified = channelOrder.toUnifiedOrder(renderedRemark);
 
       console.log('\n================ 美团订单详情提取结果 ================\n');
-      console.log(`  OTA 渠道:      ${detail.otaChannel}`);
-      console.log(`  美团订单号:    ${detail.otaOrderId}`);
-      console.log(`  酒店名称:      ${detail.unitName || '-'}`);
-      console.log(`  酒店 POI ID:   ${detail.unitId || '-'}`);
-      console.log(`  入住客人姓名:  ${detail.guestName}`);
-      console.log(`  联系电话:      ${detail.guestMobile || '(未提供或已脱敏)'}`);
-      console.log(`  预订房型:      ${detail.roomTypeName}`);
-      console.log(`  价格方案:      ${detail.ratePlanName || '-'}`);
-      console.log(`  入住日期:      ${detail.arrival}`);
-      console.log(`  离店日期:      ${detail.departure}`);
-      console.log(`  入住间夜:      ${detail.nights} 晚 / ${detail.quantity || 1} 间`);
-      console.log(`  订单总额:      ¥${detail.totalPrice}`);
-      console.log(`  客人原始备注:  ${detail.remark || protocolData.rawRemark || '(客人下单未填备注)'}`);
+      console.log(`  OTA 渠道:      ${unified.otaChannel}`);
+      console.log(`  美团订单号:    ${unified.otaOrderId}`);
+      console.log(`  酒店名称:      ${unified.unitName || '-'}`);
+      console.log(`  酒店 POI ID:   ${unified.unitId || '-'}`);
+      console.log(`  入住客人姓名:  ${unified.contact.name}`);
+      console.log(`  联系电话:      ${unified.contact.mobile || '(未提供或已脱敏)'}`);
+      console.log(`  预订房型:      ${unified.booking.roomTypeName}`);
+      console.log(`  价格方案:      ${unified.booking.rateCode || '-'}`);
+      console.log(`  入住日期:      ${unified.booking.arrival}`);
+      console.log(`  离店日期:      ${unified.booking.departure}`);
+      console.log(`  入住间夜:      ${unified.booking.nights} 晚 / ${unified.booking.quantity} 间`);
+      console.log(`  订单总额:      ¥${unified.booking.totalPrice}`);
+      console.log(`  客人原始备注:  ${rawRemark || '(客人下单未填备注)'}`);
       console.log(`  渠道远程模版:  ${remoteTemplate ? `「${remoteTemplate}」` : '(未配置渠道模版或CLI未连中台)'}`);
       if (customTemplate) {
         console.log(`  CLI指定模版:   「${customTemplate}」`);
@@ -142,8 +129,8 @@ async function main() {
       console.log(`  模版渲染结果:  ${renderedRemark || '(空)'}`);
       console.log(`  示例模版求值:  ${sampleDemoRendered} (模版: ${sampleDemoTemplate})`);
       console.log('\n======================================================\n');
-      console.log('[DutyInspectDetail:CLI] 接口原始返回 JSON (已回写姓名):\n', JSON.stringify(rawDetail, null, 2));
-      console.log('\n[DutyInspectDetail:CLI] 结构化详情 JSON:\n', JSON.stringify(detail, null, 2));
+      console.log('\n[DutyInspectDetail:CLI] 接口原始返回 JSON (已回写姓名):\n', JSON.stringify(rawDetail, null, 2));
+      console.log('\n[DutyInspectDetail:CLI] 统一订单协议 (UnifiedOrderProtocol) JSON:\n', JSON.stringify(unified, null, 2));
       console.log('\n[DutyInspectDetail:CLI] 最终提交入单备注 (Remark):\n', renderedRemark || '(空)');
 
       if (!renderedRemark) {

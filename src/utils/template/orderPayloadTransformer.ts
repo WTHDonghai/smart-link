@@ -1,48 +1,45 @@
 /**
  * 订单协议与中台载荷转换器 (Order Protocol & Payload Transformer)
  * 职责：
- * 1. 模版渲染：直接以 OrderProtocolData 实体驱动模版引擎，求值生成最终 Remark 文本；
- * 2. 入单组装：直接将 OrderProtocolData 实体转换为中台入单请求契约 (ImportPayload)。
+ * 1. 模版渲染：直接以模版上下文变量字典驱动模版引擎，求值生成最终 Remark 文本；
+ * 2. 入单组装：直接将 UnifiedOrderProtocol 统一导入协议实体转换为中台入单请求契约 (ImportPayload)。
  */
 
 import type { ImportPayload } from '../../types';
-import type { OrderProtocolData } from '../../types/template';
+import type { UnifiedOrderProtocol } from '../../types/template';
 import { renderTemplate } from './templateEngine';
 import { logger } from '../../services/logger';
 
 /**
- * 基于订单协议数据实体求值并渲染备注文本
+ * 基于通用上下文变量字典渲染备注文本
  *
- * @param protocolData 已对齐清洗的订单协议实体
- * @param template 远端获取的备注模版（若为 null/空或渲染异常，兜底使用 protocolData.rawRemark）
+ * @param variables 模版上下文变量字典
+ * @param template 远端获取的备注模版
+ * @param fallbackRemark 兜底备注
  * @returns 最终生成的 Remark 备注字符串
  */
-export function renderRemarkFromProtocol(
-  protocolData: OrderProtocolData,
-  template?: string | null
+export function renderRemarkFromVariables(
+  variables: Record<string, unknown>,
+  template?: string | null,
+  fallbackRemark: string = ''
 ): string {
-  const fallbackRemark = protocolData.rawRemark || '';
-
   if (!template || !template.trim()) {
     return fallbackRemark;
   }
 
   try {
-    const rendered = renderTemplate(template.trim(), protocolData.contextVariables);
+    const rendered = renderTemplate(template.trim(), variables);
     if (rendered && rendered.trim()) {
       return rendered.trim();
     }
     return fallbackRemark;
   } catch (error) {
-    // 模版语法编译错误或求值异常，记录警告日志并安全降级回原备注
     logger.warn('[模版求值] 订单备注模版渲染异常，降级使用原始备注', {
       module: 'DUTY_TASK',
-      orderNo: protocolData.otaOrderId,
       details: error instanceof Error ? error.message : String(error),
       meta: {
         template,
         error: error instanceof Error ? error.stack || error.message : String(error),
-        otaOrderId: protocolData.otaOrderId,
       },
     });
     return fallbackRemark;
@@ -50,42 +47,40 @@ export function renderRemarkFromProtocol(
 }
 
 /**
- * 将订单协议实体及渲染后的 Remark 组装为中台入单请求载荷 (ImportPayload)
+ * 将统一订单导入协议 (UnifiedOrderProtocol) 组装为中台入单请求契约载荷 (ImportPayload)
  *
- * @param protocolData 已对齐清洗的订单协议实体
+ * @param unifiedOrder 标准化统一订单协议实体 (内部已包含渲染好的 remark)
  * @param extUnitCode 文旅中台外部物理酒店/单元编码
- * @param remark 已渲染或已兜底的最终备注文本
- * @returns 符合线缆契约的 ImportPayload
+ * @returns 符合中台契约的 ImportPayload
  */
-export function buildImportPayloadFromProtocol(
-  protocolData: OrderProtocolData,
-  extUnitCode: string | null,
-  remark: string
+export function buildImportPayloadFromUnifiedOrder(
+  unifiedOrder: UnifiedOrderProtocol,
+  extUnitCode: string | null
 ): ImportPayload {
   return {
     extUnitCode,
     orders: [
       {
-        otaOrderId: protocolData.otaOrderId,
-        otaChannel: protocolData.otaChannel,
+        otaOrderId: unifiedOrder.otaOrderId,
+        otaChannel: unifiedOrder.otaChannel,
         contact: {
-          name: protocolData.guestName,
-          mobile: protocolData.guestMobile || '',
+          name: unifiedOrder.contact.name,
+          mobile: unifiedOrder.contact.mobile || '',
         },
         booking: {
-          roomType: protocolData.roomTypeName,
-          originRoomType: protocolData.originRoomType || protocolData.roomTypeName,
-          rateCode: protocolData.rateCode,
-          arrival: protocolData.arrival,
-          departure: protocolData.departure,
-          roomTypeId: protocolData.roomTypeId,
-          nights: protocolData.nights,
-          quantity: protocolData.quantity,
-          totalPrice: protocolData.totalPrice,
-          paytype: protocolData.paytype,
-          pricing: protocolData.pricing,
+          roomType: unifiedOrder.booking.roomTypeName,
+          originRoomType: unifiedOrder.booking.originRoomType || unifiedOrder.booking.roomTypeName,
+          rateCode: unifiedOrder.booking.rateCode,
+          arrival: unifiedOrder.booking.arrival,
+          departure: unifiedOrder.booking.departure,
+          roomTypeId: unifiedOrder.booking.roomTypeId,
+          nights: unifiedOrder.booking.nights,
+          quantity: unifiedOrder.booking.quantity,
+          totalPrice: unifiedOrder.booking.totalPrice,
+          paytype: unifiedOrder.booking.paytype,
+          pricing: unifiedOrder.booking.pricing,
         },
-        remark,
+        remark: unifiedOrder.remark,
       },
     ],
   };

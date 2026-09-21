@@ -3,7 +3,14 @@
  * 将 150+ 繁杂字段裁剪归纳为 15 个高频业务指标
  */
 
-import type { ChannelProtocolSchema } from '../../types/template';
+import type {
+  ChannelProtocolSchema,
+  CleanOrderContext,
+  IChannelOrderProtocol,
+  OrderProtocolPricing,
+  UnifiedOrderProtocol,
+} from '../../types/template';
+import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
 
 /** 美团真实订单协议样本数据 (源自生产采集报文) */
 export const MEITUAN_RAW_SAMPLE_ORDER = {
@@ -337,7 +344,47 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       enabled: true,
     },
 
-    // 2. 酒店房型
+    // 2. 酒店房型与门店
+    {
+      key: 'unitId',
+      label: '门店ID',
+      path: 'data.poiId',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '1533758592',
+      description: '美团商家门店或POI唯一标识',
+      enabled: true,
+    },
+    {
+      key: 'unitName',
+      label: '门店名称',
+      path: 'data.poiName',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '禅驿度假酒店（自贡方特恐龙王国店）',
+      description: '美团商家门店名称',
+      enabled: true,
+    },
+    {
+      key: 'roomTypeId',
+      label: '房型商品ID',
+      path: 'data.goodsId',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '2532714518',
+      description: '美团售卖产品或房型ID',
+      enabled: true,
+    },
+    {
+      key: 'rateCode',
+      label: '价格方案',
+      path: 'data.ratePlanName',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: 'OTA',
+      description: '美团价格方案代码或名称',
+      enabled: true,
+    },
     {
       key: 'roomName',
       label: '房型名称',
@@ -412,7 +459,17 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       category: 'guest',
       transform: 'maskPhone',
       sampleValue: '138****9999',
-      description: '预留联系人手机号',
+      description: '预留联系人手机号 (脱敏用于模版展示)',
+      enabled: true,
+    },
+    {
+      key: 'contactPhone',
+      label: '真实联系电话',
+      path: 'data.contacts[0].phone',
+      category: 'guest',
+      transform: 'string',
+      sampleValue: '13888889999',
+      description: '预留联系人未脱敏真实手机号',
       enabled: true,
     },
 
@@ -506,3 +563,288 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     },
   ],
 };
+
+/** 美团订单协议实现类 (实现 IChannelOrderProtocol) */
+export class MeituanOrderProtocol implements IChannelOrderProtocol {
+  public readonly channelCode = 'MEITUAN';
+
+  constructor(
+    public readonly context: CleanOrderContext,
+    public readonly raw: Record<string, unknown>
+  ) {}
+
+  /** 供模版引擎渲染的上下文变量字典 (100% 对齐 DEFAULT_MEITUAN_PROTOCOL_SCHEMA) */
+  public getTemplateVariables(): CleanOrderContext {
+    return this.context;
+  }
+
+  /**
+   * 承上启下：将美团专属订单数据投影为中台标准 UnifiedOrderProtocol
+   * 核心刚性约束：100% 消费清洗后的 this.context，绝对禁止直接读取 this.raw 提取业务字段！
+   */
+  public toUnifiedOrder(renderedRemark: string): UnifiedOrderProtocol {
+    const otaOrderId = String(
+      this.context.orderNo ||
+      this.context.otaOrderId ||
+      this.context['美团单号'] ||
+      ''
+    ).trim();
+
+    const unitId = String(this.context.unitId || this.context['门店ID'] || '').trim() || undefined;
+    const unitName = String(this.context.unitName || this.context['门店名称'] || '').trim() || undefined;
+
+    const guestName = String(
+      this.context.guestName ||
+      this.context['入住人'] ||
+      this.context['住客'] ||
+      this.context['住客姓名'] ||
+      ''
+    ).trim();
+
+    const guestMobile = String(
+      this.context.contactPhone ||
+      this.context['真实联系电话'] ||
+      this.context.guestPhone ||
+      this.context['联系电话'] ||
+      ''
+    ).trim();
+
+    const roomTypeName = String(
+      this.context.roomName ||
+      this.context.roomTypeName ||
+      this.context['房型名称'] ||
+      ''
+    ).trim();
+
+    const roomTypeId = String(
+      this.context.roomTypeId ||
+      this.context['房型商品ID'] ||
+      this.context['房型ID'] ||
+      'ROOM_DEFAULT'
+    ).trim();
+
+    const rateCode = String(
+      this.context.rateCode ||
+      this.context['价格方案'] ||
+      'OTA'
+    ).trim();
+
+    const arrival = String(this.context.checkInDate || this.context['入住日期'] || '').slice(0, 10);
+    const departure = String(this.context.checkOutDate || this.context['离店日期'] || '').slice(0, 10);
+
+    let nights = Math.max(1, Number(this.context.nights || this.context['间夜数'] || 0));
+    if ((!nights || Number.isNaN(nights)) && arrival && departure) {
+      const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
+      nights = diff > 0 ? diff : 1;
+    }
+
+    const quantity = Math.max(1, Number(this.context.roomCount || this.context['房间间数'] || 1));
+    const rawTotal = Number(this.context.floorPrice ?? this.context['结算底价'] ?? this.context.salePrice ?? 0);
+    const totalPrice = Number.isFinite(rawTotal) ? rawTotal : 0;
+    const floorPrice = totalPrice;
+
+    // 按日价格计算：直接消费 context.pricing，若无则根据间夜平摊推导
+    let pricing: OrderProtocolPricing[] = [];
+    if (Array.isArray(this.context.pricing) && this.context.pricing.length > 0) {
+      pricing = this.context.pricing as OrderProtocolPricing[];
+    } else if (Array.isArray(this.context['每日价格']) && (this.context['每日价格'] as OrderProtocolPricing[]).length > 0) {
+      pricing = this.context['每日价格'] as OrderProtocolPricing[];
+    } else if (arrival && departure) {
+      const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
+      pricing = Array.from({ length: nights }, (_, i) => {
+        const d = new Date(`${arrival}T00:00:00.000Z`);
+        d.setUTCDate(d.getUTCDate() + i);
+        return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+      });
+    }
+
+    return {
+      otaOrderId,
+      otaChannel: this.channelCode,
+      unitId,
+      unitName,
+      contact: {
+        name: guestName,
+        mobile: guestMobile,
+      },
+      booking: {
+        roomTypeName,
+        originRoomType: roomTypeName,
+        roomTypeId,
+        rateCode,
+        arrival,
+        departure,
+        nights,
+        quantity,
+        totalPrice,
+        floorPrice,
+        paytype: '预付',
+        pricing,
+      },
+      remark: renderedRemark,
+      rawPayload: this.raw, // 仅作为原始只读存档透传，不参与任何逻辑提取
+    };
+  }
+}
+
+/**
+ * 美团订单原始报文清洗入口函数
+ * 依据 DEFAULT_MEITUAN_PROTOCOL_SCHEMA (或用户自定义 Schema) 执行清洗并返回强类型 MeituanOrderProtocol 实体
+ */
+export function cleanMeituanOrder(
+  rawPayload: unknown,
+  customSchema?: ChannelProtocolSchema | null,
+  targetOrderId?: string
+): MeituanOrderProtocol {
+  if (!rawPayload || typeof rawPayload !== 'object') {
+    throw new Error('[MeituanProtocol] 美团订单原始报文为空或非合法对象');
+  }
+
+  const rawRecord = rawPayload as Record<string, unknown>;
+  const schema = customSchema || DEFAULT_MEITUAN_PROTOCOL_SCHEMA;
+
+  // 1. 兼容不同的报文嵌套层级 (data.orderDetail 或 data.order)
+  const rootData = rawRecord.data && typeof rawRecord.data === 'object' ? (rawRecord.data as Record<string, unknown>) : null;
+  const innerDetail = (rootData?.orderDetail && typeof rootData.orderDetail === 'object')
+    ? (rootData.orderDetail as Record<string, unknown>)
+    : (rootData?.order && typeof rootData.order === 'object')
+      ? (rootData.order as Record<string, unknown>)
+      : (rawRecord.orderDetail && typeof rawRecord.orderDetail === 'object')
+        ? (rawRecord.orderDetail as Record<string, unknown>)
+        : null;
+
+  const mergedData: Record<string, unknown> = {
+    ...(innerDetail || {}),
+    ...(rootData || {}),
+  };
+
+  if (mergedData.floorPrice == null) {
+    mergedData.floorPrice = mergedData.totalFee ?? mergedData.price ?? mergedData.totalPrice;
+  }
+  if (mergedData.poiId == null && mergedData.partnerId != null) {
+    mergedData.poiId = mergedData.partnerId;
+  }
+  if (mergedData.poiName == null && mergedData.partnerName != null) {
+    mergedData.poiName = mergedData.partnerName;
+  }
+  if (mergedData.goodsId == null && mergedData.roomId != null) {
+    mergedData.goodsId = mergedData.roomId;
+  }
+  if (mergedData.ratePlanName == null && mergedData.rateCode != null) {
+    mergedData.ratePlanName = mergedData.rateCode;
+  }
+
+  if (!Array.isArray(mergedData.guests) || mergedData.guests.length === 0) {
+    if (mergedData.guestName) {
+      mergedData.guests = [{ name: mergedData.guestName }];
+    }
+  }
+  if (!Array.isArray(mergedData.contacts) || mergedData.contacts.length === 0) {
+    if (mergedData.guestMobile) {
+      mergedData.contacts = [{ phone: mergedData.guestMobile }];
+    }
+  }
+
+  const normalizedRaw: Record<string, unknown> = {
+    ...rawRecord,
+    data: mergedData,
+  };
+
+  // 2. 依据 Schema 执行标准化清洗并做契约检测
+  const context = normalizeOrderPayload(normalizedRaw, schema);
+
+  // 3. 补齐高频同义词别名映射，保证模版求值无论用中文还是英文均可命中
+  if (!context.orderNo && targetOrderId) {
+    context.orderNo = targetOrderId;
+    context['美团单号'] = targetOrderId;
+  }
+  if (!context.otaOrderId && context.orderNo) {
+    context.otaOrderId = context.orderNo;
+  }
+
+  // 补齐门店与房型关键字段同义词
+  if (context.unitId) context['门店ID'] = context.unitId;
+  if (context.unitName) context['门店名称'] = context.unitName;
+  if (context.roomTypeId) context['房型ID'] = context.roomTypeId;
+  if (context.roomTypeId) context['房型商品ID'] = context.roomTypeId;
+  if (context.rateCode) context['价格方案'] = context.rateCode;
+
+  // 容错：若 guests 为空但 contacts 有值，补充住客姓名与手机
+  if (!context.guestName) {
+    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
+    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
+    const fallbackName = String(firstContact?.name || mergedData.guestName || mergedData.contactName || '').trim();
+    if (fallbackName) {
+      context.guestName = fallbackName;
+      context['入住人'] = fallbackName;
+    }
+  }
+
+  if (!context.guestPhone) {
+    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
+    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
+    const fallbackPhone = String(firstContact?.phone || mergedData.guestMobile || mergedData.phone || '').trim();
+    if (fallbackPhone) {
+      context.guestPhone = fallbackPhone;
+      context['联系电话'] = fallbackPhone;
+    }
+  }
+
+  if (!context.contactPhone) {
+    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
+    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
+    const fallbackPhone = String(firstContact?.phone || mergedData.guestMobile || mergedData.phone || '').trim();
+    if (fallbackPhone) {
+      context.contactPhone = fallbackPhone;
+      context['真实联系电话'] = fallbackPhone;
+    }
+  }
+
+  // 计算间夜数
+  if (!context.nights && context.checkInDate && context.checkOutDate) {
+    const diff = Math.round((Date.parse(String(context.checkOutDate)) - Date.parse(String(context.checkInDate))) / 86400000);
+    context.nights = diff > 0 ? diff : 1;
+    context['间夜数'] = context.nights;
+  }
+
+  // 标准化每日价格 (OrderProtocolPricing[])
+  let pricing: OrderProtocolPricing[] = [];
+  if (Array.isArray(mergedData.checkInDateModels) && mergedData.checkInDateModels.length > 0) {
+    pricing = (mergedData.checkInDateModels as Array<Record<string, unknown>>)
+      .map((m) => {
+        const item = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>;
+        const rawP = Number(item.pricePerRoom || 0);
+        const pYuan = rawP > 1000 ? Math.round((rawP / 100) * 100) / 100 : rawP;
+        const dStr = String(item.checkInDateString || item.checkInDate || '').slice(0, 10);
+        return { date: dStr, price: pYuan };
+      })
+      .filter((p) => Boolean(p.date));
+  }
+  if (pricing.length === 0 && context.checkInDate && context.checkOutDate) {
+    const nights = Math.max(1, Number(context.nights || 1));
+    const totalPrice = Number(context.floorPrice ?? context.salePrice ?? 0);
+    const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
+    const arrivalStr = String(context.checkInDate);
+    pricing = Array.from({ length: nights }, (_, i) => {
+      const d = new Date(`${arrivalStr}T00:00:00.000Z`);
+      d.setUTCDate(d.getUTCDate() + i);
+      return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+    });
+  }
+  context.pricing = pricing;
+  context['每日价格'] = pricing;
+
+  // 别名一致性
+  if (context.guestName) context['住客'] = context.guestName;
+  if (context.guestName) context['住客姓名'] = context.guestName;
+  if (context.roomName) context['roomTypeName'] = context.roomName;
+  if (context.floorPrice != null) context['底价'] = context.floorPrice;
+  if (context.checkInDate) context['arrival'] = context.checkInDate;
+  if (context.checkOutDate) context['departure'] = context.checkOutDate;
+  if (context.checkInDate && context.checkOutDate) {
+    context['入住离店日期'] = `${context.checkInDate}至${context.checkOutDate}`;
+    context['checkInOutDate'] = `${context.checkInDate}至${context.checkOutDate}`;
+  }
+
+  return new MeituanOrderProtocol(context, rawRecord);
+}

@@ -775,5 +775,6 @@ export type {
   CleanOrderContext,
   ProtocolDriftWarning,
   OrderProtocolPricing,
-  OrderProtocolData,
+  UnifiedOrderProtocol,
+  IChannelOrderProtocol,
 } from './template';
