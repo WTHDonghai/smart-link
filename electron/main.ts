@@ -423,7 +423,20 @@ export function registerDutyIpcHandlers(): void {
       coordinatorStatus: dutyOrchestrationEngine.getCoordinatorStatus(),
       station: dutyOrchestrationEngine.getStationIdentity(),
       logs: dutyOrchestrationEngine.getRecentDutyLogs(since || 0),
+      confirmImportEnabled: dutyOrchestrationEngine.isConfirmImportEnabled(),
     };
+  });
+
+  ipcMain.handle('duty:set-confirm-import-enabled', async (_event, enabled: boolean) => {
+    try {
+      dutyOrchestrationEngine.setConfirmImportEnabled(Boolean(enabled));
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   });
 
   ipcMain.handle('duty:sync-tokens', async (_event, tokens: PlatformAuthTokens) => {

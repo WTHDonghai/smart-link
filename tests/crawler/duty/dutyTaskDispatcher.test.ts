@@ -421,6 +421,48 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(runner.confirmImportCalls).toEqual([{ confirmNo: 'CFM-7788', otaOrderId: 'ORD-CFM' }]);
     });
 
+    it('should intercept and fail fast with CONFIRM_IMPORT_DISABLED when confirmImportEnabled is false in options', async () => {
+      const taskPayload = { confirmNo: 'CFM-7788', otaOrderId: 'ORD-CFM' };
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-disabled-1',
+        businessId: 'ORD-CFM',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner, undefined, { confirmImportEnabled: false });
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('CONFIRM_IMPORT_DISABLED');
+      expect(result.errorMessage).toContain('已关闭订单确认号回填开关');
+      expect(result.retryable).toBe(false);
+      expect(runner.confirmImportCalls).toHaveLength(0);
+    });
+
+    it('should intercept and fail fast when runner.confirmImportEnabled is false', async () => {
+      (runner as unknown as { confirmImportEnabled: boolean }).confirmImportEnabled = false;
+      const taskPayload = { confirmNo: 'CFM-7788', otaOrderId: 'ORD-CFM' };
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-disabled-2',
+        businessId: 'ORD-CFM',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('CONFIRM_IMPORT_DISABLED');
+      expect(result.errorMessage).toContain('已关闭订单确认号回填开关');
+      expect(result.retryable).toBe(false);
+      expect(runner.confirmImportCalls).toHaveLength(0);
+      delete (runner as unknown as { confirmImportEnabled?: boolean }).confirmImportEnabled;
+    });
+
     it('should return CONFIRM_IMPORT_FAILED when runner.confirmImport throws', async () => {
       runner.confirmImport = vi.fn().mockRejectedValue(new Error('回填确认号按钮不可见'));
 

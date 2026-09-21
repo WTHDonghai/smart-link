@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { injectStealthScripts, getStealthLaunchArgs } from './stealth';
-import { installVisualTracker } from './visualTracker';
+import { installVisualTracker, ensureVisualTrackerInjected } from './visualTracker';
 import { resolveChromeProfileDir } from './paths';
 import { PROCESS_ENV_KEYS } from '../types/env';
 
@@ -250,13 +250,14 @@ export async function createPersistentBrowserSession(
   const alivePages = pages.filter((p) => isPageAlive(p));
   const page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
 
-  // 若以可视化模式运行，将窗口置于前台激活
+  // 若以可视化模式运行，将窗口置于前台激活，并确保视觉指示器与接管渲染在当前页面就绪
   if (!isHeadless) {
     try {
       await page.bringToFront();
     } catch {
       // 忽略前台激活异常
     }
+    await ensureVisualTrackerInjected(page);
   }
 
   const session: BrowserSession = {

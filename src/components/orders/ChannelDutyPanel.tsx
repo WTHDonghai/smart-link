@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { toggleChannelDutyThunk, syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
+import {
+  toggleChannelDutyThunk,
+  syncDutyStatusThunk,
+  setConfirmImportEnabledThunk,
+} from '../../store/slices/orderGuardianSlice';
 import { fetchChannelMappingData } from '../../store/slices/channelSlice';
 import { setCurrentTab } from '../../store/slices/appSlice';
 import { ChannelBadge } from '../common/ChannelBadge';
@@ -45,6 +49,7 @@ export const ChannelDutyPanel: React.FC = () => {
   const channelDuty = useAppSelector((state) => state.orderGuardian.channelDuty);
   const coordinatorStatus = useAppSelector((state) => state.orderGuardian.coordinatorStatus);
   const station = useAppSelector((state) => state.orderGuardian.station);
+  const confirmImportEnabled = useAppSelector((state) => state.orderGuardian.confirmImportEnabled);
 
   // 从渠道切片获取接口返回的用户真实渠道映射数据
   const { mappings, isLoading: isMappingsLoading, error: mappingsError } = useAppSelector(
@@ -52,6 +57,7 @@ export const ChannelDutyPanel: React.FC = () => {
   );
 
   const [collapsed, setCollapsed] = useState(false);
+  const [isSwitchingConfirmImport, setIsSwitchingConfirmImport] = useState(false);
 
   // 纯函数动态计算当前用户已映射的渠道配置列表
   const mappedChannels = useMemo(() => deriveMappedDutyChannels(mappings), [mappings]);
@@ -88,6 +94,18 @@ export const ChannelDutyPanel: React.FC = () => {
     void dispatch(toggleChannelDutyThunk(channelCode));
   };
 
+  const handleToggleConfirmImport = async (targetEnabled: boolean) => {
+    if (isSwitchingConfirmImport) return;
+    setIsSwitchingConfirmImport(true);
+    try {
+      await dispatch(setConfirmImportEnabledThunk(targetEnabled)).unwrap();
+    } catch {
+      // 错误已由 thunk 处理并弹出 Toast 提示
+    } finally {
+      setIsSwitchingConfirmImport(false);
+    }
+  };
+
   const handleRefreshMappings = () => {
     void dispatch(fetchChannelMappingData());
   };
@@ -111,7 +129,42 @@ export const ChannelDutyPanel: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {/* 订单确认号回填开关（开发调试安全保护） */}
+          <div
+            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+              confirmImportEnabled
+                ? 'bg-slate-50 text-slate-700 border-slate-200'
+                : 'bg-amber-50 text-amber-800 border-amber-300'
+            }`}
+            title="开启后自动向渠道后台回填确认号并接单；关闭后拦截回填接单，防止开发调试误确认真实订单"
+          >
+            <span className="select-none font-medium">确认号回填</span>
+            <button
+              type="button"
+              role="switch"
+              disabled={isSwitchingConfirmImport}
+              aria-checked={confirmImportEnabled}
+              aria-label="控制是否回填订单确认号"
+              onClick={() => void handleToggleConfirmImport(!confirmImportEnabled)}
+              className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-1 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed ${
+                confirmImportEnabled
+                  ? 'bg-[#004ac6] focus:ring-[#004ac6]'
+                  : 'bg-slate-300 focus:ring-amber-500'
+              }`}
+            >
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                  confirmImportEnabled ? 'translate-x-3' : 'translate-x-0'
+                }`}
+              />
+            </button>
+            <span className={`text-[11px] font-medium select-none ${confirmImportEnabled ? 'text-emerald-700' : 'text-amber-800 font-semibold'}`}>
+              {confirmImportEnabled ? '开启' : '暂停'}
+            </span>
+          </div>
+
           {station?.stationId && (
             <span
               className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border rounded-full bg-slate-50 text-slate-700 border-slate-200"
@@ -140,6 +193,26 @@ export const ChannelDutyPanel: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* 调试保护警示横幅：当确认号回填开关关闭时始终显式提示 */}
+      {!confirmImportEnabled && (
+        <div className="mt-2.5 px-3 py-2 border border-amber-200 rounded-lg bg-amber-50/80 flex items-center justify-between gap-2 text-xs text-amber-800">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>
+              <strong>开发调试保护中</strong>：订单确认号回填已暂停。中台派发的回填接单任务将被安全拦截，不会在渠道后台确认真实订单。
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={isSwitchingConfirmImport}
+            onClick={() => void handleToggleConfirmImport(true)}
+            className="text-xs font-semibold text-[#004ac6] hover:underline cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            恢复开启
+          </button>
+        </div>
+      )}
 
       {/* 渠道自动化值守列表 */}
       {!collapsed && (

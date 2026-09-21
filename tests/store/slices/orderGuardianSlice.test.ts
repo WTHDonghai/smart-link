@@ -15,10 +15,23 @@ import orderGuardianReducer, {
   executeOrderActionThunk,
   toggleChannelDutyThunk,
   syncDutyStatusThunk,
+  setConfirmImportEnabledThunk,
   selectGuardianStats,
 } from '../../../src/store/slices/orderGuardianSlice';
 import type { ToolkitOrder, ToolkitOrderDraft } from '../../../src/types';
 import { showToast } from '../../../src/store/slices/appSlice';
+import { addLog } from '../../../src/store/slices/systemLogSlice';
+
+vi.mock('../../../src/services/dutyBridge', () => ({
+  setConfirmImportEnabled: vi.fn().mockResolvedValue(undefined),
+  startDutyByChannel: vi.fn().mockResolvedValue(undefined),
+  stopDutyByChannel: vi.fn().mockResolvedValue(undefined),
+  queryDutyStatus: vi.fn().mockResolvedValue({
+    channels: {},
+    coordinatorStatus: 'STOPPED',
+    confirmImportEnabled: true,
+  }),
+}));
 
 vi.mock('../../../src/services/toolkitOrderApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/services/toolkitOrderApi')>();
@@ -325,6 +338,123 @@ describe('orderGuardianSlice reducer', () => {
       expect(dispatch).toHaveBeenCalledWith(
         showToast({ type: 'success', title: '订单 MT1001 导入请求已提交 (PMS单号: PMS_9999)' })
       );
+    });
+
+    it('setConfirmImportEnabledThunk(false) calls dutyBridge, shows warning toast, adds audit log and updates state', async () => {
+      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const dispatch = vi.fn();
+      const getState = vi.fn();
+
+      const result = await setConfirmImportEnabledThunk(false)(dispatch, getState, undefined);
+      expect(result.payload).toBe(false);
+      expect(setConfirmImportEnabled).toHaveBeenCalledWith(false);
+
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            type: 'warning',
+            title: '已暂停订单确认号回填',
+          }),
+        })
+      );
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: addLog.type,
+          payload: expect.objectContaining({
+            level: 'WARN',
+            module: 'DUTY_TASK',
+            message: expect.stringContaining('已暂停订单确认号回填功能'),
+          }),
+        })
+      );
+
+      // Reducer state test
+      const initialState = orderGuardianReducer(undefined, { type: '@@INIT' });
+      expect(initialState.confirmImportEnabled).toBe(true);
+
+      const nextState = orderGuardianReducer(initialState, setConfirmImportEnabledThunk.fulfilled(false, 'req-1', false));
+      expect(nextState.confirmImportEnabled).toBe(false);
+
+      // 验证 syncDutyStatusThunk.fulfilled 正确同步 confirmImportEnabled 状态
+      const syncedState = orderGuardianReducer(
+        nextState,
+        syncDutyStatusThunk.fulfilled(
+          {
+            channels: {},
+            coordinatorStatus: 'IDLE',
+            confirmImportEnabled: true,
+          },
+          'sync-req-1'
+        )
+      );
+      expect(syncedState.confirmImportEnabled).toBe(true);
+    });
+
+    it('setConfirmImportEnabledThunk(true) calls dutyBridge, shows success toast and updates state', async () => {
+      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const dispatch = vi.fn();
+      const getState = vi.fn();
+
+      const result = await setConfirmImportEnabledThunk(true)(dispatch, getState, undefined);
+      expect(result.payload).toBe(true);
+      expect(setConfirmImportEnabled).toHaveBeenCalledWith(true);
+
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            type: 'success',
+            title: '已开启订单确认号回填',
+          }),
+        })
+      );
+
+      const stateWithFalse = {
+        ...orderGuardianReducer(undefined, { type: '@@INIT' }),
+        confirmImportEnabled: false,
+      };
+      const nextState = orderGuardianReducer(stateWithFalse, setConfirmImportEnabledThunk.fulfilled(true, 'req-2', true));
+      expect(nextState.confirmImportEnabled).toBe(true);
+    });
+
+    it('setConfirmImportEnabledThunk does not write to localStorage if IPC fails (Fail-Fast)', async () => {
+      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const { CONFIRM_IMPORT_STORAGE_KEY } = await import('../../../src/store/slices/orderGuardianSlice');
+      vi.mocked(setConfirmImportEnabled).mockRejectedValueOnce(new Error('IPC_DISCONNECTED'));
+
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CONFIRM_IMPORT_STORAGE_KEY, 'true');
+      }
+
+      const dispatch = vi.fn();
+      const getState = vi.fn();
+
+      const result = await setConfirmImportEnabledThunk(false)(dispatch, getState, undefined);
+      expect(result.type).toBe(setConfirmImportEnabledThunk.rejected.type);
+      expect(result.payload).toBe('IPC_DISCONNECTED');
+
+      // 验证 localStorage 未被脏写入 false
+      if (typeof localStorage !== 'undefined') {
+        expect(localStorage.getItem(CONFIRM_IMPORT_STORAGE_KEY)).toBe('true');
+      }
+    });
+
+    it('ensureInitialConfirmImportSynced deduplicates concurrent calls and logs warning on failure', async () => {
+      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const {
+        resetInitialConfirmImportSyncForTesting,
+        ensureInitialConfirmImportSynced,
+      } = await import('../../../src/store/slices/orderGuardianSlice');
+
+      resetInitialConfirmImportSyncForTesting();
+      vi.mocked(setConfirmImportEnabled).mockClear();
+
+      // 并发触发两个同步，应复用同一个底层 Promise
+      await Promise.all([
+        ensureInitialConfirmImportSynced(),
+        ensureInitialConfirmImportSynced(),
+      ]);
+
+      expect(setConfirmImportEnabled).toHaveBeenCalledTimes(1);
     });
   });
 });

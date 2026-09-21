@@ -9,7 +9,9 @@ vi.mock('../../../src/services/dutyBridge', () => ({
   queryDutyStatus: vi.fn().mockResolvedValue({
     coordinatorStatus: 'STOPPED',
     channels: {},
+    confirmImportEnabled: true,
   }),
+  setConfirmImportEnabled: vi.fn().mockResolvedValue(undefined),
   startDutyByChannel: vi.fn(),
   stopDutyByChannel: vi.fn(),
 }));
@@ -73,5 +75,38 @@ describe('ChannelDutyPanel 渠道自动化值守面板', () => {
     expect(html).toContain('抖音新订/退款订单业务协同值守');
     expect(html).toContain('开始值守');
     expect(html).not.toContain('美团酒店');
+  });
+
+  it('默认渲染「确认号回填」开关为开启态，且不显示暂停保护横幅', () => {
+    const store = createAppStore();
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChannelDutyPanel />
+      </Provider>
+    );
+
+    expect(html).toContain('确认号回填');
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('开启');
+    expect(html).not.toContain('开发调试保护中');
+  });
+
+  it('当 confirmImportEnabled 为 false 时，开关显示暂停态并展示显式的调试安全保护横幅', async () => {
+    const store = createAppStore();
+    const { setConfirmImportEnabledThunk } = await import('../../../src/store/slices/orderGuardianSlice');
+    store.dispatch(setConfirmImportEnabledThunk.fulfilled(false, 'req-switch', false));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChannelDutyPanel />
+      </Provider>
+    );
+
+    expect(html).toContain('确认号回填');
+    expect(html).toContain('aria-checked="false"');
+    expect(html).toContain('暂停');
+    expect(html).toContain('开发调试保护中');
+    expect(html).toContain('订单确认号回填已暂停');
+    expect(html).toContain('恢复开启');
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk } from '../../../src/crawler/duty/meituanDutyRunner';
+import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk, dismissMeituanNoticeModals } from '../../../src/crawler/duty/meituanDutyRunner';
 import {
   extractMeituanOrdersFromPayload,
   extractMeituanOrderDetailFromPayload,
@@ -13,6 +13,11 @@ import {
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import { APP_ENV_KEYS } from '../../../src/types/env';
 import type { DutyClaimedTask } from '../../../src/types';
+import { createPersistentBrowserSession } from '../../../src/crawler/browserManager';
+
+vi.mock('../../../src/crawler/browserManager', () => ({
+  createPersistentBrowserSession: vi.fn(),
+}));
 
 describe('meituanDutyRunner', () => {
   beforeEach(() => {
@@ -487,6 +492,170 @@ describe('meituanDutyRunner', () => {
     });
   });
 
+  describe('dismissMeituanNoticeModals', () => {
+    it('should return false for null or undefined page', async () => {
+      expect(await dismissMeituanNoticeModals(null as unknown as Parameters<typeof dismissMeituanNoticeModals>[0])).toBe(false);
+      expect(await dismissMeituanNoticeModals(undefined as unknown as Parameters<typeof dismissMeituanNoticeModals>[0])).toBe(false);
+    });
+
+    it('should return false when no modal is visible', async () => {
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockResolvedValue(false),
+      };
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+      expect(await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0])).toBe(false);
+    });
+
+    it('should detect and click dismiss button for notice modal such as 联系客人 and wait for hidden', async () => {
+      let modalVisible = true;
+      const clickMock = vi.fn().mockImplementation(async () => {
+        modalVisible = false;
+      });
+      const waitForMock = vi.fn().mockResolvedValue(undefined);
+
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockImplementation(async () => modalVisible),
+        click: clickMock,
+      };
+
+      const mockTitle = {
+        innerText: vi.fn().mockResolvedValue('联系客人'),
+      };
+
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockImplementation(async () => modalVisible),
+        innerText: vi.fn().mockResolvedValue('联系客人\n请拨打手机号15680403734转1109（虚拟号码）\n您的通话可能会被录音\n我知道了'),
+        locator: vi.fn((sel: string) => {
+          if (sel.includes('.mtd-modal-title')) {
+            return mockTitle;
+          }
+          return mockDismissBtn;
+        }),
+        waitFor: waitForMock,
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(true);
+      expect(clickMock).toHaveBeenCalledTimes(1);
+      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 1500 });
+    });
+
+    it('should NOT dismiss modal when it contains 酒店确认号 (core business red line)', async () => {
+      const clickMock = vi.fn().mockResolvedValue(undefined);
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickMock,
+      };
+
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockResolvedValue(true),
+        innerText: vi.fn().mockResolvedValue('接单确认\n酒店确认号：\n确认接受'),
+        locator: vi.fn().mockReturnValue(mockDismissBtn),
+        waitFor: vi.fn(),
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(false);
+      expect(clickMock).not.toHaveBeenCalled();
+    });
+
+    it('should NOT dismiss modal when it contains risk verification keywords (risk red line)', async () => {
+      const clickMock = vi.fn().mockResolvedValue(undefined);
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickMock,
+      };
+
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockResolvedValue(true),
+        innerText: vi.fn().mockResolvedValue('安全验证\n为了您的账号安全，请完成滑动验证码'),
+        locator: vi.fn().mockReturnValue(mockDismissBtn),
+        waitFor: vi.fn(),
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(false);
+      expect(clickMock).not.toHaveBeenCalled();
+    });
+
+    it('should NOT dismiss modal when it contains dangerous cancellation keywords (danger red line)', async () => {
+      const clickMock = vi.fn().mockResolvedValue(undefined);
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickMock,
+      };
+
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockResolvedValue(true),
+        innerText: vi.fn().mockResolvedValue('提示\n确认取消该笔订单吗？取消后不可恢复'),
+        locator: vi.fn().mockReturnValue(mockDismissBtn),
+        waitFor: vi.fn(),
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(false);
+      expect(clickMock).not.toHaveBeenCalled();
+    });
+
+    it('should return false when dismiss button is not visible', async () => {
+      const clickMock = vi.fn().mockResolvedValue(undefined);
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockResolvedValue(false),
+        click: clickMock,
+      };
+
+      const mockModal = {
+        first: () => mockModal,
+        isVisible: vi.fn().mockResolvedValue(true),
+        innerText: vi.fn().mockResolvedValue('纯展示信息公告'),
+        locator: vi.fn().mockReturnValue(mockDismissBtn),
+        waitFor: vi.fn(),
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModal),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(false);
+      expect(clickMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('MeituanDutyRunner lifecycle and page operations', () => {
     let runner: MeituanDutyRunner;
 
@@ -554,6 +723,117 @@ describe('meituanDutyRunner', () => {
       await waiting;
 
       expect(contextClose).not.toHaveBeenCalled();
+    });
+
+    describe('waitForPageReady and start initialization', () => {
+      it('waitForPageReady should wait for core container, perform settling delay and succeed', async () => {
+        const waitForMock = vi.fn().mockResolvedValue(undefined);
+        const mockLocator = {
+          first: () => mockLocator,
+          waitFor: waitForMock,
+        };
+        const mockPage = {
+          url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+          locator: vi.fn().mockReturnValue(mockLocator),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        };
+
+        await runner.waitForPageReady(mockPage as unknown as Parameters<typeof runner.waitForPageReady>[0], { timeout: 10000 });
+
+        expect(waitForMock).toHaveBeenCalledWith({ state: 'attached', timeout: 10000 });
+        expect(mockPage.waitForTimeout).toHaveBeenCalled();
+      });
+
+      it('waitForPageReady should fail fast with RISK_VERIFICATION_REQUIRED if page contains risk verification', async () => {
+        const mockPage = {
+          url: vi.fn().mockReturnValue('https://verify.meituan.com/v2/captcha'),
+          locator: vi.fn(),
+        };
+
+        await expect(
+          runner.waitForPageReady(mockPage as unknown as Parameters<typeof runner.waitForPageReady>[0])
+        ).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
+      });
+
+      it('waitForPageReady should throw TARGET_PAGE_NOT_READY when core container wait times out', async () => {
+        const mockLocator = {
+          first: () => mockLocator,
+          waitFor: vi.fn().mockRejectedValue(new Error('timeout 15000ms waiting for selector')),
+        };
+        const mockPage = {
+          url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+          locator: vi.fn().mockReturnValue(mockLocator),
+        };
+
+        await expect(
+          runner.waitForPageReady(mockPage as unknown as Parameters<typeof runner.waitForPageReady>[0], { timeout: 15000 })
+        ).rejects.toThrow('TARGET_PAGE_NOT_READY');
+      });
+
+      it('waitForPageReady should throw RISK_VERIFICATION_REQUIRED if container wait fails and risk is detected', async () => {
+        let callCount = 0;
+        const mockLocator = {
+          first: () => mockLocator,
+          waitFor: vi.fn().mockRejectedValue(new Error('timeout')),
+        };
+        const mockPage = {
+          url: vi.fn().mockImplementation(() => {
+            callCount++;
+            return callCount > 1 ? 'https://verify.meituan.com/v2/captcha' : 'https://eb.meituan.com/order';
+          }),
+          locator: vi.fn().mockReturnValue(mockLocator),
+        };
+
+        await expect(
+          runner.waitForPageReady(mockPage as unknown as Parameters<typeof runner.waitForPageReady>[0])
+        ).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
+      });
+
+      it('start should navigate to targetUrl, await waitForPageReady, and set running to true', async () => {
+        const mockPage = {
+          url: vi.fn().mockReturnValue('https://eb.meituan.com/other'),
+          goto: vi.fn().mockResolvedValue(undefined),
+          bringToFront: vi.fn().mockResolvedValue(undefined),
+        };
+        const mockSession = {
+          page: mockPage,
+          context: {},
+          close: vi.fn(),
+        };
+
+        (createPersistentBrowserSession as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(mockSession);
+
+        const readySpy = vi.spyOn(runner, 'waitForPageReady').mockResolvedValue(undefined);
+
+        await runner.start();
+
+        expect(mockPage.goto).toHaveBeenCalledWith(runner.targetUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 45000,
+        });
+        expect(readySpy).toHaveBeenCalledWith(mockPage);
+        expect(runner.isRunning()).toBe(true);
+      });
+
+      it('start should remain not running if waitForPageReady fails', async () => {
+        const mockPage = {
+          url: vi.fn().mockReturnValue('https://eb.meituan.com/other'),
+          goto: vi.fn().mockResolvedValue(undefined),
+          bringToFront: vi.fn().mockResolvedValue(undefined),
+        };
+        const mockSession = {
+          page: mockPage,
+          context: {},
+          close: vi.fn(),
+        };
+
+        (createPersistentBrowserSession as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(mockSession);
+
+        vi.spyOn(runner, 'waitForPageReady').mockRejectedValue(new Error('Page container timeout'));
+
+        await expect(runner.start()).rejects.toThrow('Page container timeout');
+        expect(runner.isRunning()).toBe(false);
+      });
     });
 
     it('collectUnhandledOrders should refresh order list and return order summaries from single-shot response', async () => {
@@ -1810,6 +2090,39 @@ describe('meituanDutyRunner', () => {
       expect(execResult.result?.confirmed).toBe(true);
       expect(execResult.result?.confirmNo).toBe('CFM-9988');
       expect(confirmSpy).toHaveBeenCalledWith('CFM-9988', 'MT-IMPORT-OK');
+    });
+
+    it('should fail fast and throw DutyExecutionError when confirmImport is called while confirmImportEnabled is false', async () => {
+      runner.setConfirmImportEnabled(false);
+      expect(runner.confirmImportEnabled).toBe(false);
+
+      await expect(runner.confirmImport('CFM-001', 'MT-ORD-001')).rejects.toThrow('已关闭订单确认号回填开关');
+
+      runner.setConfirmImportEnabled(true);
+    });
+
+    it('should intercept OTA_CONFIRM_IMPORT via executeTask when confirmImportEnabled is false', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      runner.setConfirmImportEnabled(false);
+
+      const taskPayload = { confirmNo: 'CFM-9988', otaOrderId: 'MT-IMPORT-OK' };
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-disabled-runner',
+        businessId: 'MT-IMPORT-OK',
+        businessType: 'ORDER',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-01',
+        leaseToken: 'lt-01',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const execResult = await runner.executeTask(task);
+      expect(execResult.status).toBe('FAILED');
+      expect(execResult.errorCode).toBe('CONFIRM_IMPORT_DISABLED');
+      expect(execResult.errorMessage).toContain('已关闭订单确认号回填开关');
+      expect(execResult.retryable).toBe(false);
+
+      runner.setConfirmImportEnabled(true);
     });
 
     it('should execute OTA_CONFIRM_CANCEL and acknowledge cancellation', async () => {

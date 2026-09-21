@@ -71,11 +71,19 @@ export async function stopAllDuty(): Promise<void> {
   }
 }
 
+export async function setConfirmImportEnabled(enabled: boolean): Promise<void> {
+  const result = await getDutyApi().setConfirmImportEnabled(enabled);
+  if (!result.success) {
+    throw new Error(result.error || '切换确认号回填开关失败');
+  }
+}
+
 export async function queryDutyStatus(since?: number): Promise<{
   channels: Record<string, ChannelDutyInfo>;
   coordinatorStatus: DutyCoordinatorStatus;
   station?: StationIdentity | null;
   logs?: SystemLogEntry[];
+  confirmImportEnabled?: boolean;
 }> {
   return getDutyApi().getStatus(since);
 }

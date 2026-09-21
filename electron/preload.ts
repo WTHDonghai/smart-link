@@ -45,6 +45,9 @@ const dutyApi: DutyBridgeApi = {
   getStatus: (since?: number) => {
     return ipcRenderer.invoke('duty:status', since);
   },
+  setConfirmImportEnabled: (enabled: boolean) => {
+    return ipcRenderer.invoke('duty:set-confirm-import-enabled', enabled);
+  },
   syncTokens: (tokens: PlatformAuthTokens) => {
     return ipcRenderer.invoke('duty:sync-tokens', tokens);
   },

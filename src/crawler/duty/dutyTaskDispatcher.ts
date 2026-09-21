@@ -139,10 +139,15 @@ function createMockChannelOrderProtocol(
   };
 }
 
+export interface DutyTaskDispatcherOptions {
+  confirmImportEnabled?: boolean;
+}
+
 export async function dispatchDutyTask(
   task: DutyClaimedTask,
   runner: ChannelDutyRunner,
-  onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
+  onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void,
+  options?: DutyTaskDispatcherOptions
 ): Promise<DutyTaskExecutionResult> {
   if (!runner.isRunning()) {
     return {
@@ -380,6 +385,18 @@ export async function dispatchDutyTask(
     }
 
     case 'OTA_CONFIRM_IMPORT': {
+      const runnerConfirmEnabled = runner.confirmImportEnabled;
+      const isEnabled = options?.confirmImportEnabled ?? runnerConfirmEnabled ?? true;
+
+      if (!isEnabled) {
+        return {
+          status: 'FAILED',
+          errorCode: 'CONFIRM_IMPORT_DISABLED',
+          errorMessage: '已关闭订单确认号回填开关，系统已拦截确认号回填与接单操作（开发调试保护模式）',
+          retryable: false,
+        };
+      }
+
       const confirmNo = String(context.payload.confirmNo || '').trim();
       const otaOrderId = context.orderNo || '';
 

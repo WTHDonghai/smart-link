@@ -20,6 +20,11 @@ class MockChannelRunner implements ChannelDutyRunner {
   public stopCalls = 0;
   public executedTasks: DutyClaimedTask[] = [];
   public executeResult: DutyTaskExecutionResult = { status: 'SUCCEEDED', result: { test: true } };
+  public confirmImportEnabled = true;
+
+  public setConfirmImportEnabled(enabled: boolean): void {
+    this.confirmImportEnabled = enabled;
+  }
 
   constructor(channelCode = 'TEST_CHANNEL') {
     this.channelCode = channelCode;
@@ -68,7 +73,7 @@ describe('dutyOrchestrationEngine', () => {
   let mockRunner: MockChannelRunner;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
     engine = new DutyOrchestrationEngine();
     mockRunner = new MockChannelRunner('MOCK_OTA');
     engine.registerRunner(mockRunner);
@@ -616,6 +621,70 @@ describe('dutyOrchestrationEngine', () => {
           ],
         })
       );
+    });
+
+    it('支持通过 setConfirmImportEnabled 切换开关并同步至已注册的渠道执行器', () => {
+      expect(engine.isConfirmImportEnabled()).toBe(true);
+      engine.setConfirmImportEnabled(false);
+      expect(engine.isConfirmImportEnabled()).toBe(false);
+      expect(mockRunner.confirmImportEnabled).toBe(false);
+
+      engine.setConfirmImportEnabled(true);
+      expect(engine.isConfirmImportEnabled()).toBe(true);
+      expect(mockRunner.confirmImportEnabled).toBe(true);
+    });
+
+    it('当关闭确认号回填开关时，拦截 OTA_CONFIRM_IMPORT 任务并提交 CONFIRM_IMPORT_DISABLED 且 retryable=false，不调用执行器', async () => {
+      engine.setConfirmImportEnabled(false);
+
+      const task: DutyClaimedTask = {
+        id: 'task-cfm-intercepted',
+        businessId: 'ORD-CFM-999',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-cfm',
+        data: Buffer.from(JSON.stringify({ confirmNo: 'CFM-123456', otaOrderId: 'ORD-CFM-999', channelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      mockRunner.executeTask = vi.fn().mockResolvedValue({
+        status: 'SUCCEEDED',
+        result: { confirmed: true },
+      });
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executeTask).not.toHaveBeenCalled();
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-cfm-intercepted',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('已关闭订单确认号回填开关'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'CONFIRM_IMPORT_DISABLED' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+
+      const recentLogs = engine.getRecentDutyLogs();
+      const interceptLog = recentLogs.find((l) => l.event === 'DUTY_TASK_CONFIRM_IMPORT_INTERCEPTED');
+      expect(interceptLog).toBeDefined();
+      expect(interceptLog?.level).toBe('WARN');
+      expect(interceptLog?.taskStatus).toBe('FAILED');
+
+      // 还原开关状态
+      engine.setConfirmImportEnabled(true);
     });
 
     it('当执行遇到风控拦截 (RISK_VERIFICATION_REQUIRED) 时，向中台提交 retryable=false 并记录 DUTY_TASK_RISK_CONTROL_INTERCEPTED 日志', async () => {

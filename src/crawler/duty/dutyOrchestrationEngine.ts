@@ -109,6 +109,7 @@ export class DutyOrchestrationEngine {
   private recentLogs: SystemLogEntry[] = [];
   private logListeners = new Set<(entry: SystemLogEntry) => void>();
   private readonly MAX_LOGS = 200;
+  private confirmImportEnabled = process.env.CONFIRM_IMPORT_ENABLED !== 'false';
 
   constructor() {
     // 注册内置渠道执行器（首期美团酒店）
@@ -120,7 +121,23 @@ export class DutyOrchestrationEngine {
     });
   }
 
+  public setConfirmImportEnabled(enabled: boolean): void {
+    this.confirmImportEnabled = Boolean(enabled);
+    for (const runner of this.runners.values()) {
+      if (typeof runner.setConfirmImportEnabled === 'function') {
+        runner.setConfirmImportEnabled(this.confirmImportEnabled);
+      }
+    }
+  }
+
+  public isConfirmImportEnabled(): boolean {
+    return this.confirmImportEnabled;
+  }
+
   public registerRunner(runner: ChannelDutyRunner): void {
+    if (typeof runner.setConfirmImportEnabled === 'function') {
+      runner.setConfirmImportEnabled(this.confirmImportEnabled);
+    }
     this.runners.set(runner.channelCode.toUpperCase(), runner);
     this.channelStates.set(runner.channelCode.toUpperCase(), {
       channelCode: runner.channelCode.toUpperCase(),
@@ -669,6 +686,33 @@ export class DutyOrchestrationEngine {
           }`,
         });
 
+        // 开发调试保护：若关闭确认号回填开关，拦截 OTA_CONFIRM_IMPORT 任务，避免误在渠道后台接单确认
+        if (task.msgType === 'OTA_CONFIRM_IMPORT' && !this.confirmImportEnabled) {
+          const failureMsg = '已关闭订单确认号回填开关，系统已拦截确认号回填与接单操作（开发调试保护模式）';
+          const interceptPayload = buildTaskResultPayload(task, identity.stationId, {
+            status: 'FAIL',
+            errorCode: 'CONFIRM_IMPORT_DISABLED',
+            errorMessage: failureMsg,
+            retryable: false,
+          });
+
+          taskLogger.log({
+            level: 'WARN',
+            event: 'DUTY_TASK_CONFIRM_IMPORT_INTERCEPTED',
+            taskActionStage: 'result',
+            msgType: task.msgType,
+            taskId: task.id,
+            taskStatus: 'FAILED',
+            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+            apiMethod: 'PUT',
+            apiParams: interceptPayload,
+            message: `[回填拦截] ${failureMsg} (ID: ${task.id})`,
+            details: failureMsg,
+          });
+          await submitDutyTaskResult(task.id, interceptPayload);
+          continue;
+        }
+
         const runner = this.runners.get(targetChannel);
         if (!runner || !runner.isRunning()) {
           const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
@@ -734,8 +778,11 @@ export class DutyOrchestrationEngine {
             ? await runner.executeTask(task, (entry) =>
                 taskLogger.log(entry)
               )
-            : await dispatchDutyTask(task, runner, (entry) =>
-                taskLogger.log(entry)
+            : await dispatchDutyTask(
+                task,
+                runner,
+                (entry) => taskLogger.log(entry),
+                { confirmImportEnabled: this.confirmImportEnabled }
               );
         const durationMs = Date.now() - startTime;
 

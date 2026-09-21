@@ -31,7 +31,9 @@ export interface DutyBridgeApi {
     coordinatorStatus: DutyCoordinatorStatus;
     station?: StationIdentity | null;
     logs?: SystemLogEntry[];
+    confirmImportEnabled?: boolean;
   }>;
+  setConfirmImportEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
   syncTokens(tokens: PlatformAuthTokens): Promise<{ success: boolean; error?: string }>;
   clearTokens(): Promise<{ success: boolean; error?: string }>;
   takePendingLogs(): Promise<SystemLogEntry[]>;

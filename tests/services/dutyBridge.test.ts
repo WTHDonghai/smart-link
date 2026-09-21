@@ -3,6 +3,7 @@ import {
   clearDutyTokens,
   takePendingMainLogs,
   queryDutyStatus,
+  setConfirmImportEnabled,
   startDutyByChannel,
   stopAllDuty,
   stopDutyByChannel,
@@ -29,7 +30,8 @@ function installDutyApi() {
     startDuty: vi.fn().mockResolvedValue({ success: true }),
     stopDuty: vi.fn().mockResolvedValue({ success: true }),
     stopAllDuty: vi.fn().mockResolvedValue({ success: true }),
-    getStatus: vi.fn().mockResolvedValue({ channels: {}, coordinatorStatus: 'IDLE', station: null, logs: [] }),
+    getStatus: vi.fn().mockResolvedValue({ channels: {}, coordinatorStatus: 'IDLE', station: null, logs: [], confirmImportEnabled: true }),
+    setConfirmImportEnabled: vi.fn().mockResolvedValue({ success: true }),
     syncTokens: vi.fn().mockResolvedValue({ success: true }),
     clearTokens: vi.fn().mockResolvedValue({ success: true }),
     takePendingLogs: vi.fn().mockResolvedValue([]),
@@ -64,6 +66,7 @@ describe('dutyBridge', () => {
 
     await stopDutyByChannel('meituan');
     await stopAllDuty();
+    await setConfirmImportEnabled(false);
     await queryDutyStatus(123);
     await syncDutyTokens(tokens);
     await clearDutyTokens();
@@ -71,9 +74,17 @@ describe('dutyBridge', () => {
 
     expect(duty.stopDuty).toHaveBeenCalledWith('MEITUAN');
     expect(duty.stopAllDuty).toHaveBeenCalledTimes(1);
+    expect(duty.setConfirmImportEnabled).toHaveBeenCalledWith(false);
     expect(duty.getStatus).toHaveBeenCalledWith(123);
     expect(duty.syncTokens).toHaveBeenCalledWith(tokens);
     expect(duty.clearTokens).toHaveBeenCalledTimes(1);
     expect(duty.takePendingLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws error when setConfirmImportEnabled fails', async () => {
+    const duty = installDutyApi();
+    duty.setConfirmImportEnabled.mockResolvedValueOnce({ success: false, error: 'IPC通信异常' });
+
+    await expect(setConfirmImportEnabled(true)).rejects.toThrow('IPC通信异常');
   });
 });

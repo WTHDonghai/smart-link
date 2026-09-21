@@ -71,6 +71,10 @@ export interface ChannelDutyRunner {
   /** 页面操作：在渠道后台确认取消（我已知晓） */
   confirmCancel?(otaOrderId: string): Promise<void>;
 
+  /** 可选：是否允许回填订单确认号（安全控制开关） */
+  confirmImportEnabled?: boolean;
+  setConfirmImportEnabled?(enabled: boolean): void;
+
   /** 兼容层：支持直接执行任务 */
   executeTask?(
     task: DutyClaimedTask,

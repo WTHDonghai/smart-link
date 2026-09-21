@@ -23,10 +23,11 @@ describe('stationIdentity', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'station-test-'));
     cacheFilePath = path.join(tempDir, 'platform-station.json');
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

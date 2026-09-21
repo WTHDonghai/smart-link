@@ -1,4 +1,4 @@
-import type { Page, Request, Response, Frame, Locator } from 'playwright';
+import type { Page, Request, Response, Frame, Locator, FrameLocator } from 'playwright';
 import { createPersistentBrowserSession, type BrowserSession } from '../browserManager';
 import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker';
 import type { DutyClaimedTask, SystemLogEntry } from '../../types';
@@ -96,6 +96,89 @@ export async function humanDelay(page: Page, minMs = 3000, maxMs = 8000): Promis
   }
 }
 
+/**
+ * 自动检测并安全关闭美团后台提示性通知弹窗（如“联系客人”虚拟号说明、商家规则须知、系统公告等）
+ * 严格避让核心业务弹窗（接单确认号填报）与安全风控验证弹窗。
+ *
+ * @param page Playwright Page
+ * @param preferredScope 优先探查的作用域（通常为 iframe scope 或顶层 page）
+ * @returns 是否成功关闭了至少一个提示弹窗
+ */
+export async function dismissMeituanNoticeModals(
+  page: Page,
+  preferredScope?: Page | FrameLocator
+): Promise<boolean> {
+  if (!page) return false;
+
+  const scopes: (Page | FrameLocator)[] = [];
+  if (preferredScope) {
+    scopes.push(preferredScope);
+  }
+  if (!scopes.includes(page)) {
+    scopes.push(page);
+  }
+
+  let dismissedAny = false;
+
+  for (const scope of scopes) {
+    if (!scope || typeof scope.locator !== 'function') continue;
+
+    // 支持连续关闭可能叠加的多层通知公告弹窗（最多尝试 3 次）
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const modal = scope.locator('.mtd-modal-wrapper:not([style*="display: none"]) .mtd-modal, .mtd-modal').first();
+        const isVisible = await modal.isVisible({ timeout: 150 }).catch(() => false);
+        if (!isVisible) {
+          break;
+        }
+
+        const modalText = await modal.innerText().catch(() => '');
+
+        // 核心安全红线 1：严禁关闭接单确认号弹窗与业务输入弹窗
+        if (modalText.includes('酒店确认号') || modalText.includes('确认接受')) {
+          break;
+        }
+
+        // 核心安全红线 2：严禁关闭安全风控/滑块弹窗（由专用风控嗅探器接管）
+        if (/安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|yoda|captcha|secsdk/i.test(modalText)) {
+          break;
+        }
+
+        // 核心安全红线 3：严禁关闭危险业务决策弹窗（取消订单/拒绝接单/退款审核等）
+        if (/确认取消|确认拒绝|拒绝接单|退款审核/i.test(modalText)) {
+          break;
+        }
+
+        // 寻找符合白名单的知晓/关闭按钮
+        const dismissBtn = modal.locator(
+          'button:has-text("我知道了"), ' +
+          'button:has-text("知道了"), ' +
+          'button:has-text("我已阅读"), ' +
+          'button:has-text("关闭"), ' +
+          '.mtd-modal-close'
+        ).first();
+
+        const btnVisible = await dismissBtn.isVisible({ timeout: 200 }).catch(() => false);
+        if (!btnVisible) {
+          break;
+        }
+
+        const title = (await modal.locator('.mtd-modal-title').innerText().catch(() => '')) || '通知公告';
+        await updateVisualTrackerStatus(page, `🛡️ 检测到提示弹窗「${title.trim()}」，已自动关闭以恢复操作`, 'action');
+
+        await dismissBtn.click({ timeout: 1000 }).catch(() => {});
+        await modal.waitFor({ state: 'hidden', timeout: 1500 }).catch(() => {});
+        dismissedAny = true;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  return dismissedAny;
+}
+
+
 
 export class MeituanDutyRunner implements ChannelDutyRunner {
   public readonly channelCode = 'MEITUAN';
@@ -103,6 +186,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   private running = false;
   private explicitTargetUrl?: string;
   private lastListRefreshTime = 0;
+  public confirmImportEnabled = true;
 
   // 在途请求合并门禁 (In-flight Promise Coalescing)
   private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
@@ -116,6 +200,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     }
   }
 
+  public setConfirmImportEnabled(enabled: boolean): void {
+    this.confirmImportEnabled = Boolean(enabled);
+  }
+
   public get targetUrl(): string {
     return this.explicitTargetUrl || getMeituanOrderUrl();
   }
@@ -125,6 +213,13 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       return page.frameLocator('#me-iframe-container');
     }
     return page;
+  }
+
+  /**
+   * 自动探测并清理非业务通知类阻挡弹窗（如“联系客人”等）
+   */
+  private async dismissNoticeModals(page: Page): Promise<boolean> {
+    return dismissMeituanNoticeModals(page, this.getOrderScope(page));
   }
 
   public isRunning(): boolean {
@@ -166,6 +261,59 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     return this.session.page;
   }
 
+  /**
+   * 页面就绪门禁：等待商户后台骨架与核心容器挂载，并执行冷启动沉淀缓冲 (3~8 秒)
+   */
+  public async waitForPageReady(page: Page, options?: { timeout?: number }): Promise<void> {
+    const timeout = options?.timeout ?? 15000;
+
+    if (await checkMeituanPageRisk(page)) {
+      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+      throw new DutyExecutionError(
+        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
+        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
+        false
+      );
+    }
+
+    await updateVisualTrackerStatus(page, '⏳ 正在等待商户后台骨架与元素加载就绪...', 'action');
+
+    const scope = this.getOrderScope(page);
+    // 探测商户后台 iframe、Tab 容器或主列表骨架
+    const coreContainer = scope.locator(
+      '#me-iframe-container, .tab-container, .mtd-tabs-item, .mtd-list-item, .detail-container, body'
+    ).first();
+
+    try {
+      if (typeof coreContainer?.waitFor === 'function') {
+        await coreContainer.waitFor({ state: 'attached', timeout });
+      }
+    } catch (error) {
+      if (await checkMeituanPageRisk(page)) {
+        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+        throw new DutyExecutionError(
+          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
+          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
+          false
+        );
+      }
+      throw new DutyExecutionError(
+        `美团商家后台页面元素加载超时 (${timeout}ms): ${error instanceof Error ? error.message : String(error)}`,
+        MeituanDutyErrorCode.TARGET_PAGE_NOT_READY,
+        true
+      );
+    }
+
+    // 冷启动沉淀缓冲 (Settling Delay)：3 秒到 8 秒拟人随机缓冲，确保 Vue/React 事件完全 Binding
+    await updateVisualTrackerStatus(page, '⏳ 页面骨架已呈现，正在等待前端事件与数据稳定 (3~8s)...', 'action');
+    await humanDelay(page, 3000, 8000);
+
+    // 清理可能弹出的常规通知浮层
+    await this.dismissNoticeModals(page).catch(() => false);
+
+    await updateVisualTrackerStatus(page, '✅ 页面元素加载完毕，订单监听就绪', 'success');
+  }
+
   public async start(): Promise<void> {
     if (this.running) return;
 
@@ -189,6 +337,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     } catch {
       // 忽略前置聚焦失败
     }
+
+    // 页面就绪门禁：等待核心骨架挂载与 3-8s 沉淀缓冲，确保后续任务不会因过早定位点击而失败
+    await this.waitForPageReady(page);
 
     this.running = true;
 
@@ -311,6 +462,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       );
     }
 
+    // 动作前置浮层清理：自动排除并关闭阻塞 Tab 点击的非业务提示弹窗（如“联系客人”等）
+    await this.dismissNoticeModals(page);
+
     const getTab = (label: string, active = false) => this
       .getOrderScope(page)
       .locator(`.tab-container .mtd-tabs-item${active ? '.mtd-tab-active' : ''}:has-text("${label}")`);
@@ -318,7 +472,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     const pendingTab = getTab('待确认订单');
 
     try {
-      await pendingTab.waitFor({ state: 'visible', timeout: 5000 });
+      await pendingTab.waitFor({ state: 'visible', timeout: 8000 });
     } catch (error) {
       if (await checkMeituanPageRisk(page)) {
         await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
@@ -338,7 +492,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     const allOrdersTab = getTab('全部订单');
 
     try {
-      await allOrdersTab.waitFor({ state: 'visible', timeout: 5000 });
+      await allOrdersTab.waitFor({ state: 'visible', timeout: 8000 });
     } catch (error) {
       if (await checkMeituanPageRisk(page)) {
         await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
@@ -364,9 +518,18 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     if (allOrdersActive) {
       await updateVisualTrackerStatus(page, '📥 已在「全部订单」，正在切换到待确认列表...', 'action');
       const pendingResponse = this.waitForMeituanListResponse(page, '待确认订单最终列表');
-      await pendingTab.click({ timeout: 5000 });
+      await this.dismissNoticeModals(page);
+      try {
+        await pendingTab.click({ timeout: 5000 });
+      } catch (clickErr) {
+        if (await this.dismissNoticeModals(page)) {
+          await pendingTab.click({ timeout: 5000 });
+        } else {
+          throw clickErr;
+        }
+      }
       const response = await pendingResponse;
-      await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: 5000 }).catch(async () => {
+      await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: 8000 }).catch(async () => {
         if (await checkMeituanPageRisk(page)) {
           await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
           throw new DutyExecutionError(
@@ -382,9 +545,18 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     await updateVisualTrackerStatus(page, '📥 正在通过「全部订单」刷新待确认列表...', 'action');
     // 只作为前一列表的生命周期屏障；不读取、不解析该响应。
     const allOrdersResponse = this.waitForMeituanListResponse(page, '全部订单切换屏障', true);
-    await allOrdersTab.click({ timeout: 5000 });
+    await this.dismissNoticeModals(page);
     try {
-      await getTab('全部订单', true).waitFor({ state: 'visible', timeout: 5000 });
+      await allOrdersTab.click({ timeout: 5000 });
+    } catch (clickErr) {
+      if (await this.dismissNoticeModals(page)) {
+        await allOrdersTab.click({ timeout: 5000 });
+      } else {
+        throw clickErr;
+      }
+    }
+    try {
+      await getTab('全部订单', true).waitFor({ state: 'visible', timeout: 8000 });
     } catch (error) {
       if (await checkMeituanPageRisk(page)) {
         await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
@@ -401,9 +573,18 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
     // 仅在最终触发待确认列表前挂响应监听，避免消费“全部订单”请求。
     const pendingResponse = this.waitForMeituanListResponse(page, '待确认订单最终列表');
-    await pendingTab.click({ timeout: 5000 });
+    await this.dismissNoticeModals(page);
+    try {
+      await pendingTab.click({ timeout: 5000 });
+    } catch (clickErr) {
+      if (await this.dismissNoticeModals(page)) {
+        await pendingTab.click({ timeout: 5000 });
+      } else {
+        throw clickErr;
+      }
+    }
     const response = await pendingResponse;
-    await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: 5000 }).catch(async () => {
+    await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: 8000 }).catch(async () => {
       if (await checkMeituanPageRisk(page)) {
         await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
         throw new DutyExecutionError(
@@ -493,8 +674,9 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       '.mtd-list-item.list-item-container, .list-item-container, .list-item-wrap, tr.order-row'
     );
     const count = typeof items.count === 'function' ? await items.count().catch(() => 0) : 0;
-    //  列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
+    // 列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
     if (count > 0 && typeof items.nth === 'function') {
+      await dismissMeituanNoticeModals(page, scope);
       for (let i = 0; i < count; i++) {
         const candidate = items.nth(i);
         if (!await candidate.isVisible().catch(() => false)) continue;
@@ -752,6 +934,14 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
    * 页面操作：在美团后台回填确认号（基于订单卡片/详情内联交互，防串单严格校验）
    */
   public async confirmImport(confirmNo: string, otaOrderId: string): Promise<void> {
+    if (!this.confirmImportEnabled) {
+      throw new DutyExecutionError(
+        '已关闭订单确认号回填开关，禁止在渠道后台执行确认号回填（开发调试保护模式）',
+        'CONFIRM_IMPORT_DISABLED',
+        false
+      );
+    }
+
     const page = this.getActivePage('回填确认号');
 
     if (await checkMeituanPageRisk(page)) {
@@ -1000,6 +1190,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
     task: DutyClaimedTask,
     onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
   ): Promise<DutyTaskExecutionResult> {
-    return dispatchDutyTask(task, this, onLog);
+    return dispatchDutyTask(task, this, onLog, { confirmImportEnabled: this.confirmImportEnabled });
   }
 }

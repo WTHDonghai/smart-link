@@ -23,10 +23,12 @@ vi.mock('../../src/types/env', () => ({
 
 import '../../electron/preload';
 
+const exposedHost = exposeInMainWorldMock.mock.calls[0][1] as HostBridgeApi;
+
 describe('desktop preload log subscription', () => {
   it('removes the same host log channel used by onLog', () => {
     expect(exposeInMainWorldMock).toHaveBeenCalledWith('host', expect.anything());
-    const host = exposeInMainWorldMock.mock.calls[0][1] as HostBridgeApi;
+    const host = exposedHost;
     const entry = {
       id: 'log-1',
       createdAt: 1,
@@ -46,5 +48,15 @@ describe('desktop preload log subscription', () => {
     expect(callback).toHaveBeenCalledWith(entry);
     expect(ipcRendererMock.removeListener).toHaveBeenCalledWith('host:log-entry', registeredListener);
     expect(ipcRendererMock.removeListener).not.toHaveBeenCalledWith('duty:log-entry', registeredListener);
+  });
+
+  it('exposes setConfirmImportEnabled and delegates to ipcRenderer', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce({ success: true });
+
+    const res = await host.duty.setConfirmImportEnabled(false);
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('duty:set-confirm-import-enabled', false);
+    expect(res).toEqual({ success: true });
   });
 });

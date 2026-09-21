@@ -30,10 +30,28 @@ import {
   startDutyByChannel,
   stopDutyByChannel,
   queryDutyStatus,
+  setConfirmImportEnabled,
 } from '../../services/dutyBridge';
+import { logger } from '../../services/logger';
 import { showToast } from './appSlice';
 import { addLog, addLogs } from './systemLogSlice';
 import type { HotelState } from './hotelSlice';
+
+export const CONFIRM_IMPORT_STORAGE_KEY = 'smart_link_duty_confirm_import_enabled';
+
+export function getInitialConfirmImportEnabled(): boolean {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(CONFIRM_IMPORT_STORAGE_KEY);
+      if (stored !== null) {
+        return stored !== 'false';
+      }
+    }
+  } catch {
+    // 忽略环境或沙箱限制下的存储异常
+  }
+  return true;
+}
 
 export interface OrderGuardianState {
   orders: ToolkitOrder[];
@@ -50,6 +68,7 @@ export interface OrderGuardianState {
   channelDuty: Record<string, ChannelDutyInfo>;
   coordinatorStatus: DutyCoordinatorStatus;
   station: StationIdentity | null;
+  confirmImportEnabled: boolean;
 
   activeEditOrder: ToolkitOrder | null;
   productOptions: InternalProductOptions;
@@ -91,6 +110,7 @@ const initialState: OrderGuardianState = {
   channelDuty: initialChannelDuty,
   coordinatorStatus: 'STOPPED',
   station: null,
+  confirmImportEnabled: getInitialConfirmImportEnabled(),
 
   activeEditOrder: null,
   productOptions: { roomTypes: [], rateCodes: [], reservationTypes: [] },
@@ -285,11 +305,92 @@ export const toggleChannelDutyThunk = createAsyncThunk(
 );
 
 /**
+ * 切换或设置订单确认号回填开关（开发调试安全保护）
+ */
+export const setConfirmImportEnabledThunk = createAsyncThunk(
+  'orderGuardian/setConfirmImportEnabled',
+  async (enabled: boolean, { dispatch, rejectWithValue }) => {
+    try {
+      await setConfirmImportEnabled(enabled);
+
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(CONFIRM_IMPORT_STORAGE_KEY, String(enabled));
+        }
+      } catch {
+        // 忽略存储异常
+      }
+
+      if (enabled) {
+        dispatch(
+          showToast({
+            type: 'success',
+            title: '已开启订单确认号回填',
+            description: '正常值守模式：中台派发的接单确认号将自动在渠道后台回填并确认接单',
+          })
+        );
+      } else {
+        dispatch(
+          showToast({
+            type: 'warning',
+            title: '已暂停订单确认号回填',
+            description: '开发调试保护模式：后续接单确认任务将被自动拦截，防止误在渠道后台确认订单',
+          })
+        );
+      }
+
+      dispatch(
+        addLog({
+          level: enabled ? 'INFO' : 'WARN',
+          module: 'DUTY_TASK',
+          message: enabled
+            ? '[系统设置] 已开启订单确认号回填功能'
+            : '[系统设置] 已暂停订单确认号回填功能（开发调试保护模式开启）',
+          details: enabled
+            ? '中台派发的 OTA_CONFIRM_IMPORT 任务将正常执行渠道后台确认'
+            : '中台派发的 OTA_CONFIRM_IMPORT 任务将被拦截并回执 CONFIRM_IMPORT_DISABLED',
+        })
+      );
+
+      return enabled;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : '切换确认号回填开关失败';
+      dispatch(showToast({ type: 'error', title: '切换回填开关失败', description: msg }));
+      return rejectWithValue(msg);
+    }
+  }
+);
+
+let initialConfirmImportSyncPromise: Promise<void> | null = null;
+
+export function resetInitialConfirmImportSyncForTesting(): void {
+  initialConfirmImportSyncPromise = null;
+}
+
+export async function ensureInitialConfirmImportSynced(): Promise<void> {
+  if (!initialConfirmImportSyncPromise) {
+    initialConfirmImportSyncPromise = (async () => {
+      const initialEnabled = getInitialConfirmImportEnabled();
+      try {
+        await setConfirmImportEnabled(initialEnabled);
+      } catch (err) {
+        logger.warn('[OrderGuardian] 首次同步确认号回填开关至主进程失败', {
+          module: 'DUTY_TASK',
+          details: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }
+  await initialConfirmImportSyncPromise;
+}
+
+/**
  * 同步当前全盘值守状态与调度任务日志
  */
 export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
   async (_, { getState, dispatch }) => {
+    await ensureInitialConfirmImportSynced();
     const res = await queryDutyStatus();
     if (res.logs && res.logs.length > 0) {
       dispatch(addLogs(res.logs));
@@ -457,6 +558,11 @@ export const orderGuardianSlice = createSlice({
         }
       });
 
+    // setConfirmImportEnabled
+    builder.addCase(setConfirmImportEnabledThunk.fulfilled, (state, action) => {
+      state.confirmImportEnabled = action.payload;
+    });
+
     // syncStatus
     builder.addCase(syncDutyStatusThunk.fulfilled, (state, action) => {
       state.coordinatorStatus = action.payload.coordinatorStatus;
@@ -465,6 +571,9 @@ export const orderGuardianSlice = createSlice({
       }
       for (const [code, info] of Object.entries(action.payload.channels)) {
         state.channelDuty[code] = info;
+      }
+      if (typeof action.payload.confirmImportEnabled === 'boolean') {
+        state.confirmImportEnabled = action.payload.confirmImportEnabled;
       }
     });
   },
