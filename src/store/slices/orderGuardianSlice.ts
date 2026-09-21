@@ -488,6 +488,7 @@ export const selectGuardianStats = createSelector(
     todayTotal: stats.today,
     todaySuccess: stats.success,
     todayFailed: stats.failed,
+    pendingManual: stats.failed,
     avgTransferSeconds: undefined,
   })
 );
