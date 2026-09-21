@@ -169,5 +169,69 @@ describe('MeituanProductCollector (纯接口拦截采集模式)', () => {
       );
       expect(mockPage.off).toHaveBeenCalledWith('response', expect.any(Function));
     });
+
+    it('当传入 waitSeconds 时，应按秒转换为毫秒并输出以秒为单位的等待日志', async () => {
+      let registeredResponseHandler: ((response: Response) => Promise<void>) | null = null;
+
+      const mockResponse = {
+        url: () => 'https://me.meituan.com/api/gw/v1/product/goods/queryListAndTag',
+        headers: () => ({ 'content-type': 'application/json' }),
+        ok: () => true,
+        status: () => 200,
+        text: async () =>
+          JSON.stringify({
+            code: 10000,
+            data: {
+              realRoomRelations: [
+                {
+                  realRoomId: 'PHYS-202',
+                  realRoomName: '豪华湖景套房',
+                  logicRoomRelations: [
+                    {
+                      goodsList: [
+                        {
+                          goodsId: 'GOODS-9002',
+                          goodsName: '豪华湖景套房(双早)',
+                          paymentType: 1,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+      } as unknown as Response;
+
+      const mockPage = {
+        url: () => 'https://me.meituan.com/ebooking/merchant/product/batch-price?poiId=POI-5555',
+        on: vi.fn((event: string, handler: (r: Response) => Promise<void>) => {
+          if (event === 'response') {
+            registeredResponseHandler = handler;
+          }
+        }),
+        off: vi.fn(),
+        goto: vi.fn().mockImplementation(async () => {
+          if (registeredResponseHandler) {
+            await registeredResponseHandler(mockResponse);
+          }
+        }),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Page;
+
+      const logs: CollectorLogPayload[] = [];
+      const request: ProductCrawlRequest = {
+        channelCode: 'MEITUAN',
+        extUnitCode: 'POI-5555',
+        waitSeconds: 6,
+      };
+
+      await collector.collect(mockPage, {} as BrowserContext, request, {
+        onLog: (l) => logs.push(l),
+      });
+
+      expect(mockPage.waitForTimeout).toHaveBeenCalledWith(6000);
+      expect(logs.some((l) => l.message.includes('6 秒'))).toBe(true);
+    });
   });
 });

@@ -1,5 +1,7 @@
-import type { ChannelHotelCollector } from './collectors/base';
+import type { ChannelHotelCollector, ChannelProductCollector } from './collectors/base';
 import { MeituanHotelCollector } from './collectors/meituan/meituanCollector';
+import { meituanProductCollector } from './collectors/meituan/meituanProductCollector';
+import { douyinProductCollector } from './collectors/douyin/douyinProductCollector';
 
 class HotelCollectorRegistry {
   private collectors = new Map<string, ChannelHotelCollector>();
@@ -46,4 +48,52 @@ class HotelCollectorRegistry {
   }
 }
 
+class ProductCollectorRegistry {
+  private collectors = new Map<string, ChannelProductCollector>();
+
+  constructor() {
+    this.registerDefaults();
+  }
+
+  private registerDefaults(): void {
+    this.register(meituanProductCollector);
+
+    // 美团商旅复用美团产品采集器
+    const meituanBizProductCollector: ChannelProductCollector = {
+      channelCode: 'MEITUAN_BIZ',
+      resolveTargetUrl: (url, poiId, partnerId) =>
+        meituanProductCollector.resolveTargetUrl(url, poiId, partnerId),
+      collect: (page, ctx, req, opts) =>
+        meituanProductCollector.collect(page, ctx, req, opts),
+    };
+    this.register(meituanBizProductCollector);
+    this.collectors.set('MEITUANBIZ', meituanBizProductCollector);
+
+    // 抖音产品采集器
+    this.register(douyinProductCollector);
+    this.collectors.set('DY', douyinProductCollector);
+  }
+
+  public register(collector: ChannelProductCollector): void {
+    const code = collector.channelCode.trim().toUpperCase();
+    this.collectors.set(code, collector);
+  }
+
+  public get(channelCode: string): ChannelProductCollector | null {
+    if (!channelCode) return null;
+    const cleanCode = channelCode.trim().toUpperCase();
+    return (
+      this.collectors.get(cleanCode) ||
+      this.collectors.get(cleanCode.replace(/[-_]/g, '')) ||
+      null
+    );
+  }
+
+  public getSupportedChannelCodes(): string[] {
+    return Array.from(new Set(Array.from(this.collectors.values()).map((c) => c.channelCode)));
+  }
+}
+
 export const hotelCollectorRegistry = new HotelCollectorRegistry();
+export const productCollectorRegistry = new ProductCollectorRegistry();
+

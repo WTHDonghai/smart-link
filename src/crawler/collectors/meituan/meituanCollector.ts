@@ -1,6 +1,12 @@
 import type { Page, BrowserContext, Response } from 'playwright';
 import type { ChannelHotelCollector } from '../base';
-import type { DiscoveredHotelCandidate, CollectorOptions } from '../../types';
+import {
+  resolveTimeoutMs,
+  resolveWaitMs,
+  resolveWaitSeconds,
+  type DiscoveredHotelCandidate,
+  type CollectorOptions,
+} from '../../types';
 import {
   resolveMeituanTargetUrl,
   extractMeituanStoresFromResponses,
@@ -28,6 +34,9 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
   ): Promise<DiscoveredHotelCandidate[]> {
     const targetUrl = this.resolveTargetUrl(options.targetUrl);
     const log = options.onLog || (() => {});
+    const timeoutMs = resolveTimeoutMs(options, 30);
+    const waitSeconds = resolveWaitSeconds(options, 2);
+    const waitTime = Math.max(2000, resolveWaitMs(options, 2000));
 
     log({
       level: 'PLAYWRIGHT',
@@ -86,7 +95,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
 
       await page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: options.timeoutMs,
+        timeout: timeoutMs,
       });
 
       // 3. 检测登录态与扫码交互
@@ -132,10 +141,9 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
       }
 
       // 4. 等待页面首屏接口渲染与网络静默
-      const waitTime = Math.max(2000, options.waitMs);
       log({
         level: 'PLAYWRIGHT',
-        message: `[Meituan:Collector] 页面已加载，等待后台网络接口响应 (${waitTime}ms)...`,
+        message: `[Meituan:Collector] 页面已加载，等待后台网络接口响应 (${waitSeconds} 秒)...`,
       });
       await updateVisualTrackerStatus(page, '🔍 正在智能嗅探美团商户门店数据接口...', 'info');
       await page.waitForTimeout(waitTime);

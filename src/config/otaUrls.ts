@@ -30,6 +30,7 @@ export const OTA_ORDER_ENV_KEY_MAP: Record<string, AppEnvKey> = {
 export const OTA_PRODUCT_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   MEITUAN: APP_ENV_KEYS.otaProductMeituan,
   MEITUAN_BIZ: APP_ENV_KEYS.otaProductMeituan,
+  DOUYIN: APP_ENV_KEYS.otaProductDouyin,
 };
 
 interface OtaUrlErrorContext {
@@ -179,3 +180,11 @@ export function getOtaProductUrl(channelCode: string): string {
 export function getMeituanProductUrl(): string {
   return getOtaProductUrl('MEITUAN');
 }
+
+/**
+ * 快捷获取抖音产品采集标准目标 URL
+ */
+export function getDouyinProductUrl(): string {
+  return getOtaProductUrl('DOUYIN');
+}
+
