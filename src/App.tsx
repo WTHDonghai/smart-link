@@ -14,9 +14,11 @@ import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/sl
 import {
   syncDutyTokens,
   clearDutyTokens,
-  subscribeDutyLogs,
-  takePendingMainLogs,
 } from './services/dutyBridge';
+import {
+  subscribeHostLogs,
+  takePendingHostLogs,
+} from './services/logBridge';
 import { addLog, addLogs } from './store/slices/systemLogSlice';
 import { logger } from './services/logger';
 import { syncDutyStatusThunk } from './store/slices/orderGuardianSlice';
@@ -50,11 +52,11 @@ export default function App() {
       void syncDutyTokens(initialTokens);
     }
 
-    // 3. 订阅后台全链路值守与调度日志，一旦产生任何认领、执行、回执或异常日志，即刻注入 Redux 状态流
-    const unsubscribeDutyLogs = subscribeDutyLogs((entry) => {
+    // 3. 订阅后台全链路宿主运行与调度日志，一旦产生任何日志条目，即刻注入 Redux 状态流
+    const unsubscribeHostLogs = subscribeHostLogs((entry) => {
       dispatch(addLog(entry));
     });
-    void takePendingMainLogs().then((entries) => {
+    void takePendingHostLogs().then((entries) => {
       if (entries.length > 0) {
         dispatch(addLogs(entries));
       }
@@ -114,7 +116,7 @@ export default function App() {
     return () => {
       if (wakeupTimer) clearTimeout(wakeupTimer);
       unsubscribeToken();
-      unsubscribeDutyLogs();
+      unsubscribeHostLogs();
       clearInterval(dutySyncTimer);
       platformAuthService.stopRefreshScheduler();
       clearInterval(timer);

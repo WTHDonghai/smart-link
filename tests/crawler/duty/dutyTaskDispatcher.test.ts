@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { dispatchDutyTask } from '../../../src/crawler/duty/dutyTaskDispatcher';
+import {
+  clearRemarkTemplateCache,
+  getCachedChannelRemarkTemplate,
+  updateRemarkTemplateCache,
+  invalidateRemarkTemplateCache,
+  REMARK_TEMPLATE_TTL_MS,
+} from '../../../src/crawler/duty/remarkTemplateManager';
+
 import type {
   ChannelDutyRunner,
   ExtractedOrderDetail,
@@ -7,6 +15,7 @@ import type {
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import * as channelApi from '../../../src/services/channelApi';
+import * as loggerModule from '../../../src/services/logger';
 
 class MockDutyRunner implements ChannelDutyRunner {
   public channelCode = 'TEST_OTA';
@@ -61,6 +70,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRemarkTemplateCache();
     runner = new MockDutyRunner();
   });
 
@@ -399,7 +409,46 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(failLog?.orderNo).toBe('OTA-IMPORT-LOG-FAIL');
       expect(failLog?.level).toBe('ERROR');
     });
+
+    it('should call logger.warn with channelCode and error message when getTemplate rejects, and still call importToolkitOrder', async () => {
+      // Arrange：模拟 fetchChannelRemarkTemplate 抛出异常触发 getTemplate reject
+      vi.spyOn(channelApi, 'fetchChannelRemarkTemplate').mockRejectedValue(
+        new Error('模板服务不可用 503')
+      );
+      const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-WARN-TEST',
+      });
+      const warnSpy = vi.spyOn(loggerModule.logger, 'warn');
+
+      const taskPayload = { otaOrderId: 'OTA-WARN-1', unitId: 'HOTEL-WARN' };
+      const task: DutyClaimedTask = {
+        id: 'task-warn-template',
+        businessId: 'OTA-WARN-1',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      // Act：dispatch 必须不抛出
+      const result = await dispatchDutyTask(task, runner);
+
+      // Assert 1：整个 dispatch 不抛出，流程继续完成
+      expect(result.status).toBe('SUCCEEDED');
+
+      // Assert 2：logger.warn 被调用，且 warn 消息中包含渠道编码与错误信息
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const warnMessage = warnSpy.mock.calls[0][0] as string;
+      expect(warnMessage).toContain('TEST_OTA');
+      expect(warnMessage).toContain('模板服务不可用 503');
+
+      // Assert 3：业务流程继续，下游 importToolkitOrder 被调用
+      expect(importSpy).toHaveBeenCalledTimes(1);
+    });
   });
+
 
   describe('OTA_CONFIRM_IMPORT', () => {
     it('should route to runner.confirmImport and return confirmed result', async () => {
@@ -860,6 +909,148 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('FAILED');
       expect(result.errorCode).toBe('CONFIRM_INPUT_ALREADY_FILLED');
       expect(result.retryable).toBe(false);
+    });
+  });
+
+  describe('Remark Template In-Memory TTL Cache', () => {
+    it('defines 10-minute default TTL for channel remark templates', () => {
+      expect(REMARK_TEMPLATE_TTL_MS).toBe(10 * 60 * 1000);
+    });
+
+    it('fetches remote template on first call and returns cached template within TTL', async () => {
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate').mockResolvedValue({
+        id: 'tmpl-1',
+        channelCode: 'MEITUAN',
+        remarkTemplate: '美团模板: {orderId}',
+      } as unknown as never);
+
+      const res1 = await getCachedChannelRemarkTemplate('MEITUAN');
+      expect(res1).toBe('美团模板: {orderId}');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // 第二次调用在 TTL 内，直接命中内存缓存，不重复发起外部请求
+      const res2 = await getCachedChannelRemarkTemplate('MEITUAN');
+      expect(res2).toBe('美团模板: {orderId}');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('refetches remote template when TTL expires', async () => {
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate')
+        .mockResolvedValueOnce({
+          id: 'tmpl-1',
+          channelCode: 'DOUYIN',
+          remarkTemplate: '初始模板',
+        } as unknown as never)
+        .mockResolvedValueOnce({
+          id: 'tmpl-2',
+          channelCode: 'DOUYIN',
+          remarkTemplate: '过期更新模板',
+        } as unknown as never);
+
+      // 使用 50ms TTL 进行快速超时验证
+      const res1 = await getCachedChannelRemarkTemplate('DOUYIN', 50);
+      expect(res1).toBe('初始模板');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // 等待 TTL 过期
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const res2 = await getCachedChannelRemarkTemplate('DOUYIN', 50);
+      expect(res2).toBe('过期更新模板');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('purges memory cache immediately when clearRemarkTemplateCache is called', async () => {
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate')
+        .mockResolvedValueOnce({
+          id: 'tmpl-1',
+          channelCode: 'CTRIP',
+          remarkTemplate: '携程模板1',
+        } as unknown as never)
+        .mockResolvedValueOnce({
+          id: 'tmpl-2',
+          channelCode: 'CTRIP',
+          remarkTemplate: '携程模板2',
+        } as unknown as never);
+
+      const res1 = await getCachedChannelRemarkTemplate('CTRIP');
+      expect(res1).toBe('携程模板1');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // 手动触发缓存清理
+      clearRemarkTemplateCache();
+
+      const res2 = await getCachedChannelRemarkTemplate('CTRIP');
+      expect(res2).toBe('携程模板2');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('directly updates memory cache with updateRemarkTemplateCache without invoking remote API', async () => {
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate');
+
+      // 主动写入最新模板
+      updateRemarkTemplateCache('MEITUAN', '直接写入的美团最新模板');
+
+      // 首次读取直接命中内存缓存，绝不触发外部网络请求
+      const res = await getCachedChannelRemarkTemplate('MEITUAN');
+      expect(res).toBe('直接写入的美团最新模板');
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      // 支持更新为 null 模板
+      updateRemarkTemplateCache('MEITUAN', null);
+      const resNull = await getCachedChannelRemarkTemplate('MEITUAN');
+      expect(resNull).toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('selectively invalidates specific channel with invalidateRemarkTemplateCache(channelCode)', async () => {
+      updateRemarkTemplateCache('MEITUAN', '美团模板');
+      updateRemarkTemplateCache('CTRIP', '携程模板');
+
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate')
+        .mockResolvedValueOnce({
+          id: 'tmpl-mt',
+          channelCode: 'MEITUAN',
+          remarkTemplate: '重新拉取的美团模板',
+        } as unknown as never);
+
+      // 精准失效美团
+      invalidateRemarkTemplateCache('MEITUAN');
+
+      // 携程依然在缓存中，不触发 fetch
+      const ctripRes = await getCachedChannelRemarkTemplate('CTRIP');
+      expect(ctripRes).toBe('携程模板');
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      // 美团已失效，重新拉取
+      const meituanRes = await getCachedChannelRemarkTemplate('MEITUAN');
+      expect(meituanRes).toBe('重新拉取的美团模板');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('deduplicates concurrent calls to getCachedChannelRemarkTemplate with singleflight', async () => {
+      let resolveFetch: (value: { otaChannelCode: string; remarkTemplate: string }) => void;
+      const fetchPromise = new Promise<{ otaChannelCode: string; remarkTemplate: string }>((resolve) => {
+        resolveFetch = resolve;
+      });
+
+      const fetchSpy = vi.spyOn(channelApi, 'fetchChannelRemarkTemplate')
+        .mockReturnValue(fetchPromise as unknown as never);
+
+      // 同时发起 3 个并发获取同一渠道模板请求
+      const p1 = getCachedChannelRemarkTemplate('FLIGGY');
+      const p2 = getCachedChannelRemarkTemplate('FLIGGY');
+      const p3 = getCachedChannelRemarkTemplate('FLIGGY');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      resolveFetch!({ otaChannelCode: 'FLIGGY', remarkTemplate: '飞猪并发模板' });
+
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      expect(r1).toBe('飞猪并发模板');
+      expect(r2).toBe('飞猪并发模板');
+      expect(r3).toBe('飞猪并发模板');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

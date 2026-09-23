@@ -70,25 +70,11 @@ export const ChannelDutyPanel: React.FC = () => {
 
   const coordinatorBadge = formatCoordinatorBadge(coordinatorStatus);
 
-  // 组件挂载时拉取后台值守状态与用户渠道映射数据
+  // 组件挂载时拉取后台值守状态与用户渠道映射数据（周期性轮询由 App.tsx 全局时钟统一定时维持）
   useEffect(() => {
     void dispatch(syncDutyStatusThunk());
     void dispatch(fetchChannelMappingData());
   }, [dispatch]);
-
-  // 当有值守渠道正在启动或运行时，每 2 秒轮询同步状态与任务调度日志
-  useEffect(() => {
-    const hasActive = Object.values(channelDuty).some(
-      (c) => c.status === 'RUNNING' || c.status === 'STARTING'
-    );
-    if (!hasActive) return;
-
-    const timer = setInterval(() => {
-      void dispatch(syncDutyStatusThunk());
-    }, 2000);
-
-    return () => clearInterval(timer);
-  }, [dispatch, channelDuty]);
 
   const handleToggle = (channelCode: string) => {
     void dispatch(toggleChannelDutyThunk(channelCode));

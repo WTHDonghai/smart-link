@@ -2,7 +2,7 @@
 import { MeituanDutyRunner } from './meituanDutyRunner';
 import { PROCESS_ENV_KEYS } from '../../types/env';
 import { cleanChannelOrder } from '../../services/protocols';
-import { fetchChannelRemarkTemplate } from '../../services/channelApi';
+import { remarkTemplateManager } from './remarkTemplateManager';
 import { renderRemarkFromVariables } from '../../utils/template/orderPayloadTransformer';
 
 function parseArgs(argv: string[]) {
@@ -82,8 +82,7 @@ async function main() {
 
       let remoteTemplate: string | null = null;
       try {
-        const templateRes = await fetchChannelRemarkTemplate(channelOrder.channelCode);
-        remoteTemplate = templateRes.remarkTemplate;
+        remoteTemplate = await remarkTemplateManager.getTemplate(channelOrder.channelCode);
       } catch (tmplErr) {
         const errMsg = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
         console.warn(`[DutyInspectDetail:CLI] 未能拉取到渠道「${channelOrder.channelCode}」远程备注模板 (将使用原备注兜底): ${errMsg}`);

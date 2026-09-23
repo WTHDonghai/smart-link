@@ -8,10 +8,11 @@ import type {
   DutyTaskExecutionResult,
   DutyUnhandledOrderSummary,
 } from '../../../src/crawler/duty/dutyContracts';
-import type { DutyClaimedTask } from '../../../src/types';
+import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import { hotelCollectionEngine } from '../../../src/crawler/engine';
+import { logger } from '../../../src/services/logger';
 
 class MockChannelRunner implements ChannelDutyRunner {
   public channelCode: string;
@@ -96,6 +97,8 @@ describe('dutyOrchestrationEngine', () => {
       }
     } catch {
       // ignore teardown
+    } finally {
+      engine.dispose();
     }
   });
 
@@ -113,6 +116,42 @@ describe('dutyOrchestrationEngine', () => {
         message: '测试时间戳格式对齐',
       });
       expect(entry.timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+    });
+
+    it('should idempotently update recentLogs when appending log with identical id', () => {
+      const log1: SystemLogEntry = {
+        id: 'test-fixed-log-id',
+        timestamp: '2026-09-22 12:00:00.000',
+        createdAt: 1000,
+        level: 'INFO',
+        message: '原始日志内容',
+      };
+      engine.appendDutyLogDirect(log1);
+      expect(engine.getRecentDutyLogs().filter((l) => l.id === 'test-fixed-log-id')).toHaveLength(1);
+
+      const log2: SystemLogEntry = {
+        ...log1,
+        message: '更新后的日志内容',
+      };
+      engine.appendDutyLogDirect(log2);
+      const matched = engine.getRecentDutyLogs().filter((l) => l.id === 'test-fixed-log-id');
+      expect(matched).toHaveLength(1);
+      expect(matched[0].message).toBe('更新后的日志内容');
+    });
+
+    it('should detach logger subscription on dispose()', () => {
+      const customEngine = new DutyOrchestrationEngine();
+      try {
+        customEngine.dispose();
+        logger.track('DUTY_LOG', {
+          module: 'DUTY_TASK',
+          message: '已销毁实例不应收到新日志',
+        });
+        const matched = customEngine.getRecentDutyLogs().filter((l) => l.message === '已销毁实例不应收到新日志');
+        expect(matched).toHaveLength(0);
+      } finally {
+        customEngine.dispose();
+      }
     });
 
     it('should return STOPPED coordinator status initially', () => {
@@ -319,6 +358,47 @@ describe('dutyOrchestrationEngine', () => {
               businessId: 'ORD-102',
             }),
           ],
+        })
+      );
+    });
+
+    it('fails fast and reports FAIL with retryable: true when downstream task creation fails in OTA_COLLECT_ORDER', async () => {
+      const collectTask: DutyClaimedTask = {
+        id: 'task-collect-fail-1',
+        businessId: 'MT-COLL-FAIL-1',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-fail',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(collectTask)
+        .mockResolvedValue(null);
+
+      mockRunner.executeResult = {
+        status: 'SUCCEEDED',
+        result: {
+          orders: [
+            { orderId: 'ORD-FAIL-1', hotelId: 'H-1', cancelOrder: false },
+          ],
+        },
+      };
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+      vi.spyOn(dutyRuntimeApi, 'createDutyTasks').mockRejectedValue(new Error('下游服务网络连接超时 504'));
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // 核心断言：绝不向中台虚报 SUCCESS，必须将回执置为 FAIL 并标明 retryable: true
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-collect-fail-1',
+        expect.objectContaining({
+          status: 'FAIL',
+          errorMessage: expect.stringContaining('下游服务网络连接超时 504'),
+          retryable: true,
         })
       );
     });

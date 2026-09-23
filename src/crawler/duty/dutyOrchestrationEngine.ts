@@ -14,6 +14,7 @@ import type {
 } from '../../types';
 import type { ChannelDutyRunner } from './dutyContracts';
 import { MeituanDutyRunner } from './meituanDutyRunner';
+import { SYSTEM_TIMING } from './dutyTimingConfig';
 import { stationIdentityManager, getOrRegisterStationIdentity } from './stationIdentity';
 import { getPlatformBaseUrl } from '../../services/platformAuth';
 import {
@@ -22,8 +23,7 @@ import {
   reportDutyActualState,
   submitDutyTaskResult,
 } from '../../services/dutyRuntimeApi';
-import { registerApiLogListener } from '../../services/platformApi';
-import { formatLogTimestamp } from '../../services/logStorage';
+import { logger } from '../../services/logger';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger } from './dutyTaskLogger';
@@ -107,18 +107,27 @@ export class DutyOrchestrationEngine {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private stopSignal = false;
   private recentLogs: SystemLogEntry[] = [];
-  private logListeners = new Set<(entry: SystemLogEntry) => void>();
   private readonly MAX_LOGS = 200;
   private confirmImportEnabled = process.env.CONFIRM_IMPORT_ENABLED !== 'false';
+  private unsubscribeLogger?: () => void;
 
   constructor() {
     // 注册内置渠道执行器（首期美团酒店）
     this.registerRunner(new MeituanDutyRunner());
 
-    // 监听底层平台接口请求日志，同步注入到值守日志环形缓冲区供前端实时查看
-    registerApiLogListener((entry) => {
-      this.appendDutyLogDirect(entry);
+    // 订阅系统统一日志中枢，将值守任务关联日志镜像保留至最近缓存供前端轮询补偿查询
+    this.unsubscribeLogger = logger.subscribe((entry) => {
+      if (entry.module === 'DUTY_TASK' || entry.taskId) {
+        this.appendDutyLogDirect(entry);
+      }
     });
+  }
+
+  public dispose(): void {
+    if (this.unsubscribeLogger) {
+      this.unsubscribeLogger();
+      this.unsubscribeLogger = undefined;
+    }
   }
 
   public setConfirmImportEnabled(enabled: boolean): void {
@@ -175,44 +184,47 @@ export class DutyOrchestrationEngine {
     return stationIdentityManager.getCurrentIdentity();
   }
 
-  public subscribeLogs(listener: (entry: SystemLogEntry) => void): () => void {
-    this.logListeners.add(listener);
-    return () => {
-      this.logListeners.delete(listener);
-    };
-  }
-
   public getRecentDutyLogs(sinceTime = 0): SystemLogEntry[] {
     if (sinceTime <= 0) return [...this.recentLogs];
     return this.recentLogs.filter((l) => l.createdAt > sinceTime);
   }
 
   public appendDutyLogDirect(entry: SystemLogEntry): void {
+    const existingIndex = this.recentLogs.findIndex((l) => l.id === entry.id);
+    if (existingIndex >= 0) {
+      this.recentLogs[existingIndex] = entry;
+      return;
+    }
+
     this.recentLogs.push(entry);
     if (this.recentLogs.length > this.MAX_LOGS) {
       this.recentLogs.splice(0, this.recentLogs.length - this.MAX_LOGS);
-    }
-
-    // 广播给本地订阅者 (Electron IPC / 渲染层)
-    for (const listener of this.logListeners) {
-      try {
-        listener(entry);
-      } catch {
-        // 隔离异常
-      }
     }
   }
 
   public appendDutyLog(
     entryPartial: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>
   ): SystemLogEntry {
-    const now = Date.now();
-    const entry: SystemLogEntry = {
-      id: `duty-log-${now}-${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: formatLogTimestamp(new Date(now)),
-      createdAt: now,
-      ...entryPartial,
-    };
+    const entry = logger.track(entryPartial.event || 'DUTY_LOG', {
+      module: entryPartial.module || 'DUTY_TASK',
+      level: entryPartial.level,
+      message: entryPartial.message,
+      channelId: entryPartial.channelId,
+      orderNo: entryPartial.orderNo,
+      durationMs: entryPartial.durationMs,
+      details: entryPartial.details,
+      meta: entryPartial.meta,
+      taskId: entryPartial.taskId,
+      msgType: entryPartial.msgType,
+      taskActionStage: entryPartial.taskActionStage,
+      taskStatus: entryPartial.taskStatus,
+      taskResult: entryPartial.taskResult,
+      apiUrl: entryPartial.apiUrl,
+      apiMethod: entryPartial.apiMethod,
+      apiParams: entryPartial.apiParams,
+      apiResponse: entryPartial.apiResponse,
+      httpStatus: entryPartial.httpStatus,
+    });
 
     this.appendDutyLogDirect(entry);
 
@@ -473,11 +485,12 @@ export class DutyOrchestrationEngine {
     }
   }
 
-  private ensureHeartbeat(stationId: string): void {
+  private ensureHeartbeat(initialStationId: string): void {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(() => {
-      void this.reportActualState(stationId);
-    }, 60000);
+      const currentStationId = this.stationIdentity?.stationId || initialStationId;
+      void this.reportActualState(currentStationId);
+    }, SYSTEM_TIMING.HEARTBEAT_INTERVAL);
   }
 
   private ensureClaimLoop(): void {
@@ -501,7 +514,7 @@ export class DutyOrchestrationEngine {
         } catch (stationErr) {
           this.coordinatorStatus = 'CLAIM_BACKOFF';
           if (this.stopSignal || this.getActiveRunners().length === 0) break;
-          await new Promise((resolve) => setTimeout(resolve, 3000));
+          await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF));
           continue;
         }
 
@@ -515,7 +528,10 @@ export class DutyOrchestrationEngine {
 
         if (!task) {
           this.coordinatorStatus = 'IDLE';
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          const idleJitter =
+            SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE +
+            Math.floor(Math.random() * SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD);
+          await new Promise((resolve) => setTimeout(resolve, idleJitter));
           continue;
         }
 
@@ -800,7 +816,7 @@ export class DutyOrchestrationEngine {
               )
             : '';
 
-        const resultPayload = buildTaskResultPayload(task, identity.stationId, {
+        let resultPayload = buildTaskResultPayload(task, identity.stationId, {
           status: wireStatus,
           confirmationNo,
           result: execRes.result,
@@ -915,6 +931,15 @@ export class DutyOrchestrationEngine {
                 message: `[下游派发失败 downstream-create] 创建下游订单处理任务异常: ${errMsg}`,
                 details: errMsg,
               });
+
+              // Fail-Fast 刚性约束：下游任务创建失败绝不能向中台虚报成功，转为失败回执并标明可重试
+              resultPayload = buildTaskResultPayload(task, identity.stationId, {
+                status: 'FAIL',
+                errorCode: 'DOWNSTREAM_CREATION_FAILED',
+                errorMessage: `下游订单处理任务创建失败: ${errMsg}`,
+                retryable: true,
+                result: execRes.result,
+              });
             }
           }
         }
@@ -922,18 +947,19 @@ export class DutyOrchestrationEngine {
         this.coordinatorStatus = 'REPORTING';
         try {
           await submitDutyTaskResult(task.id, resultPayload);
+          const isResultSuccess = resultPayload.status === 'SUCCESS';
           taskLogger.log({
-            level: 'INFO',
-            event: 'DUTY_TASK_RESULT_SUBMIT',
+            level: isResultSuccess ? 'INFO' : 'ERROR',
+            event: isResultSuccess ? 'DUTY_TASK_RESULT_SUBMIT' : 'DUTY_TASK_RESULT_SUBMIT_FAILED',
             taskActionStage: "result",
-            taskStatus: isSuccess ? 'SUCCEEDED' : 'FAILED',
+            taskStatus: isResultSuccess ? 'SUCCEEDED' : 'FAILED',
             apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
             apiMethod: 'PUT',
             apiParams: resultPayload,
-            apiResponse: { success: true },
+            apiResponse: { success: isResultSuccess },
             httpStatus: 200,
             message: `[回执提交 RESULT] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
-            details: `回执状态: ${wireStatus}${taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''}`,
+            details: `回执状态: ${resultPayload.status}${taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''}`,
           });
         } catch (submitErr) {
           const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
@@ -969,7 +995,7 @@ export class DutyOrchestrationEngine {
         if (this.stopSignal || this.getActiveRunners().length === 0) {
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF));
       }
     }
 

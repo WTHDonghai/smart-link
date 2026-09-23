@@ -6,6 +6,7 @@ import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import { getOrRegisterStationIdentity } from '../src/crawler/duty/stationIdentity';
+import { remarkTemplateManager } from '../src/crawler/duty/remarkTemplateManager';
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
 import { getPlatformBaseUrl } from '../src/services/platformAuth';
@@ -471,6 +472,30 @@ export function registerDutyIpcHandlers(): void {
     return { success: true };
   });
 
+  // 更新/失效值守渠道备注模板内存缓存
+  ipcMain.handle(
+    'duty:update-template-cache',
+    async (_event, payload: { channelCode: string; template?: string | null }) => {
+      const code = (payload?.channelCode || '').trim().toUpperCase();
+      if (!code) {
+        return { success: false, error: '渠道编码不能为空' };
+      }
+      try {
+        if (payload.template !== undefined) {
+          remarkTemplateManager.updateCache(code, payload.template);
+        } else {
+          remarkTemplateManager.invalidateCache(code);
+        }
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+  );
+
   // 3. 一键停止所有渠道值守与后台调度
   ipcMain.handle('duty:stop-all', async () => {
     try {
@@ -499,8 +524,6 @@ export function registerDutyIpcHandlers(): void {
       };
     }
   });
-
-  dutyOrchestrationEngine.subscribeLogs(publishMainLog);
 }
 
 let isTearingDown = false;
@@ -527,6 +550,7 @@ export async function teardownApplicationResources(
       if (!result.success) {
         failureReasons.push(result.error || '停止值守任务失败');
       }
+      dutyOrchestrationEngine.dispose();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       failureReasons.push(reason);

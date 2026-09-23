@@ -761,6 +761,7 @@ export type {
 export type {
   CrawlerBridgeApi,
   DutyBridgeApi,
+  LogBridgeApi,
   HostBridgeApi,
   PlatformBridgeRequestOptions,
   PlatformBridgeResponse,

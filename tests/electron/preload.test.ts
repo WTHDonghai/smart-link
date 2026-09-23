@@ -26,7 +26,7 @@ import '../../electron/preload';
 const exposedHost = exposeInMainWorldMock.mock.calls[0][1] as HostBridgeApi;
 
 describe('desktop preload log subscription', () => {
-  it('removes the same host log channel used by onLog', () => {
+  it('removes the same host log channel used by host.log.onLog', () => {
     expect(exposeInMainWorldMock).toHaveBeenCalledWith('host', expect.anything());
     const host = exposedHost;
     const entry = {
@@ -35,9 +35,8 @@ describe('desktop preload log subscription', () => {
     } as SystemLogEntry;
     const callback = vi.fn();
     ipcRendererMock.on.mockReturnValue(undefined);
-    ipcRendererMock.on.mockImplementationOnce(() => undefined);
-
-    const unsubscribe = host.duty.onLog(callback);
+    expect(host.log).toBeDefined();
+    const unsubscribe = host.log!.onLog(callback);
     unsubscribe();
 
     const registeredChannel = ipcRendererMock.on.mock.calls[0][0];
@@ -57,6 +56,17 @@ describe('desktop preload log subscription', () => {
     const res = await host.duty.setConfirmImportEnabled(false);
 
     expect(ipcRendererMock.invoke).toHaveBeenCalledWith('duty:set-confirm-import-enabled', false);
+    expect(res).toEqual({ success: true });
+  });
+
+  it('exposes updateTemplateCache and delegates to ipcRenderer', async () => {
+    const host = exposedHost;
+    const payload = { channelCode: 'MEITUAN', template: '美团模板内容' };
+    ipcRendererMock.invoke.mockResolvedValueOnce({ success: true });
+
+    const res = await host.duty.updateTemplateCache(payload);
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('duty:update-template-cache', payload);
     expect(res).toEqual({ success: true });
   });
 });

@@ -40,8 +40,7 @@ describe('application entry host guard', () => {
         setConfirmImportEnabled: () => Promise.reject(new Error('not called')),
         syncTokens: () => Promise.reject(new Error('not called')),
         clearTokens: () => Promise.reject(new Error('not called')),
-        takePendingLogs: () => Promise.resolve([]),
-        onLog: () => () => undefined,
+        updateTemplateCache: () => Promise.reject(new Error('not called')),
       },
       update: {
         getState: () => Promise.reject(new Error('not called')),

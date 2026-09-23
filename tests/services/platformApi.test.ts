@@ -4,8 +4,8 @@ import {
   PlatformApiError,
   PLATFORM_MODULES,
   TOOLKIT_MODULE,
-  registerApiLogListener,
 } from '../../src/services/platformApi';
+import { logger } from '../../src/services/logger';
 import { saveTokensToStorage, clearTokensFromStorage } from '../../src/services/platformAuth';
 import { PlatformAuthTokens, SystemLogEntry } from '../../src/types';
 
@@ -211,7 +211,7 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     });
 
     const capturedLogs: SystemLogEntry[] = [];
-    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
 
     try {
       globalThis.fetch = vi.fn().mockResolvedValue({
@@ -272,7 +272,7 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     });
 
     const capturedLogs: SystemLogEntry[] = [];
-    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
 
     try {
       globalThis.fetch = vi.fn().mockResolvedValue({
@@ -318,7 +318,7 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     });
 
     const capturedLogs: SystemLogEntry[] = [];
-    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
 
     try {
       globalThis.fetch = vi.fn().mockResolvedValue({
@@ -358,7 +358,7 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     });
 
     const capturedLogs: SystemLogEntry[] = [];
-    const unsubscribe = registerApiLogListener((log) => capturedLogs.push(log));
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
 
     try {
       globalThis.fetch = vi.fn().mockResolvedValue({

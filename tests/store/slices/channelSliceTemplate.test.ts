@@ -17,6 +17,7 @@ import { createAppStore } from '../../../src/store';
 import { DEFAULT_MEITUAN_PROTOCOL_SCHEMA } from '../../../src/services/protocols/meituanProtocol';
 import { ChannelProtocolSchema, PlatformAuthTokens } from '../../../src/types';
 import { saveTokensToStorage } from '../../../src/services/platformAuth';
+import * as dutyBridge from '../../../src/services/dutyBridge';
 
 function createTestState() {
   let state = channelReducer(undefined, { type: '@@INIT' });
@@ -233,6 +234,8 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
         } as unknown as Response;
       });
 
+      const updateDutyCacheSpy = vi.spyOn(dutyBridge, 'updateDutyTemplateCache').mockResolvedValue(undefined);
+
       const result = await store.dispatch(
         saveRemarkTemplateAsync({
           channelId: 'meituan',
@@ -242,6 +245,10 @@ describe('channelSlice (Protocol Schema & Template Reducer Purity & Listener Per
       );
 
       expect(saveRemarkTemplateAsync.fulfilled.match(result)).toBe(true);
+      expect(updateDutyCacheSpy).toHaveBeenCalledWith({
+        channelCode: 'MEITUAN',
+        template: '【远端规范化】客人:{入住人}',
+      });
 
       // 验证 Redux 状态
       const meituan = store.getState().channel.channels.find((c) => c.id === 'meituan');

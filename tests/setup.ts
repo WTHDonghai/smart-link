@@ -19,6 +19,9 @@ const desktopHost: HostBridgeApi = {
     setConfirmImportEnabled: () => Promise.reject(new Error('测试未预期设置确认号回填开关')),
     syncTokens: () => Promise.reject(new Error('测试未预期同步 Token')),
     clearTokens: () => Promise.reject(new Error('测试未预期清除 Token')),
+    updateTemplateCache: () => Promise.resolve({ success: true }),
+  },
+  log: {
     takePendingLogs: () => Promise.resolve([]),
     onLog: () => () => undefined,
   },

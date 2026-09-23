@@ -73,10 +73,11 @@ describe('browserManager', () => {
     expect(calledOptions?.channel).toBe('chrome');
     expect(calledOptions?.headless).toBe(true);
 
-    // 核心断言：必须声明忽略 --use-mock-keychain 与 --password-store=basic
+    // 核心断言：必须声明忽略 --enable-automation, --use-mock-keychain 与 --password-store=basic
     expect(calledOptions?.ignoreDefaultArgs).toEqual(
-      expect.arrayContaining(['--use-mock-keychain', '--password-store=basic'])
+      expect.arrayContaining(['--enable-automation', '--use-mock-keychain', '--password-store=basic'])
     );
+    expect(calledOptions?.viewport).toBeNull();
 
     await session.close();
     expect(mockContext.close).toHaveBeenCalledTimes(1);
@@ -360,6 +361,47 @@ describe('browserManager', () => {
         expect(getActiveBrowserSessionsCount()).toBe(0);
         expect(fs.existsSync(lock1)).toBe(false);
         expect(fs.existsSync(lock2)).toBe(false);
+      } finally {
+        delete process.env.SMARTLINK_USER_DATA_DIR;
+        if (fs.existsSync(tempUserData)) {
+          fs.rmSync(tempUserData, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('当会话来自外部 CDP 连接 (isExternalCdp: true) 时，关闭会话绝不调用 releaseProfileLocks 误删锁文件', async () => {
+      const tempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'smartlink-cdp-lock-'));
+      process.env.SMARTLINK_USER_DATA_DIR = tempUserData;
+
+      try {
+        const mockExternalBrowser = { close: vi.fn().mockResolvedValue(undefined) };
+        const mockExternalContext = createMockContext();
+        const mockExternalPage = {
+          bringToFront: vi.fn().mockResolvedValue(undefined),
+          evaluate: vi.fn().mockResolvedValue(undefined),
+          isClosed: vi.fn().mockReturnValue(false),
+        };
+        mockExternalContext.pages.mockReturnValue([mockExternalPage]);
+
+        vi.mocked(chromium.connectOverCDP).mockResolvedValueOnce({
+          ...mockExternalBrowser,
+          contexts: () => [mockExternalContext],
+        } as unknown as never);
+
+        const session = await createPersistentBrowserSession({ channelCode: 'MEITUAN', headless: true });
+        expect(session.isExternalCdp).toBe(true);
+
+        fs.mkdirSync(session.profileDir!, { recursive: true });
+        const lockFile = path.join(session.profileDir!, 'SingletonLock');
+        fs.writeFileSync(lockFile, 'external-pid');
+        expect(fs.existsSync(lockFile)).toBe(true);
+
+        await closeAllBrowserSessions();
+
+        // 核心断言：CDP browser close 被调用，活跃会话清空，但外部锁文件被完整保留
+        expect(mockExternalBrowser.close).toHaveBeenCalledTimes(1);
+        expect(getActiveBrowserSessionsCount()).toBe(0);
+        expect(fs.existsSync(lockFile)).toBe(true);
       } finally {
         delete process.env.SMARTLINK_USER_DATA_DIR;
         if (fs.existsSync(tempUserData)) {

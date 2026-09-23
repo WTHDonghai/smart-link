@@ -9,6 +9,7 @@ import type {
   HostBridgeApi,
   CrawlerBridgeApi,
   DutyBridgeApi,
+  LogBridgeApi,
   PlatformAuthTokens,
   SystemLogEntry,
 } from '../src/types';
@@ -54,6 +55,12 @@ const dutyApi: DutyBridgeApi = {
   clearTokens: () => {
     return ipcRenderer.invoke('duty:clear-tokens');
   },
+  updateTemplateCache: (payload: { channelCode: string; template?: string | null }) => {
+    return ipcRenderer.invoke('duty:update-template-cache', payload);
+  },
+};
+
+const logApi: LogBridgeApi = {
   takePendingLogs: (): Promise<SystemLogEntry[]> => {
     return ipcRenderer.invoke('host:pending-logs');
   },
@@ -91,6 +98,7 @@ const updateApi: HostBridgeApi['update'] = {
 contextBridge.exposeInMainWorld('host', {
   crawler: crawlerApi,
   duty: dutyApi,
+  log: logApi,
   update: updateApi,
   env: exposedEnv,
   platform: platformApi,

@@ -12,13 +12,17 @@ import type {
 import { parseDutyTaskContext, isRiskControlError, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger } from './dutyTaskLogger';
 import { importToolkitOrder } from '../../services/dutyRuntimeApi';
-import { fetchChannelRemarkTemplate } from '../../services/channelApi';
 import { cleanChannelOrder } from '../../services/protocols';
 import {
   renderRemarkFromVariables,
   buildImportPayloadFromUnifiedOrder,
 } from '../../utils/template/orderPayloadTransformer';
 import { logger } from '../../services/logger';
+import { remarkTemplateManager } from './remarkTemplateManager';
+
+
+
+
 
 /**
  * 顶层任务生命周期通用编排调度器 (Top-Level Duty Task Dispatcher)
@@ -279,13 +283,14 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 3. 拉取远端模版 -> 基于渠道协议变量字典渲染 Remark
+      // 3. 拉取远端模版 (带 10 分钟内存级 TTL 缓存) -> 基于渠道协议变量字典渲染 Remark
       let template: string | null = null;
       try {
-        const templateRes = await fetchChannelRemarkTemplate(channelOrder.channelCode);
-        template = templateRes.remarkTemplate;
-      } catch {
-        // 网络/服务异常时保持 template = null，触发协议原始备注兜底
+        template = await remarkTemplateManager.getTemplate(channelOrder.channelCode);
+      } catch (err) {
+        logger.warn(
+          `渠道「${channelOrder.channelCode}」获取备注模板失败，将回退至渠道原始备注: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
       const rawRemark = String(
         rawDetail.remark ||

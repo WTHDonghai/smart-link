@@ -118,7 +118,7 @@ flowchart TD
 1. **单一数据源边界**：Electron 渲染进程的 IndexedDB（库名 `SmartLink_LogDB`）是全系统**唯一**的日志持久化存储。
 2. **主进程日志回流机制**：
    - 主进程生命周期与调度异常通过 `publishMainLog` 暂存至环形缓冲区（上限 50 条）；
-   - 渲染层挂载时通过 `dutyBridge.takePendingMainLogs()` 一次性取回冷启动日志；
+   - 渲染层挂载时通过 `logBridge.takePendingHostLogs()` 一次性取回冷启动日志；
    - 运行期间通过 IPC 事件 `'host:log-entry'` 实时推送至渲染进程；
    - 渲染进程统一 dispatch `addLog` / `addLogs`，经由 `logPersistenceMiddleware` 幂等落库，彻底消除“界面可见重启丢失”与“主进程日志黑洞”。
 

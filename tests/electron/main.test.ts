@@ -67,6 +67,7 @@ import * as platformAuthModule from '../../src/services/platformAuth';
 import { hotelCollectionEngine } from '../../src/crawler/engine';
 import { dutyOrchestrationEngine } from '../../src/crawler/duty/dutyOrchestrationEngine';
 import * as browserManager from '../../src/crawler/browserManager';
+import { remarkTemplateManager } from '../../src/crawler/duty/remarkTemplateManager';
 import { logger } from '../../src/services/logger';
 import { PROCESS_ENV_KEYS } from '../../src/types/env';
 import type { PlatformAuthTokens } from '../../src/types';
@@ -271,6 +272,47 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(result.success).toBe(true);
       expect(stopSpy).toHaveBeenCalledTimes(1);
       expect(closeSessionsSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('正确处理 duty:update-template-cache 消息并分发至 update/invalidate', async () => {
+      registerDutyIpcHandlers();
+
+      expect(ipcHandlers.has('duty:update-template-cache')).toBe(true);
+      const handler = ipcHandlers.get('duty:update-template-cache')!;
+
+      const updateSpy = vi.spyOn(remarkTemplateManager, 'updateCache').mockReturnValue(undefined);
+      const invalidateSpy = vi.spyOn(remarkTemplateManager, 'invalidateCache').mockReturnValue(undefined);
+
+      // 1. 空 channelCode 返回失败
+      const emptyRes = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, { channelCode: '' })) as {
+        success: boolean;
+        error?: string;
+      };
+      expect(emptyRes.success).toBe(false);
+      expect(emptyRes.error).toContain('不能为空');
+
+      // 2. 提供 template 时调用 updateRemarkTemplateCache
+      const updateRes = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, {
+        channelCode: 'meituan',
+        template: '新美团模板',
+      })) as { success: boolean; error?: string };
+      expect(updateRes.success).toBe(true);
+      expect(updateSpy).toHaveBeenCalledWith('MEITUAN', '新美团模板');
+
+      // 3. template 为 null 时同样调用 updateRemarkTemplateCache（支持置空模板缓存）
+      const updateNullRes = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, {
+        channelCode: 'meituan',
+        template: null,
+      })) as { success: boolean; error?: string };
+      expect(updateNullRes.success).toBe(true);
+      expect(updateSpy).toHaveBeenCalledWith('MEITUAN', null);
+
+      // 4. template 为 undefined 时调用 invalidateRemarkTemplateCache
+      const invalidateRes = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, {
+        channelCode: 'ctrip',
+      })) as { success: boolean; error?: string };
+      expect(invalidateRes.success).toBe(true);
+      expect(invalidateSpy).toHaveBeenCalledWith('CTRIP');
     });
   });
 });

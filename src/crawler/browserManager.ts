@@ -17,6 +17,7 @@ export interface BrowserSession {
   close: () => Promise<void>;
   profileDir?: string;
   channelCode?: string;
+  isExternalCdp?: boolean;
 }
 
 /** 模块内活跃浏览器会话集合，用于全生命周期追踪与统一退出清场 */
@@ -83,7 +84,8 @@ export async function closeAllBrowserSessions(): Promise<void> {
       } catch {
         // 忽略单个关闭异常，确保所有 session 都被尝试关闭
       } finally {
-        if (session.profileDir) {
+        // 关键保护：仅对非外部 CDP 连接（即本进程所启动）的 session 清理物理锁，严禁误删外部运行实例的锁文件
+        if (session.profileDir && !session.isExternalCdp) {
           releaseProfileLocks(session.profileDir);
         }
       }
@@ -199,11 +201,23 @@ export async function createPersistentBrowserSession(
       }
     }
 
+    // 为外部 CDP 连接补充反爬与视觉追踪注入
+    try {
+      await injectStealthScripts(cdpSession.context);
+      if (!isHeadless) {
+        await installVisualTracker(cdpSession.context);
+        await ensureVisualTrackerInjected(cdpSession.page);
+      }
+    } catch {
+      // 忽略注入异常
+    }
+
     const session: BrowserSession = {
       context: cdpSession.context,
       page: cdpSession.page,
       profileDir,
       channelCode: options.channelCode,
+      isExternalCdp: true,
       close: async () => {
         activeBrowserSessions.delete(session);
         try {
@@ -231,8 +245,8 @@ export async function createPersistentBrowserSession(
     headless: isHeadless,
     channel: 'chrome',
     args: [...getStealthLaunchArgs(), `--remote-debugging-port=${debugPort}`],
-    ignoreDefaultArgs: ['--use-mock-keychain', '--password-store=basic'],
-    viewport: { width: 1280, height: 850 },
+    ignoreDefaultArgs: ['--enable-automation', '--use-mock-keychain', '--password-store=basic'],
+    viewport: null,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     ignoreHTTPSErrors: true,

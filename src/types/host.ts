@@ -36,6 +36,13 @@ export interface DutyBridgeApi {
   setConfirmImportEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
   syncTokens(tokens: PlatformAuthTokens): Promise<{ success: boolean; error?: string }>;
   clearTokens(): Promise<{ success: boolean; error?: string }>;
+  updateTemplateCache(payload: {
+    channelCode: string;
+    template?: string | null;
+  }): Promise<{ success: boolean; error?: string }>;
+}
+
+export interface LogBridgeApi {
   takePendingLogs(): Promise<SystemLogEntry[]>;
   onLog(callback: (entry: SystemLogEntry) => void): () => void;
 }
@@ -63,6 +70,7 @@ export interface PlatformBridgeApi {
 export interface HostBridgeApi {
   crawler: CrawlerBridgeApi;
   duty: DutyBridgeApi;
+  log?: LogBridgeApi;
   update: AppUpdateBridgeApi;
   env: AppEnvSnapshot;
   platform?: PlatformBridgeApi;

@@ -99,8 +99,8 @@ export interface DesktopOperationResult {
    - 窗口就绪前：暂存入 `pendingMainLogs` 环形队列（上限 50 条）；
    - 窗口就绪后：通过 IPC 通道 `'host:log-entry'` 实时推送至渲染进程。
 2. **冷启动日志水合**：
-   - 渲染层 `App.tsx` 挂载时，主动调用 `dutyBridge.takePendingMainLogs()`（对应 IPC `'host:pending-logs'`）一次性取回并清空暂存队列；
-   - 随后平滑衔接 `subscribeDutyLogs` 实时事件流。
+   - 渲染层 `App.tsx` 挂载时，主动调用 `logBridge.takePendingHostLogs()`（对应 IPC `'host:pending-logs'`）一次性取回并清空暂存队列；
+   - 随后平滑衔接 `subscribeHostLogs` 实时事件流。
 3. **单点收敛持久化**：
    - 所有进入 Redux 的日志条目（本地埋点、主进程推送、暂存水合）**必须且只能**经由 `src/store/logPersistenceMiddleware.ts` 落库；
    - 依赖 `entry.id` 幂等账本与 IndexedDB 主键去重，杜绝重复写入。

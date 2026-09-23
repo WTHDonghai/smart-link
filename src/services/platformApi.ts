@@ -1,7 +1,7 @@
 import { platformAuthService, getPlatformBaseUrl } from './platformAuth';
 import { joinApiUrl } from '../utils/url';
 import { logger } from './logger';
-import type { LogModule, SystemLogEntry, TaskActionStage } from '../types';
+import type { LogModule, TaskActionStage } from '../types';
 
 export interface PlatformApiOptions extends RequestInit {
   baseUrl?: string;
@@ -9,26 +9,6 @@ export interface PlatformApiOptions extends RequestInit {
   module?: LogModule;
   orderNo?: string;
   taskActionStage?: TaskActionStage;
-}
-
-export type ApiLogListener = (entry: SystemLogEntry) => void;
-const apiLogListeners = new Set<ApiLogListener>();
-
-export function registerApiLogListener(listener: ApiLogListener): () => void {
-  apiLogListeners.add(listener);
-  return () => {
-    apiLogListeners.delete(listener);
-  };
-}
-
-function broadcastApiLog(entry: SystemLogEntry): void {
-  for (const listener of apiLogListeners) {
-    try {
-      listener(entry);
-    } catch {
-      // 隔离单点监听异常
-    }
-  }
 }
 
 function inferModuleFromPath(path: string): LogModule {
@@ -236,7 +216,7 @@ export async function requestPlatformApi<T = unknown>(
         responseData = response.bodyText;
       }
 
-      const logEntry = logger.track('API_REQUEST_FAILED', {
+      logger.track('API_REQUEST_FAILED', {
         level: 'ERROR',
         module: options.module || inferModuleFromPath(path),
         message: `[接口失败] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
@@ -250,7 +230,6 @@ export async function requestPlatformApi<T = unknown>(
         taskActionStage: options.taskActionStage,
         orderNo: options.orderNo,
       });
-      broadcastApiLog(logEntry);
 
       throw new PlatformApiError(
         response.status,
@@ -266,7 +245,7 @@ export async function requestPlatformApi<T = unknown>(
       responseData = response.bodyText;
     }
 
-    const logEntry = logger.track('API_REQUEST_SUCCESS', {
+    logger.track('API_REQUEST_SUCCESS', {
       level: 'INFO',
       module: options.module || inferModuleFromPath(path),
       message: `[接口调用] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
@@ -279,7 +258,6 @@ export async function requestPlatformApi<T = unknown>(
       taskActionStage: options.taskActionStage,
       orderNo: options.orderNo,
     });
-    broadcastApiLog(logEntry);
 
     return responseData as T;
   } catch (err) {
@@ -289,7 +267,7 @@ export async function requestPlatformApi<T = unknown>(
     const durationMs = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
 
-    const logEntry = logger.track('API_REQUEST_ERROR', {
+    logger.track('API_REQUEST_ERROR', {
       level: 'ERROR',
       module: options.module || inferModuleFromPath(path),
       message: `[接口网络异常] [${method}] ${path}: ${errorMsg}`,
@@ -302,7 +280,6 @@ export async function requestPlatformApi<T = unknown>(
       taskActionStage: options.taskActionStage,
       orderNo: options.orderNo,
     });
-    broadcastApiLog(logEntry);
 
     throw err;
   }

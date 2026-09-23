@@ -1,5 +1,6 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
 import { logger } from './logger';
+import { SYSTEM_TIMING } from '../config/timing';
 import type {
   ActualStateReportPayload,
   StationRegistration,
@@ -105,7 +106,7 @@ export async function reportDutyActualState(payload: ActualStateReportPayload): 
  */
 export async function claimDutyTask(
   payload: DutyTaskClaimRequest,
-  timeoutMs = 75000
+  timeoutMs = SYSTEM_TIMING.CLAIM_LONG_POLL
 ): Promise<DutyClaimedTask | null> {
   const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_CLAIMS, {
     method: 'POST',

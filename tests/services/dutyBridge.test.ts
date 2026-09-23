@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearDutyTokens,
-  takePendingMainLogs,
   queryDutyStatus,
   setConfirmImportEnabled,
   startDutyByChannel,
   stopAllDuty,
   stopDutyByChannel,
-  subscribeDutyLogs,
   syncDutyTokens,
+  updateDutyTemplateCache,
 } from '../../src/services/dutyBridge';
 import type { PlatformAuthTokens } from '../../src/types';
 
@@ -34,8 +33,7 @@ function installDutyApi() {
     setConfirmImportEnabled: vi.fn().mockResolvedValue({ success: true }),
     syncTokens: vi.fn().mockResolvedValue({ success: true }),
     clearTokens: vi.fn().mockResolvedValue({ success: true }),
-    takePendingLogs: vi.fn().mockResolvedValue([]),
-    onLog: vi.fn().mockReturnValue(() => undefined),
+    updateTemplateCache: vi.fn().mockResolvedValue({ success: true }),
   };
   hostWindow.host = { duty };
   return duty;
@@ -50,7 +48,6 @@ describe('dutyBridge', () => {
   it('requires the desktop duty API', async () => {
     delete hostWindow.host;
     await expect(startDutyByChannel('MEITUAN')).rejects.toThrow('值守调度仅支持桌面端');
-    expect(() => subscribeDutyLogs(() => undefined)).toThrow('值守调度仅支持桌面端');
   });
 
   it('starts duty through IPC when no renderer token is present', async () => {
@@ -70,7 +67,6 @@ describe('dutyBridge', () => {
     await queryDutyStatus(123);
     await syncDutyTokens(tokens);
     await clearDutyTokens();
-    await takePendingMainLogs();
 
     expect(duty.stopDuty).toHaveBeenCalledWith('MEITUAN');
     expect(duty.stopAllDuty).toHaveBeenCalledTimes(1);
@@ -78,7 +74,6 @@ describe('dutyBridge', () => {
     expect(duty.getStatus).toHaveBeenCalledWith(123);
     expect(duty.syncTokens).toHaveBeenCalledWith(tokens);
     expect(duty.clearTokens).toHaveBeenCalledTimes(1);
-    expect(duty.takePendingLogs).toHaveBeenCalledTimes(1);
   });
 
   it('throws error when setConfirmImportEnabled fails', async () => {
@@ -86,5 +81,36 @@ describe('dutyBridge', () => {
     duty.setConfirmImportEnabled.mockResolvedValueOnce({ success: false, error: 'IPC通信异常' });
 
     await expect(setConfirmImportEnabled(true)).rejects.toThrow('IPC通信异常');
+  });
+
+  describe('updateDutyTemplateCache', () => {
+    it('throws error if channelCode is empty', async () => {
+      await expect(updateDutyTemplateCache({ channelCode: '' })).rejects.toThrow('渠道编码 channelCode 不能为空');
+      await expect(updateDutyTemplateCache({ channelCode: '   ' })).rejects.toThrow('渠道编码 channelCode 不能为空');
+    });
+
+    it('safely degrades when host or dutyApi is not available', async () => {
+      delete hostWindow.host;
+      await expect(updateDutyTemplateCache({ channelCode: 'MEITUAN', template: '模板' })).resolves.toBeUndefined();
+    });
+
+    it('invokes host.duty.updateTemplateCache with upper-cased code and resolves on success', async () => {
+      const duty = installDutyApi();
+      await updateDutyTemplateCache({ channelCode: 'meituan', template: '新模板' });
+
+      expect(duty.updateTemplateCache).toHaveBeenCalledWith({
+        channelCode: 'MEITUAN',
+        template: '新模板',
+      });
+    });
+
+    it('throws error when host.duty.updateTemplateCache returns success: false', async () => {
+      const duty = installDutyApi();
+      duty.updateTemplateCache.mockResolvedValueOnce({ success: false, error: '更新失败: 渠道未就绪' });
+
+      await expect(
+        updateDutyTemplateCache({ channelCode: 'MEITUAN', template: '新模板' })
+      ).rejects.toThrow('更新失败: 渠道未就绪');
+    });
   });
 });

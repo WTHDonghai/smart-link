@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import type { Response as PlaywrightResponse } from 'playwright';
 import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk, dismissMeituanNoticeModals } from '../../../src/crawler/duty/meituanDutyRunner';
 import {
   extractMeituanOrdersFromPayload,
@@ -654,6 +655,58 @@ describe('meituanDutyRunner', () => {
       expect(result).toBe(false);
       expect(clickMock).not.toHaveBeenCalled();
     });
+
+    it('should skip hidden inactive modals and successfully dismiss subsequent visible notice modal', async () => {
+      let isModalVisible = true;
+      const clickMock = vi.fn().mockImplementation(async () => {
+        isModalVisible = false;
+      });
+      const waitForMock = vi.fn().mockResolvedValue(undefined);
+
+      const hiddenModal = {
+        isVisible: vi.fn().mockResolvedValue(false),
+        innerText: vi.fn().mockResolvedValue(''),
+      };
+
+      const mockDismissBtn = {
+        first: () => mockDismissBtn,
+        isVisible: vi.fn().mockImplementation(async () => isModalVisible),
+        click: clickMock,
+      };
+
+      const mockTitle = {
+        innerText: vi.fn().mockResolvedValue('联系客人'),
+      };
+
+      const visibleModal = {
+        first: () => visibleModal,
+        isVisible: vi.fn().mockImplementation(async () => isModalVisible),
+        innerText: vi.fn().mockResolvedValue('联系客人\n请拨打手机号18512801426转1730 （虚拟号码，请勿留存）\n我知道了'),
+        locator: vi.fn().mockImplementation((sel: string) => {
+          if (sel.includes('.mtd-modal-title')) {
+            return mockTitle;
+          }
+          return mockDismissBtn;
+        }),
+        waitFor: waitForMock,
+      };
+
+      const modalList = [hiddenModal, visibleModal];
+      const mockModalLocator = {
+        count: vi.fn().mockResolvedValue(modalList.length),
+        nth: vi.fn().mockImplementation((i: number) => modalList[i]),
+      };
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/order'),
+        locator: vi.fn().mockReturnValue(mockModalLocator),
+      };
+
+      const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
+      expect(result).toBe(true);
+      expect(clickMock).toHaveBeenCalledTimes(1);
+      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 1500 });
+    });
   });
 
   describe('MeituanDutyRunner lifecycle and page operations', () => {
@@ -900,6 +953,35 @@ describe('meituanDutyRunner', () => {
       };
 
       await expect(runner.collectUnhandledOrders()).rejects.toThrow('LIST_RESPONSE_TIMEOUT');
+    });
+
+    it('collectUnhandledOrders should compensate debounce delay using performance.now() when called within REFRESH_DEBOUNCE threshold', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+      const mockPage = {
+        url: vi.fn().mockReturnValue('https://eb.meituan.com/ebooking/order-gx/index.html#/unhandled'),
+        locator: vi.fn().mockReturnValue({
+          waitFor: vi.fn().mockResolvedValue(undefined),
+          getAttribute: vi.fn().mockResolvedValue('mtd-tabs-item mtd-tab-active'),
+          click: vi.fn().mockResolvedValue(undefined),
+        }),
+        waitForTimeout,
+        waitForResponse: vi.fn().mockResolvedValue({
+          status: () => 200,
+          text: () => Promise.resolve(JSON.stringify({ code: 0, data: [] })),
+        }),
+      };
+      (runner as unknown as { session: { page: unknown } }).session = { page: mockPage };
+
+      // 首次采集，刷新时间记录为当前单调时钟
+      await runner.collectUnhandledOrders();
+
+      // 紧接着发起第二次采集，应当触发防抖补偿等待 (waitForTimeout 被调用且延迟大于 0)
+      waitForTimeout.mockClear();
+      await runner.collectUnhandledOrders();
+      expect(waitForTimeout).toHaveBeenCalled();
+      const calledDelay = waitForTimeout.mock.calls[0][0];
+      expect(calledDelay).toBeGreaterThan(0);
     });
 
     it('refreshOrderList should always switch through all orders before pending', async () => {
@@ -1205,7 +1287,7 @@ describe('meituanDutyRunner', () => {
         return {
           status: () => 200,
           text: async () => JSON.stringify({ code: 0, data: { list: [] } }),
-        } as unknown as Parameters<typeof runner.refreshOrderList>[0] extends never ? never : any;
+        } as unknown as PlaywrightResponse;
       });
 
       const cardLocator = {
@@ -1654,6 +1736,86 @@ describe('meituanDutyRunner', () => {
       await runner.confirmImport('CFM-REAL-888', 'MT-ORD-REAL');
       expect(clickedLabels).toEqual(['accept-btn', 'modal-confirm-btn']);
       expect(filledValue).toBe('CFM-REAL-888');
+    });
+
+    it('confirmImport should prefer pressSequentially with humanized delay when available', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      let typedValue = '';
+      let passedOptions: { delay?: number } | undefined;
+
+      const acceptBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalInput = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: vi.fn().mockResolvedValue(undefined),
+        inputValue: vi.fn().mockImplementation(async () => typedValue),
+        pressSequentially: vi.fn().mockImplementation(async (val: string, opts?: { delay?: number }) => {
+          typedValue = val;
+          passedOptions = opts;
+        }),
+        fill: vi.fn(),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalConfirmBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalDialog = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('确认接受')) return modalConfirmBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('确认接受')) return modalConfirmBtn;
+            if (sel.includes('button') || sel.includes('op-btn')) return acceptBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return modalInput;
+              if (selector.includes('确认接受')) return modalConfirmBtn;
+              if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap') || selector.includes('button')) return acceptBtn;
+              if (selector.includes('.mtd-modal') || selector.includes('.modal-container')) return modalDialog;
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200, url: () => 'https://eb.meituan.com/api/order/confirm' }),
+        },
+      };
+
+      await runner.confirmImport('CFM-HUMAN-777', 'MT-ORD-PRESS');
+      expect(modalInput.pressSequentially).toHaveBeenCalledTimes(1);
+      expect(modalInput.fill).not.toHaveBeenCalled();
+      expect(typedValue).toBe('CFM-HUMAN-777');
+      expect(passedOptions?.delay).toBeGreaterThanOrEqual(35);
+      expect(passedOptions?.delay).toBeLessThanOrEqual(75);
     });
 
     it('confirmImport should fail fast with CONFIRM_INPUT_ALREADY_FILLED when modal input contains different confirm number', async () => {

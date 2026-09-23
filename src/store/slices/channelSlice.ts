@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
 } from '../../services/protocols/douyinProtocol';
+import { updateDutyTemplateCache } from '../../services/dutyBridge';
 import { getOtaChannelUrl } from '../../config/otaUrls';
 
 export const SCHEMA_STORAGE_PREFIX = 'smartlink_schema_';
@@ -370,6 +371,11 @@ export const saveRemarkTemplateAsync = createAsyncThunk<
       savedTemplate !== null
         ? savedTemplate
         : (await fetchChannelRemarkTemplate(param.otaChannelCode)).remarkTemplate ?? '';
+
+    await updateDutyTemplateCache({
+      channelCode: param.otaChannelCode,
+      template: resolvedTemplate,
+    });
 
     return {
       channelId: param.channelId,
