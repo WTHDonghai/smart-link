@@ -10,7 +10,6 @@ import {
 
 import type {
   ChannelDutyRunner,
-  ExtractedOrderDetail,
 } from '../../../src/crawler/duty/dutyContracts';
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
@@ -18,21 +17,20 @@ import * as channelApi from '../../../src/services/channelApi';
 import * as loggerModule from '../../../src/services/logger';
 
 class MockDutyRunner implements ChannelDutyRunner {
-  public channelCode = 'TEST_OTA';
+  public channelCode = 'MEITUAN';
   public running = true;
   public unhandledOrdersResult = [
     { orderId: 'ORD-1', hotelId: 'H1', hotelName: '酒店1', cancelOrder: false },
   ];
-  public detailResult: ExtractedOrderDetail = {
-    otaOrderId: 'ORD-1',
-    otaChannel: 'TEST_OTA',
+  public detailResult: Record<string, unknown> = {
+    orderId: 'ORD-1',
     guestName: '测试客人',
-    roomTypeName: '海景套房',
-    arrival: '2026-09-20',
-    departure: '2026-09-22',
+    roomName: '海景套房',
+    checkInDateString: '2026-09-20',
+    checkOutDateString: '2026-09-22',
     nights: 2,
-    quantity: 1,
-    totalPrice: 500,
+    roomCount: 1,
+    floorPrice: 50000,
   };
 
   public collectCalls = 0;
@@ -107,7 +105,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       const result = await dispatchDutyTask(task, runner);
       expect(result.status).toBe('SUCCEEDED');
       expect(runner.collectCalls).toBe(1);
-      expect(result.result?.otaChannelCode).toBe('TEST_OTA');
+      expect(result.result?.otaChannelCode).toBe('MEITUAN');
       expect(result.result?.recordCount).toBe(1);
       expect(result.result?.orders).toEqual(runner.unhandledOrdersResult);
     });
@@ -177,7 +175,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         orders: [
           {
             otaOrderId: 'ORD-1',
-            otaChannel: 'TEST_OTA',
+            otaChannel: 'MEITUAN',
             contact: {
               name: '测试客人',
               mobile: '',
@@ -300,15 +298,14 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
 
     it('should fail fast with ORDER_DETAIL_INVALID when required fields are missing', async () => {
       runner.detailResult = {
-        otaOrderId: 'ORD-INVALID',
-        otaChannel: 'TEST_OTA',
+        orderId: 'ORD-INVALID',
         guestName: '', // 缺失姓名
-        roomTypeName: '海景套房',
-        arrival: '2026-09-20',
-        departure: '2026-09-22',
+        roomName: '海景套房',
+        checkInDateString: '2026-09-20',
+        checkOutDateString: '2026-09-22',
         nights: 2,
-        quantity: 1,
-        totalPrice: 500,
+        roomCount: 1,
+        floorPrice: 500,
       };
 
       const taskPayload = { otaOrderId: 'ORD-INVALID' };
@@ -326,6 +323,26 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('FAILED');
       expect(result.errorCode).toBe('ORDER_DETAIL_INVALID');
       expect(result.errorMessage).toContain('缺少必须的业务字段');
+    });
+
+    it('should fail fast with ORDER_DETAIL_PARSE_FAILED when channel protocol is unsupported', async () => {
+      runner.channelCode = 'UNSUPPORTED_OTA';
+      const taskPayload = { otaOrderId: 'ORD-UNKNOWN' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-unknown',
+        businessId: 'ORD-UNKNOWN',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('ORDER_DETAIL_PARSE_FAILED');
+      expect(result.errorMessage).toContain('暂未实现渠道「UNSUPPORTED_OTA」的订单协议清洗器');
+      expect(result.retryable).toBe(false);
     });
 
     it('should return IMPORT_FAILED when importToolkitOrder throws error', async () => {
@@ -441,7 +458,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       // Assert 2：logger.warn 被调用，且 warn 消息中包含渠道编码与错误信息
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const warnMessage = warnSpy.mock.calls[0][0] as string;
-      expect(warnMessage).toContain('TEST_OTA');
+      expect(warnMessage).toContain('MEITUAN');
       expect(warnMessage).toContain('模板服务不可用 503');
 
       // Assert 3：业务流程继续，下游 importToolkitOrder 被调用
@@ -593,7 +610,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         start: async () => {},
         stop: async () => {},
         collectOrders: async () => ({ orders: [] }),
-        inspectOrderDetail: async () => ({} as unknown as ExtractedOrderDetail),
+        inspectOrderDetail: async () => ({}),
       } as unknown as ChannelDutyRunner;
 
       const task: DutyClaimedTask = {
@@ -656,7 +673,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         start: async () => {},
         stop: async () => {},
         collectOrders: async () => ({ orders: [] }),
-        inspectOrderDetail: async () => ({} as unknown as ExtractedOrderDetail),
+        inspectOrderDetail: async () => ({}),
       } as unknown as ChannelDutyRunner;
 
       const task: DutyClaimedTask = {
@@ -733,7 +750,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
   });
 
   describe('Remark template resolution & dynamic rendering in OTA_IMPORT_ORDER', () => {
-    const sampleDetail: ExtractedOrderDetail = {
+    const sampleDetail: Record<string, unknown> = {
       otaOrderId: 'MT-987654321',
       otaChannel: 'MEITUAN',
       guestName: '李小龙',
@@ -790,7 +807,7 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         expect.objectContaining({
           orders: [
             expect.objectContaining({
-              remark: '【自动入单】外部单号:MT-987654321，住客:李小龙，间夜:2间夜',
+              remark: '【自动入单】外部单号:MT-987654321，住客:李小龙，间夜:2',
             }),
           ],
         })

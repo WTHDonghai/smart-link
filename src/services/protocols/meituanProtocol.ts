@@ -703,8 +703,10 @@ export function cleanMeituanOrder(
   const rawRecord = rawPayload as Record<string, unknown>;
   const schema = customSchema || DEFAULT_MEITUAN_PROTOCOL_SCHEMA;
 
-  // 1. 兼容不同的报文嵌套层级 (data.orderDetail 或 data.order)
-  const rootData = rawRecord.data && typeof rawRecord.data === 'object' ? (rawRecord.data as Record<string, unknown>) : null;
+  // 1. 兼容不同的报文嵌套层级 (data.orderDetail、data.order、raw.data 或扁平对象)
+  const rawSub = (rawRecord.raw && typeof rawRecord.raw === 'object' ? (rawRecord.raw as Record<string, unknown>) : null);
+  const rawSubData = (rawSub?.data && typeof rawSub?.data === 'object' ? (rawSub.data as Record<string, unknown>) : null);
+  const rootData = (rawRecord.data && typeof rawRecord.data === 'object' ? (rawRecord.data as Record<string, unknown>) : null) || rawSubData;
   const innerDetail = (rootData?.orderDetail && typeof rootData.orderDetail === 'object')
     ? (rootData.orderDetail as Record<string, unknown>)
     : (rootData?.order && typeof rootData.order === 'object')
@@ -714,10 +716,15 @@ export function cleanMeituanOrder(
         : null;
 
   const mergedData: Record<string, unknown> = {
+    ...rawRecord,
+    ...(rawSub || {}),
     ...(innerDetail || {}),
     ...(rootData || {}),
   };
 
+  if (mergedData.orderId == null && (mergedData.otaOrderId != null || targetOrderId != null)) {
+    mergedData.orderId = mergedData.otaOrderId ?? targetOrderId;
+  }
   if (mergedData.floorPrice == null) {
     mergedData.floorPrice = mergedData.totalFee ?? mergedData.price ?? mergedData.totalPrice;
   }
@@ -729,6 +736,18 @@ export function cleanMeituanOrder(
   }
   if (mergedData.goodsId == null && mergedData.roomId != null) {
     mergedData.goodsId = mergedData.roomId;
+  }
+  if (mergedData.roomName == null && mergedData.roomTypeName != null) {
+    mergedData.roomName = mergedData.roomTypeName;
+  }
+  if (mergedData.checkInDateString == null && (mergedData.checkInDate != null || mergedData.arrival != null)) {
+    mergedData.checkInDateString = String(mergedData.checkInDate ?? mergedData.arrival);
+  }
+  if (mergedData.checkOutDateString == null && (mergedData.checkOutDate != null || mergedData.departure != null)) {
+    mergedData.checkOutDateString = String(mergedData.checkOutDate ?? mergedData.departure);
+  }
+  if (mergedData.roomCount == null && (mergedData.quantity != null || mergedData['房间数'] != null)) {
+    mergedData.roomCount = Number(mergedData.quantity ?? mergedData['房间数']);
   }
   if (mergedData.ratePlanName == null && mergedData.rateCode != null) {
     mergedData.ratePlanName = mergedData.rateCode;
@@ -758,7 +777,9 @@ export function cleanMeituanOrder(
     context.orderNo = targetOrderId;
     context['美团单号'] = targetOrderId;
   }
-  if (!context.otaOrderId && context.orderNo) {
+  if (context.orderNo) {
+    context['OTA订单号'] = context.orderNo;
+    context['美团单号'] = context.orderNo;
     context.otaOrderId = context.orderNo;
   }
 

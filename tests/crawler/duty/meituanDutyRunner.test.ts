@@ -2108,7 +2108,7 @@ describe('meituanDutyRunner', () => {
         departure: '2026-09-27',
         nights: 2,
         quantity: 1,
-        totalPrice: 998,
+        floorPrice: 99800,
       });
 
       const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({

@@ -4,10 +4,7 @@ import type {
   DutyTaskExecutionResult,
 } from './dutyContracts';
 import type {
-  CleanOrderContext,
   IChannelOrderProtocol,
-  OrderProtocolPricing,
-  UnifiedOrderProtocol,
 } from '../../types/template';
 import { parseDutyTaskContext, isRiskControlError, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger } from './dutyTaskLogger';
@@ -20,10 +17,6 @@ import {
 import { logger } from '../../services/logger';
 import { remarkTemplateManager } from './remarkTemplateManager';
 
-
-
-
-
 /**
  * 顶层任务生命周期通用编排调度器 (Top-Level Duty Task Dispatcher)
  * 对所有 OTA 渠道（美团、携程、抖音等）提供统一通用的任务编排流转：
@@ -32,116 +25,6 @@ import { remarkTemplateManager } from './remarkTemplateManager';
  * 3. OTA_CONFIRM_IMPORT: 解析确认号 -> 路由至渠道执行页面回填；
  * 4. OTA_CONFIRM_CANCEL: 解析单号 -> 路由至渠道执行取消确认；
  */
-
-/**
- * 兼容测试环境 MockRunner 或预结构化对象的模拟渠道协议包装器
- */
-function createMockChannelOrderProtocol(
-  channelCode: string,
-  detail: Record<string, unknown>,
-  otaOrderId: string
-): IChannelOrderProtocol {
-  const otaId = String(detail.otaOrderId || otaOrderId);
-  const guestName = String(detail.guestName || '');
-  const guestPhone = String(detail.guestMobile || '');
-  const roomName = String(detail.roomTypeName || '');
-  const arrival = String(detail.arrival || '');
-  const departure = String(detail.departure || '');
-  const nights = Math.max(1, Number(detail.nights || 1));
-  const quantity = Number(detail.quantity || 1);
-  const totalPrice = Number(detail.totalPrice || 0);
-
-  const rawRemark = String(
-    detail.remark ||
-      (detail.raw as Record<string, unknown> | undefined)?.remark ||
-      (detail.raw as Record<string, unknown> | undefined)?.memo ||
-      ''
-  );
-
-  const context: CleanOrderContext = {
-    'OTA订单号': otaId,
-    'otaOrderId': otaId,
-    'orderNo': otaId,
-    '美团单号': otaId,
-    '入住人': guestName,
-    '住客': guestName,
-    '住客姓名': guestName,
-    'guestName': guestName,
-    '联系电话': guestPhone,
-    'guestMobile': guestPhone,
-    'phone': guestPhone,
-    '房型名称': roomName,
-    'roomTypeName': roomName,
-    'roomName': roomName,
-    '间夜数': `${nights}间夜`,
-    'nights': nights,
-    '房间数': `${quantity}间`,
-    'quantity': quantity,
-    '底价': String(totalPrice),
-    'floorPrice': totalPrice,
-    'totalPrice': totalPrice,
-    '入住日期': arrival,
-    'arrival': arrival,
-    '离店日期': departure,
-    'departure': departure,
-    '入住离店日期': `${arrival}至${departure}`,
-    '渠道来源': channelCode,
-    'otaChannel': channelCode,
-    '备注': rawRemark,
-    'remark': rawRemark,
-    ...(detail.contextVariables && typeof detail.contextVariables === 'object'
-      ? (detail.contextVariables as Record<string, unknown>)
-      : {}),
-  };
-
-  if (detail.raw && typeof detail.raw === 'object') {
-    const rawObj = detail.raw as Record<string, unknown>;
-    context.raw = rawObj;
-    if (rawObj.data && typeof rawObj.data === 'object') {
-      context.data = rawObj.data as Record<string, unknown>;
-    }
-  }
-
-  const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
-  const pricing = Array.isArray(detail.pricing)
-    ? (detail.pricing as OrderProtocolPricing[])
-    : Array.from({ length: nights }, (_, i) => {
-        const d = new Date(`${detail.arrival}T00:00:00.000Z`);
-        d.setUTCDate(d.getUTCDate() + i);
-        return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
-      });
-
-  return {
-    channelCode,
-    getTemplateVariables: () => context,
-    toUnifiedOrder: (renderedRemark: string): UnifiedOrderProtocol => ({
-      otaOrderId: String(detail.otaOrderId || otaOrderId),
-      otaChannel: channelCode,
-      unitId: typeof detail.unitId === 'string' ? detail.unitId : undefined,
-      unitName: typeof detail.unitName === 'string' ? detail.unitName : undefined,
-      contact: {
-        name: String(detail.guestName || ''),
-        mobile: String(detail.guestMobile || ''),
-      },
-      booking: {
-        roomTypeName: String(detail.roomTypeName || ''),
-        originRoomType: String(detail.originRoomType || detail.roomTypeName || ''),
-        roomTypeId: String(detail.roomTypeId || 'ROOM_DEFAULT'),
-        rateCode: String(detail.ratePlanName || detail.rateCode || 'OTA'),
-        arrival: String(detail.arrival || ''),
-        departure: String(detail.departure || ''),
-        nights,
-        quantity: Number(detail.quantity || 1),
-        totalPrice,
-        floorPrice: totalPrice,
-        paytype: String(detail.paytype || '预付'),
-        pricing,
-      },
-      remark: renderedRemark,
-      rawPayload: detail,
-    }),
-  };
-}
 
 export interface DutyTaskDispatcherOptions {
   confirmImportEnabled?: boolean;
@@ -262,17 +145,7 @@ export async function dispatchDutyTask(
       // 2. 渠道协议清洗：得到强类型 IChannelOrderProtocol 实体
       let channelOrder: IChannelOrderProtocol;
       try {
-        if (
-          typeof rawDetail.guestName === 'string' &&
-          typeof rawDetail.roomTypeName === 'string' &&
-          typeof rawDetail.arrival === 'string' &&
-          typeof rawDetail.departure === 'string'
-        ) {
-          // 兼容测试环境 MockRunner 或预提取结构
-          channelOrder = createMockChannelOrderProtocol(runner.channelCode, rawDetail, otaOrderId);
-        } else {
-          channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, otaOrderId);
-        }
+        channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, otaOrderId);
       } catch (cleanErr) {
         const errMsg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
         return {
