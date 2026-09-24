@@ -140,18 +140,14 @@ export async function dismissMeituanNoticeModals(
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const modalWrappers = scope.locator('.mtd-modal-wrapper, .mtd-modal');
-        const count = typeof modalWrappers.count === 'function'
-          ? await modalWrappers.count().catch(() => 0)
-          : 1;
+        const count = await modalWrappers.count().catch(() => 0);
 
         if (count === 0) break;
 
         let dismissedInThisAttempt = false;
 
         for (let i = 0; i < count; i++) {
-          const modal = typeof modalWrappers.nth === 'function'
-            ? modalWrappers.nth(i)
-            : modalWrappers;
+          const modal = modalWrappers.nth(i);
 
           const isVisible = await isProbeVisible(modal, ACTION_TIMEOUT.FAST_PROBE);
           if (!isVisible) continue;

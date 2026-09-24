@@ -502,6 +502,8 @@ describe('meituanDutyRunner', () => {
     it('should return false when no modal is visible', async () => {
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockResolvedValue(false),
       };
       const mockPage = {
@@ -530,6 +532,8 @@ describe('meituanDutyRunner', () => {
 
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockImplementation(async () => modalVisible),
         innerText: vi.fn().mockResolvedValue('联系客人\n请拨打手机号15680403734转1109（虚拟号码）\n您的通话可能会被录音\n我知道了'),
         locator: vi.fn((sel: string) => {
@@ -562,6 +566,8 @@ describe('meituanDutyRunner', () => {
 
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockResolvedValue(true),
         innerText: vi.fn().mockResolvedValue('接单确认\n酒店确认号：\n确认接受'),
         locator: vi.fn().mockReturnValue(mockDismissBtn),
@@ -588,6 +594,8 @@ describe('meituanDutyRunner', () => {
 
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockResolvedValue(true),
         innerText: vi.fn().mockResolvedValue('安全验证\n为了您的账号安全，请完成滑动验证码'),
         locator: vi.fn().mockReturnValue(mockDismissBtn),
@@ -614,6 +622,8 @@ describe('meituanDutyRunner', () => {
 
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockResolvedValue(true),
         innerText: vi.fn().mockResolvedValue('提示\n确认取消该笔订单吗？取消后不可恢复'),
         locator: vi.fn().mockReturnValue(mockDismissBtn),
@@ -640,6 +650,8 @@ describe('meituanDutyRunner', () => {
 
       const mockModal = {
         first: () => mockModal,
+        count: vi.fn().mockResolvedValue(1),
+        nth: () => mockModal,
         isVisible: vi.fn().mockResolvedValue(true),
         innerText: vi.fn().mockResolvedValue('纯展示信息公告'),
         locator: vi.fn().mockReturnValue(mockDismissBtn),
