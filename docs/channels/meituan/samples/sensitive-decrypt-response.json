@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "sensitiveDataList": [
+      {
+        "guestInfos": [
+          {
+            "name": "刘德华",
+            "phone": "13800138000"
+          }
+        ]
+      }
+    ]
+  }
+}

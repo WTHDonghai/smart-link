@@ -52,6 +52,20 @@
 
 ---
 
+## 🌐 渠道专项接入规范与调研文档 (Channel Integrations)
+
+集中维护各 OTA 渠道的后台调研、网络接口契约、DOM 拓扑定位规范与脱敏样本：
+- **渠道接入索引总览**：[`channels/README.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/README.md)
+- **标准化调研模板**：[`channels/_template/`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/_template/)
+- **美团（MEITUAN）接入规范与实例文档**：
+  - [美团概况与运行环境规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/01-survey-and-overview.md) (`01-survey-and-overview.md`)
+  - [美团订单网络接口与契约规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/02-order-api-spec.md) (`02-order-api-spec.md`)
+  - [美团 DOM 拓扑与自动化交互规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/03-dom-interaction-spec.md) (`03-dom-interaction-spec.md`)
+  - [美团真实脱敏报文样例库](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/samples/) (`samples/`)
+
+---
+
 ## 🏛️ 项目最高治理准则
 - **开发与 AI 协同治理规范**：[`AGENTS.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/AGENTS.md)
   - 规定了本项目的架构分层、技术栈标准、设计系统、Fail-Fast 刚性红线、诚实测试准则与极简设计原则。
+

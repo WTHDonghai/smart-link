@@ -44,7 +44,7 @@
 6. **全链路错误码与 `retryable` 贯穿透传 (End-to-End Retryable Propagation)**：
    - 底层 Runner 抛出带有确定 `errorCode` 与 `retryable: false` 的结构化异常 `DutyExecutionError`；
    - 通用编排层 `dutyTaskDispatcher.ts` 捕获异常时，提取并透传 `errorCode` 与 `retryable`；
-   - 调度引擎 `dutyOrchestrationEngine.ts` 第 743 行优先透传 `execRes.retryable` 上报中台，形成完整的不可重试闭环，杜绝中台盲目反复推单，同时保持其他渠道既有重试机制不受影响。
+   - 调度引擎 `dutyOrchestrationEngine.ts` 在结果回执组装阶段优先透传 `execRes.retryable` 上报中台，形成完整的不可重试闭环，杜绝中台盲目反复推单，同时保持其他渠道既有重试机制不受影响。
 
 7. **去技术暴露与边缘触发 Toast 门禁 (Edge-Triggered Toast & Zero Technical Leakage)**：
    - 废除日志流嗅探 Toast 反模式；
@@ -66,7 +66,7 @@ src/crawler/duty/
 src/crawler/duty/ (通用协同模块)
 ├── dutyContracts.ts             # 通用契约：补充 retryable?: boolean 属性
 ├── dutyTaskDispatcher.ts        # 通用编排：中台入单、模板拉取、备注渲染、异常 errorCode/retryable 透传
-└── dutyOrchestrationEngine.ts   # 调度引擎：认领任务、上报结果、第 743 行优先透传 retryable
+└── dutyOrchestrationEngine.ts   # 调度引擎：认领任务、上报结果、结果回执优先透传 retryable
 
 src/store/slices/
 ├── appSlice.ts                  # 基础状态：ToastOptions.type 扩充支持 'warning'
@@ -82,7 +82,7 @@ src/store/slices/
 | `src/crawler/duty/meituanDutyRunner.ts` | 渠道自动化执行 | 实现标准 `ChannelDutyRunner` 接口。持有当前渠道的 Playwright `Page` 实例；通过**任务互斥锁 (Task Mutex Lock)** 保证单页面交互串行化；负责带防抖等待的列表刷新、目标卡片内联展开、网络响应拦截、敏感数据智能解密、卡片内确认号回填。抛出确定性的 `DutyExecutionError`。 |
 | `src/crawler/duty/dutyContracts.ts` | 通用契约 | 在 `DutyTaskExecutionResult` 接口中补充 `retryable?: boolean` 字段。 |
 | `src/crawler/duty/dutyTaskDispatcher.ts` | 通用编排调度 | 调度各渠道 Runner 获取数据；执行字段校验（Fail-Fast）；调用中台 API；调度卡片温和收起；**在捕获 Runner 异常时，解构并透传底层抛出的 `errorCode` 与 `retryable` 至 `DutyTaskExecutionResult`**。 |
-| `src/crawler/duty/dutyOrchestrationEngine.ts` | 调度引擎 | 负责任务认领与中台结果上报；在第 743 行优先透传 `execRes.retryable`。 |
+| `src/crawler/duty/dutyOrchestrationEngine.ts` | 调度引擎 | 负责任务认领与中台结果上报；在结果回执组装阶段优先透传 `execRes.retryable`。 |
 | `src/store/slices/appSlice.ts` | 全局状态 | Toast Payload 的 `type` 扩充支持 `'warning'`，以契合风控告警语义。 |
 | `src/store/slices/orderGuardianSlice.ts` | 表现与状态 | 接收渠道状态与失败信息，采用**边缘触发机制**在渠道降级或不可恢复终态失败时显式触发用户友好的 Toast 提示。 |
 
@@ -354,11 +354,11 @@ catch (err) {
 }
 ```
 
-#### ② `dutyOrchestrationEngine.ts` 第 743 行向后兼容透传
+#### ② `dutyOrchestrationEngine.ts` 回执组装向后兼容透传
 在主进程任务调度引擎中，中台结果上报载荷 (`resultPayload`) 的 `retryable` 计算做最小向后兼容修改：
 
 ```typescript
-// src/crawler/duty/dutyOrchestrationEngine.ts 第 743 行
+// src/crawler/duty/dutyOrchestrationEngine.ts 回执组装
 const isRiskIntercepted = execRes.errorCode === 'RISK_VERIFICATION_REQUIRED';
 const wireStatus: DutyTaskWireStatus = isSuccess ? 'SUCCESS' : 'FAIL';
 

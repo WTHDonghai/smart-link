@@ -1,0 +1,30 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "results": [
+      {
+        "orderId": "5035036080553098350",
+        "poiId": "781913923",
+        "poiName": "安得天馨酒店（成都太古里店）",
+        "checkInDateString": "2026-09-29",
+        "checkOutDateString": "2026-09-30",
+        "nights": 1,
+        "roomCount": 1,
+        "roomName": "豪华大床房",
+        "ratePlanName": "天天特价含单早",
+        "totalFee": 46900,
+        "orderDisplayLabel": "待处理",
+        "aptCreatTimeString": "2026-09-24 15:18:31",
+        "cancelOrder": false,
+        "contacts": [
+          {
+            "name": "刘**",
+            "phone": ""
+          }
+        ]
+      }
+    ],
+    "totalCount": 1
+  }
+}

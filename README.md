@@ -79,23 +79,27 @@ Smart-Link/
 ├── README.md                 # 项目文档与快速指南
 ├── package.json              # 依赖与脚本
 ├── vite.config.ts            # Vite 6 + Tailwind CSS v4 配置
-├── src/
-│   ├── main.tsx              # 应用挂载入口
-│   ├── App.tsx               # 桌面主框架与 Tab 导航
-│   ├── types/                # 全局领域类型定义 (GuardianOrder, OTAChannel 等)
-│   ├── utils/                # 领域工具函数 (orderHelpers 等)
-│   ├── mocks/                # 初始与测试 Mock 数据 (mockOrders 等)
-│   ├── store/                # Redux Toolkit 全局状态管理中心
-│   │   ├── index.ts          # Store 配置与 Typed Hooks (useAppDispatch, useAppSelector)
-│   │   └── slices/           # 状态切片 (channel, hotel, product, orderGuardian, systemLog, app)
-│   └── components/           # 业务视图组件体系
-│       ├── common/           # 通用原子组件 (Modal, StatusBadge, EmptyState 等)
-│       ├── orders/           # 订单守护模块 (Table, Filter, BatchBar, Pagination, Modal)
-│       ├── channels/         # 渠道映射模块
-│       ├── hotels/           # 酒店匹配模块
-│       ├── products/         # 房型与价格规则映射
-│       ├── desktop/          # Playwright 采集引擎抽屉与会话监控
-│       └── logs/             # 系统运行与全链路日志
+├── electron/                 # Electron 桌面原生主进程与预加载脚本
+│   ├── main.ts               # 主进程入口 (单实例锁、生命周期、安全防御、IPC 路由)
+│   ├── preload.ts            # 预加载脚本 (window.host 安全白名单隔离)
+│   └── tsconfig.json         # 主进程 TypeScript 编译配置
+├── docs/                     # 架构设计、渠道调研与工程技术文档索引
+└── src/
+    ├── main.tsx              # 前端挂载入口
+    ├── App.tsx               # 桌面主框架与 Tab 导航
+    ├── types/                # 全局领域类型与契约定义 (ToolkitOrder, HostBridgeApi 等)
+    ├── utils/                # 纯函数计算工具库 (orderHelpers, template 等)
+    ├── services/             # 客户端 SDK (*Api.ts)、桌面 IPC 网关 (*Bridge.ts) 与日志存储
+    ├── crawler/              # 自动化采集与值守引擎 (Playwright, DutyOrchestrationEngine, MeituanRunner)
+    ├── store/                # Redux Toolkit 全局状态管理中心与 IndexedDB 幂等落库中间件
+    └── components/           # 业务视图组件体系
+        ├── common/           # 通用原子组件 (Modal, StatusBadge, EmptyState 等)
+        ├── orders/           # 订单值守工作区 (OrderTable, ChannelDutyPanel, EditOrderDrawer 等)
+        ├── channels/         # 渠道映射与备注模板配置
+        ├── hotels/           # 酒店匹配与房态同步
+        ├── products/         # 房型与价格规则映射
+        ├── sidebar/          # 侧边栏导航与版本更新指示
+        └── logs/             # 系统全链路运行日志中枢控制台
 ```
 
 ---

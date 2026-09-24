@@ -75,7 +75,7 @@ src/
 ├── utils/
 │   ├── orderHelpers.ts              # 纯函数: getAllowedOrderActions, calculateNightsAndPricing, formatCurrency
 │   └── template/
-│       ├── orderProtocolNormalizer.ts # 跨平台订单协议归一化算子
+│       ├── protocolNormalizer.ts      # 跨平台订单协议归一化算子
 │       └── orderPayloadTransformer.ts # 搬单载荷清洗与转换纯函数
 ├── store/
 │   └── slices/

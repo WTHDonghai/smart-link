@@ -42,6 +42,7 @@ ehthumbs.db
 # IDEs & AI Assistants
 .vscode/
 .idea/
+.obsidian/
 *.swp
 *.swo
 *~
@@ -50,3 +51,4 @@ ehthumbs.db
 .cursor/
 .claude/
 .history/
+
