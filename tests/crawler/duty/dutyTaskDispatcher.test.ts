@@ -218,17 +218,15 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       runner.inspectOrderDetail = vi.fn().mockResolvedValue({
         code: 0,
         data: {
-          orderDetail: {
-            orderId: 'MT-RAW-12345',
-            poiId: 'POI-MT-1',
-            guestName: '孙悟空',
-            guestMobile: '13800002222',
-            roomName: '至尊套房',
-            checkInDateString: '2026-10-01',
-            checkOutDateString: '2026-10-03',
-            nights: 2,
-            totalFee: 80000,
-          },
+          orderId: 'MT-RAW-12345',
+          poiId: 'POI-MT-1',
+          guestName: '孙悟空',
+          guestMobile: '13800002222',
+          roomName: '至尊套房',
+          checkInDateString: '2026-10-01',
+          checkOutDateString: '2026-10-03',
+          nights: 2,
+          totalFee: 80000,
         },
       });
 

@@ -43,8 +43,8 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       const vars = channelOrder.getTemplateVariables();
       expect(vars['美团单号']).toBe('5035036057245515034');
       expect(vars['orderNo']).toBe('5035036057245515034');
-      expect(vars['房型名称']).toBe('松香大床房');
-      expect(vars['roomName']).toBe('松香大床房');
+      expect(vars['房型名称']).toBe('豪华大床房');
+      expect(vars['roomName']).toBe('豪华大床房');
       expect(vars['入住人']).toBe('巨*');
       expect(vars['guestName']).toBe('巨*');
       expect(vars['结算底价']).toBe('239.00');
@@ -62,10 +62,10 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.otaOrderId).toBe('5035036057245515034');
       expect(unified.otaChannel).toBe('MEITUAN');
       expect(unified.unitId).toBe('1533758592');
-      expect(unified.unitName).toBe('禅驿度假酒店（自贡方特恐龙王国店）');
+      expect(unified.unitName).toBe('西软度假酒店');
       expect(unified.contact.name).toBe('巨*');
       expect(unified.contact.mobile).toBe('13888889999');
-      expect(unified.booking.roomTypeName).toBe('松香大床房');
+      expect(unified.booking.roomTypeName).toBe('豪华大床房');
       expect(unified.booking.roomTypeId).toBe('2532714518'); // goodsId
       expect(unified.booking.arrival).toBe('2026-09-15');
       expect(unified.booking.departure).toBe('2026-09-16');
@@ -74,7 +74,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.booking.floorPrice).toBe(239);
       expect(unified.booking.paytype).toBe('预付');
       expect(unified.booking.pricing).toEqual([
-        { date: '2026-09-15', price: 265.55 },
+        { date: '2026-09-15', price: 239 },
       ]);
       expect(unified.remark).toBe('这是已渲染的备注');
       expect(unified.rawPayload).toBe(MEITUAN_RAW_SAMPLE_ORDER);
@@ -202,6 +202,39 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.booking.totalPrice).toBe(180);
       expect(unified.booking.pricing).toEqual([
         { date: '2026-12-01', price: 180 },
+      ]);
+    });
+
+    it('should extract pricing strictly from priceInfo floorPrice matching order settlement price', () => {
+      const realPayload = {
+        data: {
+          orderId: '5035036080553098350',
+          roomName: '安澜大床客房[错峰出游]',
+          checkInDateString: '2026-09-29 00:00:00',
+          checkOutDateString: '2026-09-30 00:00:00',
+          floorPrice: 29540,
+          price: 35168,
+          priceInfo: [
+            {
+              commission: 5628,
+              date: 1790611200000,
+              dateString: '2026-09-29 00:00:00',
+              floorPrice: 29540,
+              paymentUnitId: '3803962976768182158',
+              price: 35168,
+              subRatio: 1200,
+            },
+          ],
+        },
+      };
+
+      const channelOrder = cleanMeituanOrder(realPayload);
+      const unified = channelOrder.toUnifiedOrder('');
+
+      expect(unified.booking.totalPrice).toBe(295.4);
+      expect(unified.booking.floorPrice).toBe(295.4);
+      expect(unified.booking.pricing).toEqual([
+        { date: '2026-09-29', price: 295.4 },
       ]);
     });
   });

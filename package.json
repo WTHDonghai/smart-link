@@ -28,6 +28,7 @@
     "duty:confirm-cancel:submit": "vite-node src/crawler/duty/confirmCancelCli.ts --submit --wait-manual-close",
     "profile:list": "vite-node src/crawler/syncCli.ts --list",
     "profile:sync": "vite-node src/crawler/syncCli.ts",
+    "test:order-import": "vite-node scripts/testOrderImportCli.ts",
     "test": "vitest run"
   },
   "dependencies": {

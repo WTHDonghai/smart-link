@@ -28,7 +28,7 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
     expect(cleanCtx.orderTime).toBe('2026-09-15 11:37:44');
 
     // 酒店房型
-    expect(cleanCtx.roomName).toBe('松香大床房');
+    expect(cleanCtx.roomName).toBe('豪华大床房');
     expect(cleanCtx.roomCount).toBe('1');
 
     // 入离时间
@@ -63,7 +63,7 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
     const rendered = renderTemplate(SAMPLE_MEITUAN_REMARK_TEMPLATE, cleanCtx);
 
     expect(rendered).toContain('【美团搬单】单号:5035036057245515034');
-    expect(rendered).toContain('房型:松香大床房 x 1间');
+    expect(rendered).toContain('房型:豪华大床房 x 1间');
     expect(rendered).toContain('客人:巨* (138****9999)');
     expect(rendered).toContain('入住:2026-09-15至2026-09-16');
     expect(rendered).toContain('底价:¥239.00');

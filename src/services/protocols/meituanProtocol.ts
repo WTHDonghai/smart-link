@@ -15,7 +15,7 @@ import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
 /** 美团真实订单协议样本数据 (源自生产采集报文) */
 export const MEITUAN_RAW_SAMPLE_ORDER = {
   data: {
-    address: '自贡市北环路88号',
+    address: 'xx市北xx路xx号',
     agreementHosting: false,
     appointmentStatus: 1110,
     aptCreatTime: 1789443464000,
@@ -246,13 +246,13 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
     packageMark: 0,
     packageRoom: 2,
     partnerId: 4551093,
-    partnerName: '自贡禅驿酒店有限公司',
+    partnerName: 'xxxx酒店有限公司',
     payTime: 1789443465000,
     payTimeString: '2026-09-15 11:37:45',
     paymentType: 0,
     poiId: 1533758592,
     poiIdStr: '1533758592',
-    poiName: '禅驿度假酒店（自贡方特恐龙王国店）',
+    poiName: '西软度假酒店',
     pointDeductionTip: '',
     preSettlementInfo: {
       partnerIncome: '238.90',
@@ -261,6 +261,19 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
     },
     pretender: false,
     price: 26555,
+    priceInfo: [
+      {
+        commission: 2655,
+        date: 1789401600000,
+        dateString: '2026-09-15 00:00:00',
+        floorPrice: 23900,
+        paymentUnitId: '3803026324567222330',
+        price: 26555,
+        subRatio: 0,
+        subRatioDesc: '',
+        wxAndLowSub: false,
+      },
+    ],
     rightsModelList: [
       {
         autoConfirmSource: null,
@@ -292,7 +305,7 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
     roomCount: 1,
     roomDesc: '',
     roomId: 993699675,
-    roomName: '松香大床房',
+    roomName: '豪华大床房',
     status: 'CONSUMED',
     todayCheckIn: true,
     totalFee: 26555,
@@ -703,76 +716,41 @@ export function cleanMeituanOrder(
   const rawRecord = rawPayload as Record<string, unknown>;
   const schema = customSchema || DEFAULT_MEITUAN_PROTOCOL_SCHEMA;
 
-  // 1. 兼容不同的报文嵌套层级 (data.orderDetail、data.order、raw.data 或扁平对象)
-  const rawSub = (rawRecord.raw && typeof rawRecord.raw === 'object' ? (rawRecord.raw as Record<string, unknown>) : null);
-  const rawSubData = (rawSub?.data && typeof rawSub?.data === 'object' ? (rawSub.data as Record<string, unknown>) : null);
-  const rootData = (rawRecord.data && typeof rawRecord.data === 'object' ? (rawRecord.data as Record<string, unknown>) : null) || rawSubData;
-  const innerDetail = (rootData?.orderDetail && typeof rootData.orderDetail === 'object')
-    ? (rootData.orderDetail as Record<string, unknown>)
-    : (rootData?.order && typeof rootData.order === 'object')
-      ? (rootData.order as Record<string, unknown>)
-      : (rawRecord.orderDetail && typeof rawRecord.orderDetail === 'object')
-        ? (rawRecord.orderDetail as Record<string, unknown>)
-        : null;
+  // 1. 直接定位美团报文数据主体（真实报文统一位于 data 节点下）
+  const data = (rawRecord.data && typeof rawRecord.data === 'object' ? rawRecord.data : rawRecord) as Record<string, unknown>;
 
-  const mergedData: Record<string, unknown> = {
-    ...rawRecord,
-    ...(rawSub || {}),
-    ...(innerDetail || {}),
-    ...(rootData || {}),
-  };
-
-  if (mergedData.orderId == null && (mergedData.otaOrderId != null || targetOrderId != null)) {
-    mergedData.orderId = mergedData.otaOrderId ?? targetOrderId;
+  // 基础字段轻量补齐（兼容 flat mock 报文）
+  if (data.orderId == null && (data.otaOrderId != null || targetOrderId != null)) {
+    data.orderId = data.otaOrderId ?? targetOrderId;
   }
-  if (mergedData.floorPrice == null) {
-    mergedData.floorPrice = mergedData.totalFee ?? mergedData.price ?? mergedData.totalPrice;
+  if (data.roomName == null && data.roomTypeName != null) {
+    data.roomName = data.roomTypeName;
   }
-  if (mergedData.poiId == null && mergedData.partnerId != null) {
-    mergedData.poiId = mergedData.partnerId;
+  if (data.checkInDateString == null && (data.checkInDate != null || data.arrival != null)) {
+    data.checkInDateString = String(data.checkInDate ?? data.arrival);
   }
-  if (mergedData.poiName == null && mergedData.partnerName != null) {
-    mergedData.poiName = mergedData.partnerName;
+  if (data.checkOutDateString == null && (data.checkOutDate != null || data.departure != null)) {
+    data.checkOutDateString = String(data.checkOutDate ?? data.departure);
   }
-  if (mergedData.goodsId == null && mergedData.roomId != null) {
-    mergedData.goodsId = mergedData.roomId;
+  if (data.floorPrice == null) {
+    data.floorPrice = data.totalFee ?? data.price ?? data.totalPrice;
   }
-  if (mergedData.roomName == null && mergedData.roomTypeName != null) {
-    mergedData.roomName = mergedData.roomTypeName;
+  if (data.guestName && (!Array.isArray(data.guests) || data.guests.length === 0)) {
+    data.guests = [{ name: data.guestName }];
   }
-  if (mergedData.checkInDateString == null && (mergedData.checkInDate != null || mergedData.arrival != null)) {
-    mergedData.checkInDateString = String(mergedData.checkInDate ?? mergedData.arrival);
-  }
-  if (mergedData.checkOutDateString == null && (mergedData.checkOutDate != null || mergedData.departure != null)) {
-    mergedData.checkOutDateString = String(mergedData.checkOutDate ?? mergedData.departure);
-  }
-  if (mergedData.roomCount == null && (mergedData.quantity != null || mergedData['房间数'] != null)) {
-    mergedData.roomCount = Number(mergedData.quantity ?? mergedData['房间数']);
-  }
-  if (mergedData.ratePlanName == null && mergedData.rateCode != null) {
-    mergedData.ratePlanName = mergedData.rateCode;
-  }
-
-  if (!Array.isArray(mergedData.guests) || mergedData.guests.length === 0) {
-    if (mergedData.guestName) {
-      mergedData.guests = [{ name: mergedData.guestName }];
-    }
-  }
-  if (!Array.isArray(mergedData.contacts) || mergedData.contacts.length === 0) {
-    if (mergedData.guestMobile) {
-      mergedData.contacts = [{ phone: mergedData.guestMobile }];
-    }
+  if (data.guestMobile && (!Array.isArray(data.contacts) || data.contacts.length === 0)) {
+    data.contacts = [{ phone: data.guestMobile }];
   }
 
   const normalizedRaw: Record<string, unknown> = {
     ...rawRecord,
-    data: mergedData,
+    data,
   };
 
   // 2. 依据 Schema 执行标准化清洗并做契约检测
   const context = normalizeOrderPayload(normalizedRaw, schema);
 
-  // 3. 补齐高频同义词别名映射，保证模版求值无论用中文还是英文均可命中
+  // 3. 补齐业务单号与常用别名映射
   if (!context.orderNo && targetOrderId) {
     context.orderNo = targetOrderId;
     context['美团单号'] = targetOrderId;
@@ -790,37 +768,6 @@ export function cleanMeituanOrder(
   if (context.roomTypeId) context['房型商品ID'] = context.roomTypeId;
   if (context.rateCode) context['价格方案'] = context.rateCode;
 
-  // 容错：若 guests 为空但 contacts 有值，补充住客姓名与手机
-  if (!context.guestName) {
-    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
-    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
-    const fallbackName = String(firstContact?.name || mergedData.guestName || mergedData.contactName || '').trim();
-    if (fallbackName) {
-      context.guestName = fallbackName;
-      context['入住人'] = fallbackName;
-    }
-  }
-
-  if (!context.guestPhone) {
-    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
-    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
-    const fallbackPhone = String(firstContact?.phone || mergedData.guestMobile || mergedData.phone || '').trim();
-    if (fallbackPhone) {
-      context.guestPhone = fallbackPhone;
-      context['联系电话'] = fallbackPhone;
-    }
-  }
-
-  if (!context.contactPhone) {
-    const contacts = Array.isArray(mergedData.contacts) ? mergedData.contacts : [];
-    const firstContact = contacts[0] && typeof contacts[0] === 'object' ? (contacts[0] as Record<string, unknown>) : null;
-    const fallbackPhone = String(firstContact?.phone || mergedData.guestMobile || mergedData.phone || '').trim();
-    if (fallbackPhone) {
-      context.contactPhone = fallbackPhone;
-      context['真实联系电话'] = fallbackPhone;
-    }
-  }
-
   // 计算间夜数
   if (!context.nights && context.checkInDate && context.checkOutDate) {
     const diff = Math.round((Date.parse(String(context.checkOutDate)) - Date.parse(String(context.checkInDate))) / 86400000);
@@ -828,19 +775,19 @@ export function cleanMeituanOrder(
     context['间夜数'] = context.nights;
   }
 
-  // 标准化每日价格 (OrderProtocolPricing[])
-  let pricing: OrderProtocolPricing[] = [];
-  if (Array.isArray(mergedData.checkInDateModels) && mergedData.checkInDateModels.length > 0) {
-    pricing = (mergedData.checkInDateModels as Array<Record<string, unknown>>)
-      .map((m) => {
-        const item = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>;
-        const rawP = Number(item.pricePerRoom || 0);
-        const pYuan = rawP > 1000 ? Math.round((rawP / 100) * 100) / 100 : rawP;
-        const dStr = String(item.checkInDateString || item.checkInDate || '').slice(0, 10);
-        return { date: dStr, price: pYuan };
-      })
-      .filter((p) => Boolean(p.date));
-  }
+  // 标准化每日价格 (OrderProtocolPricing[])：直接从美团真实报文的 data.priceInfo 取值
+  const rawPriceInfo = Array.isArray(data.priceInfo)
+    ? (data.priceInfo as Array<Record<string, unknown>>)
+    : [];
+
+  let pricing: OrderProtocolPricing[] = rawPriceInfo
+    .map((item) => ({
+      date: String(item.dateString || item.date || '').slice(0, 10),
+      price: Math.round(((Number(item.floorPrice ?? item.price ?? 0)) / 100) * 100) / 100,
+    }))
+    .filter((p) => Boolean(p.date));
+
+  // 仅在原始接口报文未提供 priceInfo 明细且存在入离日期时，根据总价平摊推导
   if (pricing.length === 0 && context.checkInDate && context.checkOutDate) {
     const nights = Math.max(1, Number(context.nights || 1));
     const totalPrice = Number(context.floorPrice ?? context.salePrice ?? 0);
