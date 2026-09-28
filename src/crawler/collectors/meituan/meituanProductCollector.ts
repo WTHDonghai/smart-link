@@ -42,9 +42,9 @@ export class MeituanProductCollector implements ChannelProductCollector {
     const poiId = (request.poiId || request.extUnitCode || '').trim();
     const partnerId = (request.partnerId || '').trim();
     const targetUrl = this.resolveTargetUrl(request.targetUrl, poiId, partnerId);
-    const timeoutMs = resolveTimeoutMs(request, 30);
-    const waitSeconds = resolveWaitSeconds(request, 3);
-    const waitMs = resolveWaitMs(request, 3);
+    const timeoutMs = resolveTimeoutMs(request, 60);
+    const waitSeconds = resolveWaitSeconds(request, 30);
+    const waitMs = resolveWaitMs(request, 30);
 
     log({
       level: 'PLAYWRIGHT',

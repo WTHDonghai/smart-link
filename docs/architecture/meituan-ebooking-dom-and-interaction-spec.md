@@ -2,6 +2,16 @@
 
 > 本文档基于真实生产环境美团商家后台（E-booking，包含微前端乾坤子应用 `order-gx` 及美团自研 UI 体系 MTD/Xigua）的现场实测取证与自动化工程反思总结编写。
 > 详细记录了页面的真实 DOM 拓扑、各关键操作的控件定位标准、常见认知误区与避坑准则。后续对美团订单采集、详情抓取、确认号回填等模块进行代码维护、重构或演进时，必须以此规范为基准，杜绝“脱离真实 DOM 的盲目脑补”。
+>
+> **落地代码位置**：
+> - 门面执行器：[`src/crawler/duty/channels/meituan/meituanDutyRunner.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDutyRunner.ts) (继承 `BaseChannelDutyRunner`)
+> - 卡片定位：[`src/crawler/duty/channels/meituan/meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts)
+> - 列表流转：[`src/crawler/duty/channels/meituan/meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)
+> - 详情嗅探：[`src/crawler/duty/channels/meituan/meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)
+> - 动作执行：[`src/crawler/duty/channels/meituan/meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)
+> - 安全风控与弹窗：[`src/crawler/duty/channels/meituan/meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts), [`src/crawler/duty/channels/meituan/meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)
+> - 渠道标准规范归档：[`docs/channels/meituan/03-dom-interaction-spec.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/03-dom-interaction-spec.md)
+
 
 ---
 

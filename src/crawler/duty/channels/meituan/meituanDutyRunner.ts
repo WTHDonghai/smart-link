@@ -1,6 +1,6 @@
-import type { Page, Request, Response, Locator } from 'playwright';
-import { createPersistentBrowserSession, type BrowserSession } from '@/src/crawler/browserManager';
-import { updateVisualTrackerStatus, visualClickLocator } from '@/src/crawler/visualTracker';
+import type { Page, Response } from 'playwright';
+import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
+import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import {
   BaseChannelDutyRunner,
   type DutyUnhandledOrderSummary,
@@ -11,102 +11,44 @@ import {
   MeituanDutyErrorCode,
   DutyExecutionError,
 } from './meituanDutyContracts';
-import {
-  isMeituanListUrl,
-  isMeituanOrderTabListUrl,
-  isMeituanDetailUrl,
-  isMeituanSensitiveUrl,
-  parseMeituanOrderListResponse,
-  parseMeituanSensitiveResponse,
-  mergeSensitiveDataIntoRawDetail,
-} from './meituanOrderParsers';
 import { getMeituanOrderUrl } from '@/src/config/otaUrls';
 import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import {
-  ACTION_TIMEOUT,
   HUMAN_DELAY,
   DEFAULT_DUTY_TIMING,
   humanDelay,
   getScaledTimeout,
-  isProbeVisible,
-  isElementVisible,
-  isModalVisible,
 } from '../../dutyTimingConfig';
-import { checkMeituanPageRisk } from './meituanRiskGuard';
+import { checkMeituanPageRisk, assertNoMeituanPageRisk } from './meituanRiskGuard';
 import { dismissMeituanNoticeModals } from './meituanModalGuard';
+import { getMeituanOrderScope } from './meituanCardLocator';
+import { MeituanListCollector } from './meituanListCollector';
+import { MeituanDetailInspector } from './meituanDetailInspector';
+import { MeituanActionExecutor } from './meituanActionExecutor';
 
-export { checkMeituanPageRisk, dismissMeituanNoticeModals, humanDelay };
+export { checkMeituanPageRisk, assertNoMeituanPageRisk, dismissMeituanNoticeModals, humanDelay };
 
+/**
+ * 美团外卖/酒旅商家后台自动化值守执行器 (门面模式)
+ * 聚合协调列表采集、详情解密、接单回填与取消确认等领域子处理器
+ */
 export class MeituanDutyRunner extends BaseChannelDutyRunner {
   public readonly channelCode = 'MEITUAN';
-  private session: BrowserSession | null = null;
-  private explicitTargetUrl?: string;
-  private lastListRefreshTime = 0;
 
-  // 在途请求合并门禁 (In-flight Promise Coalescing)
-  private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
-
-  // 任务互斥锁 (Task Mutex Lock) 保证单页面交互操作串行化
-  private taskMutex: Promise<void> = Promise.resolve();
+  private readonly listCollector = new MeituanListCollector();
+  private readonly detailInspector = new MeituanDetailInspector();
+  private readonly actionExecutor = new MeituanActionExecutor();
 
   constructor(targetUrl?: string) {
-    super();
-    if (targetUrl && targetUrl.trim()) {
-      this.explicitTargetUrl = targetUrl.trim();
-    }
+    super(targetUrl);
   }
 
   public get targetUrl(): string {
     return this.explicitTargetUrl || getMeituanOrderUrl();
   }
 
-  private getOrderScope(page: Page) {
-    if (typeof page.url === 'function' && page.url().includes('/ebooking/merchant/ebIframe')) {
-      return page.frameLocator('#me-iframe-container');
-    }
-    return page;
-  }
-
-  /**
-   * 自动探测并清理非业务通知类阻挡弹窗（如“联系客人”等）
-   */
   private async dismissNoticeModals(page: Page): Promise<boolean> {
-    return dismissMeituanNoticeModals(page, this.getOrderScope(page));
-  }
-
-  /**
-   * 互斥锁封装：确保同一时刻只有一个页面交互动作在驱动 Playwright Page
-   */
-  private async runWithMutex<T>(action: () => Promise<T>): Promise<T> {
-    const previous = this.taskMutex;
-    let release: () => void = () => {};
-    this.taskMutex = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous.catch(() => {});
-    try {
-      return await action();
-    } finally {
-      release();
-    }
-  }
-
-  private getActivePage(operation: string): Page {
-    if (!this.running || !this.session) {
-      throw new DutyExecutionError(
-        `美团值守执行器未运行，无法${operation}`,
-        'RUNNER_NOT_RUNNING',
-        false
-      );
-    }
-    if (this.session.page.isClosed?.()) {
-      throw new DutyExecutionError(
-        `美团浏览器页面已关闭，无法${operation}`,
-        MeituanDutyErrorCode.TARGET_PAGE_NOT_READY,
-        false
-      );
-    }
-    return this.session.page;
+    return dismissMeituanNoticeModals(page, getMeituanOrderScope(page));
   }
 
   /**
@@ -115,18 +57,11 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
   public async waitForPageReady(page: Page, options?: { timeout?: number }): Promise<void> {
     const timeout = options?.timeout ?? DEFAULT_DUTY_TIMING.action.PAGE_CONTAINER_READY;
 
-    if (await checkMeituanPageRisk(page)) {
-      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-      throw new DutyExecutionError(
-        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-        false
-      );
-    }
+    await assertNoMeituanPageRisk(page);
 
     await updateVisualTrackerStatus(page, '⏳ 正在等待商户后台骨架与元素加载就绪...', 'action');
 
-    const scope = this.getOrderScope(page);
+    const scope = getMeituanOrderScope(page);
     // 探测商户后台 iframe、Tab 容器或主列表骨架
     const coreContainer = scope.locator(
       '#me-iframe-container, .tab-container, .mtd-tabs-item, .mtd-list-item, .detail-container, body'
@@ -137,14 +72,7 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
         await coreContainer.waitFor({ state: 'attached', timeout: getScaledTimeout(timeout) });
       }
     } catch (error) {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
+      await assertNoMeituanPageRisk(page);
       throw new DutyExecutionError(
         `美团商家后台页面元素加载超时 (${timeout}ms): ${error instanceof Error ? error.message : String(error)}`,
         MeituanDutyErrorCode.TARGET_PAGE_NOT_READY,
@@ -197,36 +125,11 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
     await updateVisualTrackerStatus(page, '🛡️ 美团订单值守已激活，正在复用渠道绑定页面...', 'success');
   }
 
-  public async stop(): Promise<void> {
-    this.running = false;
-    if (this.session) {
-      try {
-        await this.session.close();
-      } catch {
-        // 忽略关闭异常
-      }
-      this.session = null;
-    }
-  }
-
   /**
-   * 等待用户手动关闭浏览器；仅在诊断/验收 CLI 中使用
+   * 通过受控 Tab 切换刷新列表，并返回最终的待确认订单列表响应
    */
-  public async waitForBrowserClose(): Promise<void> {
-    const session = this.session;
-    if (!session) return;
-
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const close = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-
-      session.context.once('close', close);
-      session.page.once('close', close);
-    });
+  public async refreshOrderList(page: Page): Promise<Response> {
+    return this.listCollector.refreshOrderList(page);
   }
 
   /**
@@ -234,556 +137,23 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
    */
   public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
     const page = this.getActivePage('采集待处理订单');
-
-    if (await checkMeituanPageRisk(page)) {
-      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-      throw new DutyExecutionError(
-        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-        false
-      );
-    }
-
-    // 1. 在途请求合并门禁 (Request Coalescing)：若已有正在刷新的在途 Promise，直接复用其结果
-    if (this.inFlightListPromise) {
-      return await this.inFlightListPromise;
-    }
-
-    this.inFlightListPromise = (async () => {
-      // 1. 3 秒防抖等待补偿：若距离上次刷新不足 REFRESH_DEBOUNCE，等待补齐延迟后再触发交互，绝不直接返回空数组！
-      // 采用高精度单调时钟 performance.now()，彻底防御 NTP 校时与系统时钟跳变风险
-      const now = performance.now();
-      const elapsed = this.lastListRefreshTime > 0 ? now - this.lastListRefreshTime : Infinity;
-      const debounceThreshold = DEFAULT_DUTY_TIMING.system.REFRESH_DEBOUNCE;
-      if (elapsed < debounceThreshold) {
-        const remainMs = Math.ceil(debounceThreshold - elapsed);
-        await humanDelay(page, remainMs, remainMs + 500);
-      }
-
-      // 2. 进入任务互斥锁，执行单页面交互与网络拦截
-      return this.runWithMutex(async () => {
-        if (await checkMeituanPageRisk(page)) {
-          await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-          throw new DutyExecutionError(
-            '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-            MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-            false
-          );
-        }
-
-        await updateVisualTrackerStatus(page, '📥 正在执行订单采集并刷新待确认订单列表...', 'action');
-
-        // 3. 通过受控 Tab 切换触发刷新，并等待最终的待确认列表响应
-        const listResponse = await this.refreshOrderList(page);
-        const text = await listResponse.text().catch(() => '');
-        let parsedPayload: unknown;
-        try {
-          parsedPayload = JSON.parse(text);
-        } catch {
-          throw new DutyExecutionError('美团列表响应非合法 JSON', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
-        }
-        const orders = parseMeituanOrderListResponse(parsedPayload);
-
-        await updateVisualTrackerStatus(
-          page,
-          `📥 待确认列表已刷新，权威网络接口共解析到 ${orders.length} 笔待处理订单`,
-          orders.length > 0 ? 'success' : 'info'
-        );
-
-        // 4. 记录权威网络响应成功时间 (Fail-Fast: 绝无 DOM 拼接兜底！)
-        this.lastListRefreshTime = performance.now();
-        return orders;
-      });
-    })().finally(() => {
-      this.inFlightListPromise = null;
-    });
-
-    return await this.inFlightListPromise;
-  }
-
-  /**
-   * 通过受控 Tab 切换刷新列表，并返回最终的待确认订单列表响应
-   * @param page Playwright Page
-   */
-  public async refreshOrderList(page: Page): Promise<Response> {
-    if (await checkMeituanPageRisk(page)) {
-      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-      throw new DutyExecutionError(
-        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-        false
-      );
-    }
-
-    // 动作前置浮层清理：自动排除并关闭阻塞 Tab 点击的非业务提示弹窗（如“联系客人”等）
-    await this.dismissNoticeModals(page);
-
-    const getTab = (label: string, active = false) => this
-      .getOrderScope(page)
-      .locator(`.tab-container .mtd-tabs-item${active ? '.mtd-tab-active' : ''}:has-text("${label}")`);
-
-    const pendingTab = getTab('待确认订单');
-
-    try {
-      await pendingTab.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
-    } catch (error) {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-      throw new DutyExecutionError(
-        `未找到可用的「待确认订单」Tab: ${error instanceof Error ? error.message : String(error)}`,
-        MeituanDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
-        false
-      );
-    }
-
-    const allOrdersTab = getTab('全部订单');
-
-    try {
-      await allOrdersTab.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
-    } catch (error) {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-      throw new DutyExecutionError(
-        `未找到可用的「全部订单」Tab: ${error instanceof Error ? error.message : String(error)}`,
-        MeituanDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
-        false
-      );
-    }
-
-    const allOrdersClassName = (await allOrdersTab.getAttribute('class')) || '';
-    const allOrdersAriaSelected = await allOrdersTab.getAttribute('aria-selected');
-    const allOrdersActive =
-      allOrdersClassName.split(/\s+/).some((cls) => cls.includes('active') || cls.includes('selected')) ||
-      allOrdersAriaSelected === 'true';
-
-    if (allOrdersActive) {
-      await updateVisualTrackerStatus(page, '📥 已在「全部订单」，正在切换到待确认列表...', 'action');
-      const pendingResponse = this.waitForMeituanListResponse(page, '待确认订单最终列表');
-      await this.dismissNoticeModals(page);
-      try {
-        await pendingTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-      } catch (clickErr) {
-        if (await this.dismissNoticeModals(page)) {
-          await pendingTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-        } else {
-          throw clickErr;
-        }
-      }
-      const response = await pendingResponse;
-      await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }).catch(async () => {
-        if (await checkMeituanPageRisk(page)) {
-          await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-          throw new DutyExecutionError(
-            '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-            MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-            false
-          );
-        }
-      });
-      return response;
-    }
-
-    await updateVisualTrackerStatus(page, '📥 正在通过「全部订单」刷新待确认列表...', 'action');
-    // 只作为前一列表的生命周期屏障；不读取、不解析该响应。
-    const allOrdersResponse = this.waitForMeituanListResponse(page, '全部订单切换屏障', true);
-    await this.dismissNoticeModals(page);
-    try {
-      await allOrdersTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-    } catch (clickErr) {
-      if (await this.dismissNoticeModals(page)) {
-        await allOrdersTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-      } else {
-        throw clickErr;
-      }
-    }
-    try {
-      await getTab('全部订单', true).waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
-    } catch (error) {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-      // 容错类名变体（如 mtd-tabs-item-active），等待网络响应即可
-    }
-    await allOrdersResponse;
-    await humanDelay(page, ...HUMAN_DELAY.SHORT);
-
-    // 仅在最终触发待确认列表前挂响应监听，避免消费“全部订单”请求。
-    const pendingResponse = this.waitForMeituanListResponse(page, '待确认订单最终列表');
-    await this.dismissNoticeModals(page);
-    try {
-      await pendingTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-    } catch (clickErr) {
-      if (await this.dismissNoticeModals(page)) {
-        await pendingTab.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
-      } else {
-        throw clickErr;
-      }
-    }
-    const response = await pendingResponse;
-    await getTab('待确认订单', true).waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }).catch(async () => {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-    });
-    return response;
-  }
-
-  private async waitForMeituanListResponse(
-    page: Page,
-    phase: string,
-    acceptAllOrdersList = false
-  ): Promise<Response> {
-    if (typeof page.waitForResponse !== 'function') {
-      throw new DutyExecutionError('当前页面环境不支持 waitForResponse', 'METHOD_NOT_SUPPORTED', false);
-    }
-
-    const observedPaths = new Set<string>();
-    const isTargetListUrl = (url: string) =>
-      acceptAllOrdersList ? isMeituanOrderTabListUrl(url) : isMeituanListUrl(url);
-    const onRequest = (request: Request) => {
-      try {
-        if (isTargetListUrl(request.url())) {
-          observedPaths.add(new URL(request.url()).pathname);
-        }
-      } catch {
-        // 无效 URL 不参与诊断。
-      }
-    };
-    const canObserveRequests = typeof page.on === 'function' && typeof page.off === 'function';
-    if (canObserveRequests) {
-      page.on('request', onRequest);
-    }
-
-    try {
-      const response = await page.waitForResponse(
-        (res) => (acceptAllOrdersList ? isMeituanOrderTabListUrl(res.url()) : isMeituanListUrl(res.url())),
-        { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
-      );
-      if (response.status() !== 200) {
-        throw new DutyExecutionError(
-          `美团${phase}列表接口返回 HTTP ${response.status()}: ${response.url()}`,
-          MeituanDutyErrorCode.LIST_HTTP_ERROR,
-          false
-        );
-      }
-      return response;
-    } catch (error) {
-      if (error instanceof DutyExecutionError) throw error;
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-      const evidence = observedPaths.size
-        ? `已观察到请求路径: ${Array.from(observedPaths).join(', ')}`
-        : '未观察到 task/list 请求';
-      throw new DutyExecutionError(
-        `美团${phase}列表响应超时或异常: ${error instanceof Error ? error.message : String(error)}；${evidence}`,
-        MeituanDutyErrorCode.LIST_RESPONSE_TIMEOUT,
-        true
-      );
-    } finally {
-      if (canObserveRequests) {
-        page.off('request', onRequest);
-      }
-    }
-  }
-
-  /**
-   * 在美团商户后台列表中精确定位目标订单卡片
-   * 兼容美团真实 DOM 特征（左侧列表卡片不含订单号文本，订单号展示于右侧详情面板中）
-   */
-  private async locateOrderCard(
-    page: Page,
-    scope: Page | ReturnType<Page['frameLocator']>,
-    otaOrderId: string
-  ): Promise<Locator | null> {
-    const items = scope.locator(
-      '.mtd-list-item.list-item-container, .list-item-container, .list-item-wrap, tr.order-row'
+    return this.listCollector.collectUnhandledOrders(
+      page,
+      (fn) => this.runWithMutex(fn),
+      (p) => this.refreshOrderList(p)
     );
-    const count = typeof items.count === 'function' ? await items.count().catch(() => 0) : 0;
-    // 列表中有多笔订单：逐个点击候选卡片探查右侧详情是否与目标订单号匹配
-    if (count > 0 && typeof items.nth === 'function') {
-      await dismissMeituanNoticeModals(page, scope);
-      for (let i = 0; i < count; i++) {
-        const candidate = items.nth(i);
-        if (!await isElementVisible(candidate)) continue;
-        await candidate.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.QUICK_ACTION) }).catch(() => {});
-        await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
-
-        const matches = await isProbeVisible(
-          scope
-            .locator(
-              `.detail-container:has-text("${otaOrderId}"), ` +
-              `.right-content:has-text("${otaOrderId}"), ` +
-              `.order-detail:has-text("${otaOrderId}"), ` +
-              `.detail-header:has-text("${otaOrderId}")`
-            )
-            .first()
-        );
-
-        if (matches) {
-          return candidate;
-        }
-      }
-    }
-    return null;
   }
 
   /**
    * 页面操作：在美团后台页面定位订单卡片并内联展开/点击，抓取详情原始数据（回写明文客人姓名）
-   * 前置条件：待确认订单列表就绪（通过 refreshOrderList 刷新确保停留在「待确认订单」Tab 且渲染最新 DOM）
    * 遵循 Fail-Fast 原则：100% 权威网络接口为源，智能跳过电话解密，只返回原始数据，零 DOM 业务数据拼接！
    */
   public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     const page = this.getActivePage('查看订单详情');
-
-    if (await checkMeituanPageRisk(page)) {
-      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-      throw new DutyExecutionError(
-        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-        false
-      );
-    }
-
     return this.runWithMutex(async () => {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-
-      await updateVisualTrackerStatus(page, `🔍 正在定位订单「${otaOrderId}」卡片并展示详情...`, 'action');
-
-      const scope = this.getOrderScope(page);
-
-      // 1. 前置就绪校验：若订单卡片未在当前页面直接可见，先执行待确认列表刷新确保停留在「待确认订单」Tab 且渲染最新列表
-      let orderCard = await this.locateOrderCard(page, scope, otaOrderId);
-
-      if (!orderCard) {
-        await updateVisualTrackerStatus(page, `🔄 待确认列表中未直接发现订单「${otaOrderId}」，正在刷新待确认列表...`, 'action');
-        await this.refreshOrderList(page);
-        await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
-        orderCard = await this.locateOrderCard(page, scope, otaOrderId);
-      }
-
-      if (!orderCard || !await isElementVisible(orderCard, ACTION_TIMEOUT.QUICK_ACTION)) {
-        if (await checkMeituanPageRisk(page)) {
-          await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-          throw new DutyExecutionError(
-            '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-            MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-            false
-          );
-        }
-        throw new DutyExecutionError(
-          `待确认列表中未找到美团订单「${otaOrderId}」卡片，订单可能已被处理或取消`,
-          MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND,
-          false
-        );
-      }
-
-      // 2. 挂载本次查看详情专属的单次网络响应监听
-      const capturedRef: {
-        rawDetail: unknown | null;
-        sensitive: { guestName?: string; guestMobile?: string } | null;
-      } = {
-        rawDetail: null,
-        sensitive: null,
-      };
-
-      const onResponse = async (res: { url: () => string; status: () => number; text: () => Promise<string> }) => {
-        try {
-          const url = res.url();
-          if (res.status() === 200) {
-            if (isMeituanDetailUrl(url, otaOrderId)) {
-              const text = await res.text().catch(() => '');
-              if (text) {
-                try {
-                  capturedRef.rawDetail = JSON.parse(text);
-                } catch {
-                  // 忽略非合法 JSON
-                }
-              }
-            } else if (isMeituanSensitiveUrl(url)) {
-              const text = await res.text().catch(() => '');
-              if (text) {
-                try {
-                  const parsed = JSON.parse(text);
-                  const sensitive = parseMeituanSensitiveResponse(parsed);
-                  if (sensitive) {
-                    capturedRef.sensitive = {
-                      guestName: sensitive.guestName || capturedRef.sensitive?.guestName,
-                      guestMobile: sensitive.guestMobile || capturedRef.sensitive?.guestMobile,
-                    };
-                  }
-                } catch {
-                  // 忽略非合法 JSON
-                }
-              }
-            }
-          }
-        } catch {
-          // 忽略响应监听内解析异常
-        }
-      };
-
-      const onFn = (page as { on?: (event: string, handler: typeof onResponse) => void }).on;
-      const offFn = (page as { off?: (event: string, handler: typeof onResponse) => void }).off;
-      const removeListenerFn = (
-        page as { removeListener?: (event: string, handler: typeof onResponse) => void }
-      ).removeListener;
-
-      if (typeof onFn === 'function') {
-        onFn.call(page, 'response', onResponse);
-      }
-
-      const detailResponsePromise = typeof page.waitForResponse === 'function'
-        ? page
-            .waitForResponse(
-              (res) => isMeituanDetailUrl(res.url(), otaOrderId) && res.status() === 200,
-              { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
-            )
-            .then(async (res) => {
-              try {
-                const text = await res.text();
-                return JSON.parse(text);
-              } catch {
-                return null;
-              }
-            })
-            .catch(() => null)
-        : Promise.resolve(null);
-
-      try {
-        // 3. 点击订单卡片触发右侧详情展示与网络拦截（美团真实 DOM 中左侧卡片为整体可点击项，无独立“详情”按钮）
-        await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片展示详情`);
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-
-        // 4. 姓名脱敏解除交互（基于美团详情页真实 DOM 结构精准定位，无二次确认弹窗）
-        // 真实 DOM 结构:
-        // <p class="detail-info-item">
-        //   <span class="info-key">客人姓名</span>
-        //   <span class="info-content">
-        //     <span class="guest-name">
-        //       <span class="display-name">王***</span>
-        //       <span class="btn-text" style="cursor: pointer;">查看姓名</span>
-        //     </span>
-        //   </span>
-        // </p>
-        try {
-          const revealNameBtn = scope.locator(
-            '.detail-info-item .guest-name .btn-text, ' +
-            '.guest-name .btn-text, ' +
-            '.display-name + .btn-text, ' +
-            'p.detail-info-item:has(.info-key:has-text("客人姓名")) .btn-text, ' +
-            'p.detail-info-item:has(.info-key:has-text("客人姓名")) span.btn-text, ' +
-            '.guest-name [class*="btn"], ' +
-            '[data-test="reveal-guest-name"], .reveal-name-btn'
-          ).first();
-
-          if (await isElementVisible(revealNameBtn, ACTION_TIMEOUT.SENSITIVE_FIELD)) {
-            await visualClickLocator(page, revealNameBtn, '点击查看真实客人姓名');
-            await humanDelay(page, ...HUMAN_DELAY.SENSITIVE_REVEAL);
-          }
-        } catch {
-          // 容错姓名脱敏交互
-        }
-
-        // 5. 智能跳过电话解密 (Smart Skip Phone Privacy)
-        // 若姓名解密报文或原始详情已同步包含明文手机号，强制跳过点击“查看电话”，规避 1 秒双重敏感解密风控！
-        const rawPayloadTemp = (capturedRef.rawDetail || {}) as Record<string, unknown>;
-        const rawDataObj = ((rawPayloadTemp.data && typeof rawPayloadTemp.data === 'object')
-          ? ((rawPayloadTemp.data as Record<string, unknown>).orderDetail ||
-             (rawPayloadTemp.data as Record<string, unknown>).order ||
-             rawPayloadTemp.data)
-          : rawPayloadTemp) as Record<string, unknown>;
-        const rawMobile = String(rawDataObj.guestMobile || rawDataObj.phone || rawDataObj.mobile || '');
-        const resolvedPhone = Boolean(
-          (capturedRef.sensitive?.guestMobile && !capturedRef.sensitive.guestMobile.includes('*')) ||
-          (rawMobile && !rawMobile.includes('*'))
-        );
-
-        if (!resolvedPhone) {
-          try {
-            // 真实 DOM 结构: p.detail-info-item:has(.info-key:has-text("联系客人")) a[href="javascript:;"]
-            const revealPhoneBtn = scope.locator(
-              'p.detail-info-item:has(.info-key:has-text("联系客人")) a, ' +
-              '.detail-info-item:has(.info-key:has-text("联系客人")) a, ' +
-              '.detail-info-item:has(.info-key:has-text("联系客人")) [class*="btn"], ' +
-              '[data-test="reveal-guest-phone"]'
-            ).first();
-
-            if (await isElementVisible(revealPhoneBtn, ACTION_TIMEOUT.SENSITIVE_FIELD)) {
-              await visualClickLocator(page, revealPhoneBtn, '点击查看真实联系电话');
-              await humanDelay(page, ...HUMAN_DELAY.SENSITIVE_REVEAL);
-              // 关键保障：点击“联系客人”展示电话后，美团常弹出“联系客人（虚拟号说明）”提示弹窗，立即关闭以防遮挡
-              await this.dismissNoticeModals(page).catch(() => false);
-            }
-          } catch {
-            // 容错电话解密交互
-          }
-        }
-
-        // 6. 等待网络详情拦截 (100% 权威网络源，零 DOM 业务数据拼接)
-        const rawDetail = (await detailResponsePromise) || capturedRef.rawDetail;
-        if (!rawDetail) {
-          if (await checkMeituanPageRisk(page)) {
-            await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-            throw new DutyExecutionError(
-              '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-              MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-              false
-            );
-          }
-          throw new DutyExecutionError(
-            `美团订单「${otaOrderId}」详情接口网络响应超时`,
-            MeituanDutyErrorCode.ORDER_DETAIL_TIMEOUT,
-            true
-          );
-        }
-
-        // 7. 将解密敏感信息（明文客人姓名/电话）融合回原始报文，直接返回原始数据（由解析器统一解析转换）
-        const mergedRaw = mergeSensitiveDataIntoRawDetail(rawDetail, capturedRef.sensitive);
-        return mergedRaw as Record<string, unknown>;
-      } finally {
-        if (typeof offFn === 'function') {
-          offFn.call(page, 'response', onResponse);
-        } else if (typeof removeListenerFn === 'function') {
-          removeListenerFn.call(page, 'response', onResponse);
-        }
-        // 确保本次订单详情查看完毕后清理任何残留的非业务提示弹窗
-        await this.dismissNoticeModals(page).catch(() => false);
-      }
+      return this.detailInspector.inspectOrderDetail(page, otaOrderId, {
+        refreshOrderList: (p) => this.refreshOrderList(p),
+      });
     });
   }
 
@@ -814,192 +184,11 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
     }
 
     const page = this.getActivePage(options?.dryRun ? '演练回填确认号' : '回填确认号');
-
-    if (await checkMeituanPageRisk(page)) {
-      await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-      throw new DutyExecutionError(
-        '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-        MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-        false
-      );
-    }
-
-    const cleanConfirmNo = String(confirmNo || '').trim();
-    if (!cleanConfirmNo) {
-      throw new DutyExecutionError('确认号不能为空', MeituanDutyErrorCode.CONFIRM_INPUT_NOT_FOUND, false);
-    }
-
     return this.runWithMutex(async () => {
-      if (await checkMeituanPageRisk(page)) {
-        await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-        throw new DutyExecutionError(
-          '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-          MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-          false
-        );
-      }
-
-      await updateVisualTrackerStatus(
-        page,
-        options?.dryRun
-          ? `🛡️ 正在以【安全演练模式】验证订单「${otaOrderId}」卡片与确认号「${cleanConfirmNo}」输入框...`
-          : `📝 正在订单「${otaOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`,
-        'action'
-      );
-
-      const scope = this.getOrderScope(page);
-
-      // 1. 定位目标订单卡片，若不可见先刷新待确认列表
-      let orderCard = await this.locateOrderCard(page, scope, otaOrderId);
-      if (!orderCard) {
-        await this.refreshOrderList(page);
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-        orderCard = await this.locateOrderCard(page, scope, otaOrderId);
-      }
-
-      if (!orderCard || !await isElementVisible(orderCard, ACTION_TIMEOUT.QUICK_ACTION)) {
-        if (await checkMeituanPageRisk(page)) {
-          await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-          throw new DutyExecutionError(
-            '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-            MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-            false
-          );
-        }
-        throw new DutyExecutionError(
-          `未找到美团订单「${otaOrderId}」卡片，无法回填确认号`,
-          MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND,
-          false
-        );
-      }
-
-      // 2. 确保右侧详情已就绪展示该订单；若未展示，点击卡片切换详情
-      const isCurrentDetail = await isProbeVisible(
-        scope.locator(`.detail-header:has-text("${otaOrderId}")`).first()
-      );
-      if (!isCurrentDetail) {
-        await visualClickLocator(page, orderCard, `点击订单「${otaOrderId}」卡片激活详情展示`);
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-      }
-
-      // 3. 定位详情头部「接受」接单操作按钮并点击，触发展开模态确认对话框
-      const acceptBtn = scope.locator(
-        '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受"), ' +
-        '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受"), ' +
-        '.btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受")'
-      ).first();
-
-      if (!await isElementVisible(acceptBtn)) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」未找到「接受」接单操作按钮`,
-          MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
-          false
-        );
-      }
-
-      await visualClickLocator(page, acceptBtn, `点击订单「${otaOrderId}」接受按钮弹出确认回填框`);
-      await humanDelay(page, ...HUMAN_DELAY.SHORT);
-
-      // 4. 等待并严格限定「确认号回填」模态弹窗（必须包含“酒店确认号”，杜绝匹配到页面其他业务弹窗）
-      const dialog = scope.locator(
-        '.mtd-modal-wrapper:not([style*="display: none"]) .modal-container:has-text("酒店确认号"), ' +
-        '.modal-container:has-text("酒店确认号")'
-      ).first();
-
-      if (!await isModalVisible(dialog)) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」未弹出或未找到「酒店确认号」接单弹窗`,
-          MeituanDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
-          false
-        );
-      }
-
-      // 5. 严格限定在接单弹窗内部定位「酒店确认号」输入框，执行防串单校验与读回校验
-      const targetInput = dialog.locator(
-        '.modal-container-content div:has(span:has-text("酒店确认号")) input.mtd-input, ' +
-        '.modal-container-content input.mtd-input'
-      ).first();
-
-      if (!await isElementVisible(targetInput)) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」接单弹窗内未找到酒店确认号输入框`,
-          MeituanDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
-          false
-        );
-      }
-
-      const currentValue = (await targetInput.inputValue().catch(() => '')).trim();
-      if (currentValue && currentValue !== cleanConfirmNo) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」输入框已存在其他确认号「${currentValue}」，系统已停止覆盖以防串单`,
-          MeituanDutyErrorCode.CONFIRM_INPUT_ALREADY_FILLED,
-          false
-        );
-      }
-
-      if (currentValue !== cleanConfirmNo) {
-        if (typeof targetInput.pressSequentially === 'function') {
-          await targetInput.click().catch(() => {});
-          await targetInput.pressSequentially(cleanConfirmNo, {
-            delay: 35 + Math.floor(Math.random() * 40),
-          });
-        } else {
-          await targetInput.fill(cleanConfirmNo);
-        }
-        const readBack = (await targetInput.inputValue().catch(() => '')).trim();
-        if (readBack !== cleanConfirmNo) {
-          throw new DutyExecutionError(
-            `订单「${otaOrderId}」确认号填入后读回校验不一致 (写入: ${cleanConfirmNo}, 读回: ${readBack})`,
-            MeituanDutyErrorCode.CONFIRM_VALUE_MISMATCH,
-            false
-          );
-        }
-      }
-
-      // 6. 严格限定在接单弹窗底部（.modal-container-footer）定位「确认接受」按钮
-      const dialogConfirmBtn = dialog.locator(
-        '.modal-container-footer button.mtd-btn.btn-item.mtd-btn-primary:has-text("确认接受")'
-      ).first();
-
-      if (!await isElementVisible(dialogConfirmBtn)) {
-        throw new DutyExecutionError(
-          `订单「${otaOrderId}」接单弹窗内未找到「确认接受」操作按钮`,
-          MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
-          false
-        );
-      }
-
-      // 安全演练模式处理：安全关闭弹窗并返回验证结果，杜绝真实提交！
-      if (options?.dryRun) {
-        await updateVisualTrackerStatus(page, '🛑 【安全演练收尾】正在点击「取消」按钮关闭弹窗，确保不提交任何数据...', 'action');
-        const cancelBtn = dialog.locator('.modal-container-footer button:has-text("取消"), .mtd-modal-close').first();
-        if (await isElementVisible(cancelBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
-          await visualClickLocator(page, cancelBtn, '安全演练收尾：取消弹窗');
-        } else {
-          await page.keyboard.press('Escape');
-        }
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-        await updateVisualTrackerStatus(page, '✅ 确认号回填流程演练验证完毕，已安全关闭弹窗', 'success');
-        return {
-          verified: true,
-          orderId: otaOrderId,
-          action: 'confirmImport',
-          dryRun: true,
-          verifiedSteps: [
-            'locate_order_card',
-            'open_detail',
-            'click_accept_btn',
-            'verify_modal_dialog',
-            'fill_confirm_no',
-            'verify_submit_btn',
-            'close_dialog_safely',
-          ],
-          fieldValues: { confirmNo: cleanConfirmNo },
-        };
-      }
-
-      await visualClickLocator(page, dialogConfirmBtn, `点击弹窗「确认接受」按钮确认订单「${otaOrderId}」`);
-      await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
+      return this.actionExecutor.confirmImport(page, confirmNo, otaOrderId, {
+        ...options,
+        refreshOrderList: (p) => this.refreshOrderList(p),
+      });
     });
   }
 
@@ -1018,83 +207,12 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
     otaOrderId: string,
     options?: DutyActionDryRunOptions
   ): Promise<DutyActionVerificationResult | void> {
-    if (!otaOrderId || !otaOrderId.trim()) {
-      throw new DutyExecutionError('otaOrderId 不能为空', MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND, false);
-    }
-    const cleanOrderId = otaOrderId.trim();
     const page = this.getActivePage(options?.dryRun ? '演练确认取消' : '确认取消');
-
     return this.runWithMutex(async () => {
-      await updateVisualTrackerStatus(
-        page,
-        options?.dryRun
-          ? `🛡️ 正在以【安全演练模式】定位美团订单「${cleanOrderId}」卡片与「我已知晓」按钮...`
-          : `🛑 在美团后台确认取消订单「${cleanOrderId}」（我已知晓）...`,
-        'action'
-      );
-      const scope = this.getOrderScope(page);
-
-      // 1. 定位订单卡片
-      let orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
-      if (!orderCard) {
-        await this.refreshOrderList(page);
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-        orderCard = await this.locateOrderCard(page, scope, cleanOrderId);
-      }
-
-      if (!orderCard || !await isElementVisible(orderCard, ACTION_TIMEOUT.QUICK_ACTION)) {
-        throw new DutyExecutionError(
-          `未在美团订单列表中找到已取消订单「${cleanOrderId}」卡片`,
-          MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND,
-          true
-        );
-      }
-
-      // 2. 检查右侧详情是否已就绪展示该订单；若未展示，点击卡片切换详情
-      const isCurrentDetail = await isProbeVisible(
-        scope.locator(`.detail-header:has-text("${cleanOrderId}")`).first()
-      );
-      if (!isCurrentDetail) {
-        await visualClickLocator(page, orderCard, `点击订单「${cleanOrderId}」卡片激活详情展示`);
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
-      }
-
-      // 3. 定位详情头部操作按钮区域中的「我已知晓」按钮
-      const ackBtn = scope.locator(
-        '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-        '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-        '.btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")'
-      ).first();
-
-      if (!await isElementVisible(ackBtn)) {
-        throw new DutyExecutionError(
-          `订单「${cleanOrderId}」详情头部未找到「我已知晓」确认取消操作按钮（请确认该订单是否为已取消订单）`,
-          MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
-          false
-        );
-      }
-
-      // 安全演练模式处理：断言可见后安全退出，杜绝真实提交！
-      if (options?.dryRun) {
-        await updateVisualTrackerStatus(page, '✅ 取消确认按钮定位验证完毕，演练模式未执行点击', 'success');
-        return {
-          verified: true,
-          orderId: cleanOrderId,
-          action: 'confirmCancel',
-          dryRun: true,
-          verifiedSteps: [
-            'locate_order_card',
-            'open_detail',
-            'locate_ack_btn',
-            'assert_ack_btn_visible',
-          ],
-          message: `订单「${cleanOrderId}」详情「我已知晓」操作按钮定位验证完毕，演练模式未执行点击`,
-        };
-      }
-
-      // 4. 点击「我已知晓」执行取消确认
-      await visualClickLocator(page, ackBtn, `点击「我已知晓」按钮确认取消订单「${cleanOrderId}」`);
-      await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
+      return this.actionExecutor.confirmCancel(page, otaOrderId, {
+        ...options,
+        refreshOrderList: (p) => this.refreshOrderList(p),
+      });
     });
   }
 }

@@ -1,8 +1,8 @@
 # 美团订单采集、详情抓取与确认号回填技术方案 (Meituan Order Guardian Architecture Specification)
 
-> **版本**：2.1.0 (Production Architecture Baseline - Post-Review Refined)  
+> **版本**：2.2.0 (Production Architecture Baseline - Decoupled Sub-handlers & Base Runner Refined)  
 > **适用范围**：美团待处理订单采集 (`OTA_COLLECT_ORDER`)、详情抓取与中台入单 (`OTA_IMPORT_ORDER`)、确认号回填 (`OTA_CONFIRM_IMPORT`)、渠道风控熔断与状态同步  
-> **核心原则**：Electron-Only、Fail-Fast（权威网络响应为唯一数据源，零 DOM 业务数据拼接）、KISS 原则（高内聚 3 核心模块）、单一可信日志源、订单卡片内联流式交互、零技术暴露  
+> **核心原则**：Electron-Only、Fail-Fast（权威网络响应为唯一数据源，零 DOM 业务数据拼接）、公共基类继承 (`BaseChannelDutyRunner`) + 领域子模块解耦门面模式、单一可信日志源、零技术暴露  
 
 ---
 
@@ -15,31 +15,34 @@
 
 1. **权威网络响应为唯一数据源 (Network Authority & Zero DOM Data Extraction)**：
    - 订单列表数据与订单详情数据**必须 100% 来源于美团后台网络请求（JSON 响应）**；
-   - DOM 仅用于定位交互控件（Tab、刷新按钮、订单卡片、输入框、提交按钮）以及断言状态就绪（元素可见性、无风控遮罩）；
+   - DOM 仅用于定位交互控件（Tab、订单卡片、输入框、提交按钮）以及断言状态就绪（元素可见性、无风控遮罩）；
    - **严禁从 DOM 拼接或提取任何业务数据**（如入住人、房型、日期、金额等），坚决废除脆弱的 DOM 文本爬虫与模糊“多路融合”逻辑；
    - 网络接口超时、非 200 状态码、业务返回失败或核心字段缺失时，系统立即阻断并抛出确定错误码（Fail-Fast）。
 
-2. **KISS 原则与扁平模块化 (KISS & Minimal Abstraction)**：
-   - 杜绝过度设计与类爆炸，美团渠道核心逻辑高度收敛为 **3 个核心模块**：
-     - `meituanDutyContracts.ts`：契约层（错误码枚举、轻量任务回执与 `DutyExecutionError` 结构化异常类）；
-     - `meituanOrderParsers.ts`：纯函数层（列表、详情、敏感解密响应的清洗解析，100% 独立单测覆盖）；
-     - `meituanDutyRunner.ts`：执行层（实现标准 `ChannelDutyRunner`，持有 `Page` 单实例，任务互斥锁，驱动页面交互）。
-   - 彻底废除多层嵌套的 `Evidence` 装箱模型与冗余的 `bodySha256` 计算；剔除未使用的面态枚举等无意义定义。
+2. **公共基类下沉与领域子模块解耦门面模式 (Base Runner & Decoupled Domain Handlers)**：
+   - 通用基础设施下沉：`BaseChannelDutyRunner`（位于 `src/crawler/duty/dutyContracts.ts`）集中维护 session、单页面任务互斥锁 `runWithMutex`、`getActivePage` 自愈探测、以及 `waitForBrowserClose` 浏览器关闭安全监听；
+   - 美团渠道采用门面模式（Facade），由 `MeituanDutyRunner` 继承基类对外提供统一 API，内部解耦为单一职责子模块：
+     - `meituanCardLocator.ts`：Iframe 作用域穿透与多阶梯卡片定位；
+     - `meituanListCollector.ts`：Tab 切换状态机、网络屏障、高精度防抖补偿与在途请求合并；
+     - `meituanDetailInspector.ts`：网络监听预注册、卡片激活防抖、单号严格比对与敏感数据解密；
+     - `meituanActionExecutor.ts`：接单弹窗回填、输入读回校验、取消确认与 `dryRun` 演练；
+     - `meituanRiskGuard.ts` / `meituanModalGuard.ts`：风控探测与提示弹窗自动穿透；
+     - `meituanOrderParsers.ts`：纯函数解析清洗器（100% 单测覆盖）；
+     - `meituanDutyContracts.ts`：美团错误码与结构化异常。
 
-3. **订单卡片内联流式交互 (Card Inline Expand & Flow Layout)**：
-   - 美团后台订单展示结构为流式排布的**订单卡片（Order Card）/ 列表行（Order Row）**，绝非模态弹窗（Modal Dialog）；
-   - 详情查看采用**卡片内联展开 (Card Inline Expand)**，展开后不产生模态遮罩，不阻断全局页面事件；
-   - 确认号输入框与提交按钮天然位于订单卡片内部，回填直接在目标卡片作用域内执行；
-   - 废除弹窗关闭、Escape 快捷键与弹窗 detached 断言等脱离实际的伪逻辑。
+3. **Master-Detail 左右双栏联动与模态回填 (Master-Detail Layout & Modal Confirmation)**：
+   - 美团后台订单展示结构为经典的**左右分栏 Master-Detail** 联动，左侧为待处理订单卡片流，右侧为当前选定订单的完整详情面板；
+   - 点击左侧卡片直接触发右侧详情刷新，卡片自身即为可点击项，无需寻找“详情”按钮；
+   - 确认号回填基于详情头部「接受」按钮唤起的 MTD 模态弹窗，在弹窗作用域内严格执行四步录入（防覆盖校验、模拟打字、读回校验、提交或演练取消）。
 
 4. **请求合并门禁与 3 秒防抖等待补偿 (Coalesced Debounce & Wait Compensation)**：
-   - 针对美团后台接口的高频调用频控，列表刷新引入在途请求合并（In-flight Promise Coalescing）与 3 秒防抖时间戳保护；
+   - 针对美团后台接口的高频调用频控，列表刷新引入在途请求合并（In-flight Promise Coalescing）与基于 `performance.now()` 的 3 秒防抖时间戳保护；
    - **请求合并门禁位于获取锁之前**：若当前已有正在进行中的刷新 Promise，直接复用其返回结果，避免并发请求进入锁排队击穿；
    - 若调度引擎在防抖窗口内触发采集，系统通过拟真等待补齐剩余时间后再触发刷新，**严禁直接返回空数组**，从源头防止将真实订单误报为 `VERIFIED_EMPTY`。
 
 5. **智能跳过电话解密 (Smart Skip Phone Privacy)**：
    - 美团在点击“查看姓名”解密时，接口报文通常已同步返回真实手机号；
-   - 若原始详情或姓名解密响应中已存在明文手机号，**强制跳过点击“查看电话”控件**，彻底规避 1 秒内连续发起双重敏感解密的极高危风控探针。
+   - 系统通过 `hasPlainMobileNumber()` 严格校验；若原始详情或姓名解密响应中已存在 11 位有效明文手机号，**强制跳过点击“查看电话”控件**，彻底规避 1 秒内连续发起双重敏感解密的极高危风控探针。
 
 6. **全链路错误码与 `retryable` 贯穿透传 (End-to-End Retryable Propagation)**：
    - 底层 Runner 抛出带有确定 `errorCode` 与 `retryable: false` 的结构化异常 `DutyExecutionError`；
@@ -58,13 +61,20 @@
 ### 2.1 模块分层架构
 
 ```
-src/crawler/duty/
-├── meituanDutyContracts.ts      # 契约层：错误码枚举、DutyExecutionError 结构化异常类、任务回执
+src/crawler/duty/channels/meituan/
+├── index.ts                      # 统一聚合导出出口
+├── meituanDutyContracts.ts       # 契约层：错误码枚举、DutyExecutionError 结构化异常类、任务回执
 ├── meituanOrderParsers.ts        # 纯函数层：列表/详情/敏感解密响应的纯函数解析器 (100% 单测)
-└── meituanDutyRunner.ts          # 执行层：实现 ChannelDutyRunner，持有 Page，带互斥锁，驱动交互
+├── meituanDutyRunner.ts          # 门面层：继承 BaseChannelDutyRunner，串行互斥锁调度各子模块
+├── meituanCardLocator.ts         # 子模块：Iframe 作用域穿透与多阶梯卡片定位
+├── meituanListCollector.ts       # 子模块：Tab 切换状态机、网络屏障、高精度防抖与在途请求合并
+├── meituanDetailInspector.ts     # 子模块：网络监听预注册、卡片激活、单号防串单比对与智能解密
+├── meituanActionExecutor.ts      # 子模块：接单弹窗回填、输入读回校验、取消确认与 dryRun 演练
+├── meituanRiskGuard.ts           # 子模块：页面与 Frame 级安全风控探针
+└── meituanModalGuard.ts          # 子模块：非业务提示弹窗自动清理与模态穿透执行器
 
 src/crawler/duty/ (通用协同模块)
-├── dutyContracts.ts             # 通用契约：补充 retryable?: boolean 属性
+├── dutyContracts.ts             # 通用契约：BaseChannelDutyRunner 抽象基类、retryable?: boolean 属性
 ├── dutyTaskDispatcher.ts        # 通用编排：中台入单、模板拉取、备注渲染、异常 errorCode/retryable 透传
 └── dutyOrchestrationEngine.ts   # 调度引擎：认领任务、上报结果、结果回执优先透传 retryable
 
@@ -77,14 +87,21 @@ src/store/slices/
 
 | 文件路径 | 分层定位 | 职责边界 |
 | :--- | :--- | :--- |
-| `src/crawler/duty/meituanDutyContracts.ts` | 领域契约 | 集中定义美团核心错误码枚举 `MeituanDutyErrorCode`、结构化异常类 `DutyExecutionError` 与轻量任务回执类型。杜绝过度装箱与未使用的冗余定义。 |
-| `src/crawler/duty/meituanOrderParsers.ts` | 纯函数计算 | 负责对美团列表接口、详情接口、敏感数据接口的 JSON 响应进行强类型校验、字段提取与清洗。不依赖任何 DOM 或 Playwright API。 |
-| `src/crawler/duty/meituanDutyRunner.ts` | 渠道自动化执行 | 实现标准 `ChannelDutyRunner` 接口。持有当前渠道的 Playwright `Page` 实例；通过**任务互斥锁 (Task Mutex Lock)** 保证单页面交互串行化；负责带防抖等待的列表刷新、目标卡片内联展开、网络响应拦截、敏感数据智能解密、卡片内确认号回填。抛出确定性的 `DutyExecutionError`。 |
-| `src/crawler/duty/dutyContracts.ts` | 通用契约 | 在 `DutyTaskExecutionResult` 接口中补充 `retryable?: boolean` 字段。 |
-| `src/crawler/duty/dutyTaskDispatcher.ts` | 通用编排调度 | 调度各渠道 Runner 获取数据；执行字段校验（Fail-Fast）；调用中台 API；调度卡片温和收起；**在捕获 Runner 异常时，解构并透传底层抛出的 `errorCode` 与 `retryable` 至 `DutyTaskExecutionResult`**。 |
+| `src/crawler/duty/channels/meituan/meituanDutyContracts.ts` | 领域契约 | 集中定义美团核心错误码枚举 `MeituanDutyErrorCode`、结构化异常类 `DutyExecutionError` 与轻量任务回执类型。 |
+| `src/crawler/duty/channels/meituan/meituanOrderParsers.ts` | 纯函数计算 | 负责对美团列表接口、详情接口、敏感数据接口的 JSON 响应进行强类型校验、字段提取与清洗。不依赖任何 DOM 或 Playwright API。 |
+| `src/crawler/duty/channels/meituan/meituanDutyRunner.ts` | 渠道自动化门面 | 继承 `BaseChannelDutyRunner`。对外暴露标准 `ChannelDutyRunner` 接口；持有任务互斥锁 `runWithMutex` 保证单页面交互串行化；将具体业务委派给各专业子模块。 |
+| `src/crawler/duty/channels/meituan/meituanCardLocator.ts` | DOM 定位 | 负责 E-booking Iframe 作用域穿透 (`getMeituanOrderScope`) 与多阶梯订单卡片查找定位 (`locateMeituanOrderCard`)。 |
+| `src/crawler/duty/channels/meituan/meituanListCollector.ts` | 列表流转 | 负责在途请求合并门禁 (`inFlightListPromise`)、Tab 切换状态机、网络屏障与高精度防抖等待补偿。 |
+| `src/crawler/duty/channels/meituan/meituanDetailInspector.ts` | 详情嗅探 | 负责先挂载网络监听后点击卡片、卡片激活防抖、单号严格比对 (`payloadOrderId === otaOrderId`) 与敏感数据解密。 |
+| `src/crawler/duty/channels/meituan/meituanActionExecutor.ts` | 业务动作 | 负责详情头部「接受」按钮点击、接单弹窗内确认号回填与读回校验、取消确认「我已知晓」执行与 `dryRun` 演练退出。 |
+| `src/crawler/duty/channels/meituan/meituanRiskGuard.ts` | 安全风控 | 负责探查 Yoda 滑块验证、拼图验证与重定向挑战，发现风控立即阻断。 |
+| `src/crawler/duty/channels/meituan/meituanModalGuard.ts` | 弹窗治理 | 负责非业务公告/须知弹窗的自动清理与模态遮挡智能穿透 (`clickWithModalBypass`)。 |
+| `src/crawler/duty/dutyContracts.ts` | 通用契约 | 提供 `BaseChannelDutyRunner` 抽象基类，并在 `DutyTaskExecutionResult` 接口中补充 `retryable?: boolean` 字段。 |
+| `src/crawler/duty/dutyTaskDispatcher.ts` | 通用编排调度 | 调度各渠道 Runner 获取数据；执行字段校验（Fail-Fast）；调用中台 API；**在捕获 Runner 异常时，解构并透传底层抛出的 `errorCode` 与 `retryable` 至 `DutyTaskExecutionResult`**。 |
 | `src/crawler/duty/dutyOrchestrationEngine.ts` | 调度引擎 | 负责任务认领与中台结果上报；在结果回执组装阶段优先透传 `execRes.retryable`。 |
 | `src/store/slices/appSlice.ts` | 全局状态 | Toast Payload 的 `type` 扩充支持 `'warning'`，以契合风控告警语义。 |
 | `src/store/slices/orderGuardianSlice.ts` | 表现与状态 | 接收渠道状态与失败信息，采用**边缘触发机制**在渠道降级或不可恢复终态失败时显式触发用户友好的 Toast 提示。 |
+
 
 ### 2.3 核心数据流向图
 
@@ -113,19 +130,19 @@ flowchart TD
       D7 --> E3
     end
 
-    subgraph MeituanRunner["美团核心执行器 (meituanDutyRunner.ts)"]
-      R_Gate["在途请求合并门禁 (In-flight Coalescing & Debounce)"]
-      R0["任务互斥锁 (Task Mutex Lock)"]
-      R1["列表采集: 交互点击Tab -> 拦截列表响应"]
-      R2["详情抓取: 定位订单卡片 -> 内联展开 -> 拦截详情响应 -> 智能解密"]
-      R3["确认回填: 定位订单卡片 -> 卡片内回填校验 -> 提交 -> 拦截确认响应"]
-      R4["卡片收起: 温和点击收起按钮 (无阻断)"]
+    subgraph MeituanRunner["美团门面执行器与子模块 (channels/meituan/)"]
+      R_Gate["meituanListCollector: 在途合并门禁 (In-flight Coalescing)"]
+      R0["BaseChannelDutyRunner: 单页面任务互斥锁 (runWithMutex)"]
+      R1["meituanListCollector: Tab 切换 -> 网络屏障 -> 待确认列表拦截"]
+      R2["meituanCardLocator & meituanDetailInspector: 预注册监听 -> 卡片激活 -> 详情拦截 -> 智能解密"]
+      R3["meituanActionExecutor: 头部接受 -> MTD 弹窗回填校验 -> 提交闭环"]
+      R_Guard["meituanRiskGuard & meituanModalGuard: Yoda 风控拦截 & 提示弹窗自动穿透"]
       
       R_Gate --> R0
       R0 --> R1
       R0 --> R2
       R0 --> R3
-      R0 --> R4
+      R0 -.-> R_Guard
     end
 
     subgraph Parsers["纯函数解析层 (meituanOrderParsers.ts)"]
@@ -133,6 +150,7 @@ flowchart TD
       P2["parseMeituanOrderDetailResponse() -> 提取详情字段"]
       P3["parseMeituanSensitiveResponse() -> 提取真实姓名与手机号"]
     end
+
 
     R1 -->|拦截 JSON| P1
     R2 -->|拦截 JSON| P2
@@ -449,30 +467,42 @@ export interface ChannelDutyInfo {
 
 ---
 
-## 8. 分阶段实施计划
+## 8. 分阶段实施记录与架构演进里程碑
 
-### Phase 1：契约与纯函数解析器开发 (Day 1)
-1. 创建 `src/crawler/duty/meituanDutyContracts.ts`：定义 `MeituanDutyErrorCode`、`DutyExecutionError` 与回执类型；
+### Phase 1：契约与纯函数解析器开发 (已完成 ✅)
+1. 创建 `src/crawler/duty/channels/meituan/meituanDutyContracts.ts`：定义 `MeituanDutyErrorCode`、`DutyExecutionError` 与回执类型；
 2. 在 `src/crawler/duty/dutyContracts.ts` 中为 `DutyTaskExecutionResult` 增加 `retryable?: boolean`；
-3. 创建 `src/crawler/duty/meituanOrderParsers.ts`：实现列表、详情与敏感解密纯函数解析器；
+3. 创建 `src/crawler/duty/channels/meituan/meituanOrderParsers.ts`：实现列表、详情与敏感解密纯函数解析器；
 4. 编写 `meituanOrderParsers.test.ts`，实现 100% 独立单测覆盖。
 
-### Phase 2：美团核心执行器与互斥锁重构 (Day 2)
-1. 重构 `src/crawler/duty/meituanDutyRunner.ts`：
+### Phase 2：美团核心执行器与互斥锁重构 (已完成 ✅)
+1. 落地 `MeituanDutyRunner`：
    - 引入在途请求合并门禁 (`inFlightListPromise`) 与任务互斥锁（Mutex）；
    - 实现带 3 秒防抖等待补偿的 `collectUnhandledOrders`；
-   - 实现基于订单卡片内联展开的 `inspectOrderDetail`（含智能跳过电话解密）；
-   - 实现基于订单卡片作用域的 `confirmImport`（含当前值核对与读回比对）。
+   - 实现基于 Master-Detail 的 `inspectOrderDetail`（含智能跳过电话解密）；
+   - 实现基于 MTD 模态弹窗的 `confirmImport`（含当前值核对与读回比对）。
 
-### Phase 3：调度协同与重试透传闭环 (Day 3)
+### Phase 3：调度协同与重试透传闭环 (已完成 ✅)
 1. 重构 `src/crawler/duty/dutyTaskDispatcher.ts` 中的异常捕获分支，提取底层 Runner 抛出的 `errorCode` 与 `retryable` 并透传至 `DutyTaskExecutionResult`；
-2. 在 `src/crawler/duty/dutyOrchestrationEngine.ts` 第 743 行增加 `retryable` 向后兼容透传。
+2. 在 `src/crawler/duty/dutyOrchestrationEngine.ts` 增加 `retryable` 向后兼容透传。
 
-### Phase 4：UI Toast 门禁与状态集成 (Day 4)
+### Phase 4：UI Toast 门禁与状态集成 (已完成 ✅)
 1. 在 `src/store/slices/appSlice.ts` 中将 Toast `type` 联合类型扩充支持 `'warning'`；
 2. 在 `src/store/slices/orderGuardianSlice.ts` 中实现边缘触发机制与 Toast 门禁；
 3. 清理废弃的临时中间件代码与冗余引用；
-4. 补充集成测试用例并执行全量 `npm run lint` 与 `npm test`。
+4. 补充集成测试用例并执行全量验证。
+
+### Phase 5：公共基类下沉与领域子模块解耦重构 (已完成 ✅)
+1. **公共基类下沉 (`BaseChannelDutyRunner`)**：
+   - 下沉到 `src/crawler/duty/dutyContracts.ts`，统一会话生命周期、单页面任务互斥锁 `runWithMutex`、`getActivePage` 自动探测与唤醒、`stop` 资源清退、以及 `waitForBrowserClose` 浏览器关闭监控（带 `isClosed?.()` 短路安全检测）；
+   - `DouyinDutyRunner` 与 `MeituanDutyRunner` 均继承基类，彻底消除会话与锁样板代码。
+2. **美团子模块拆解与门面模式**：
+   - 将原单体 Runner 拆分为：`meituanCardLocator.ts`、`meituanListCollector.ts`、`meituanDetailInspector.ts`、`meituanActionExecutor.ts`、`meituanRiskGuard.ts`、`meituanModalGuard.ts`；
+   - `MeituanDutyRunner` 演进为纯粹门面，对外 100% 保持向后兼容；
+   - 强化单号强比对防串单防线（`payloadOrderId === otaOrderId`）；
+   - 采用先挂载网络监听后点击卡片的刚性时序；
+   - 补充 4 套全新独立子模块单测，全量单测通过。
+
 
 ---
 

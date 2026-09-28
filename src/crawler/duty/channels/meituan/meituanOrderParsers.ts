@@ -46,24 +46,25 @@ export function isMeituanRiskControlText(text: string): boolean {
 }
 
 /**
- * 判断 URL 是否属于美团订单详情接口
+ * 判断 URL 是否属于美团特定订单的 v1 详情接口
+ * 显式锁定 /api/v1/ 协议版本：一旦上游升级 v2 立即 Fail-Fast，杜绝跨版本脏数据解析
+ * 遵循 KISS 原则：无正则、零黑名单、直接基于标准路径比对
  */
 export function isMeituanDetailUrl(url: string, targetOrderId?: string): boolean {
-  const norm = String(url || '');
-  if (norm.includes('/task/list') || norm.includes('/sensitiveData') || norm.includes('/confirmPhone')) {
-    return false;
+  if (!url) return false;
+  const cleanTargetId = targetOrderId ? targetOrderId.trim() : '';
+
+  if (cleanTargetId) {
+    const prefix = `/api/v1/ebooking/orders/${cleanTargetId}`;
+    return url.includes(`${prefix}?`) || url.split('?')[0].endsWith(prefix);
   }
-  if (targetOrderId && (norm.includes(`/orders/${targetOrderId}`) || norm.includes(`orderId=${targetOrderId}`))) {
-    return true;
-  }
-  return (
-    norm.includes('/api/v1/ebooking/orders/') ||
-    norm.includes('/orders/detail') ||
-    norm.includes('/ebooking/orders/') ||
-    norm.includes('/ebooking/order/') ||
-    norm.includes('/detail') ||
-    norm.includes('/api/mock/orders')
-  );
+
+  // 未指定目标单号时（仅用于通用诊断）：严格校验路径是否为 /api/v1/ebooking/orders/{单号}
+  const path = url.split('?')[0].replace(/\/+$/, '');
+  const parts = path.split('/');
+  const ordersIndex = parts.indexOf('orders');
+  const isV1 = parts.includes('api') && parts.includes('v1') && parts.includes('ebooking');
+  return isV1 && ordersIndex !== -1 && parts.length === ordersIndex + 2 && /^\d+$/.test(parts[ordersIndex + 1]);
 }
 
 /**
@@ -72,6 +73,18 @@ export function isMeituanDetailUrl(url: string, targetOrderId?: string): boolean
 export function isMeituanSensitiveUrl(url: string): boolean {
   const norm = String(url || '');
   return norm.includes('/sensitiveData') || norm.includes('/confirmPhone');
+}
+
+/**
+ * 校验字符串是否为真实明文电话号码（非掩码、非占位提示词）
+ */
+export function isPlainPhoneNumber(phone: unknown): boolean {
+  const t = String(phone || '').trim();
+  if (!t || t.includes('*')) return false;
+  if (/^(查看电话|获取电话|显示电话|解密|未知|无|暂无|点击查看|联系客人|平台保护|隐私保护)$/i.test(t)) {
+    return false;
+  }
+  return /^1[3-9]\d{9}(#\d{1,8})?$/.test(t) || /^(0\d{2,3}-?)?\d{7,8}$/.test(t);
 }
 
 /**
@@ -93,11 +106,7 @@ export function parseMeituanSensitiveResponse(
     return !/^(查看姓名|获取姓名|显示姓名|解密|未知|无|暂无|点击查看|联系客人|平台保护|隐私保护)$/.test(t);
   };
 
-  const isPlainPhone = (phone: string): boolean => {
-    const t = phone.trim();
-    if (!t || t.includes('*')) return false;
-    return /^1[3-9]\d{9}(#\d{1,8})?$/.test(t);
-  };
+  const isPlainPhone = (phone: string): boolean => isPlainPhoneNumber(phone);
 
   // 1. 尝试从 sensitiveDataList 中提取
   const rawLists: unknown[] = [];
@@ -233,6 +242,50 @@ export function mergeSensitiveDataIntoRawDetail(
   }
 
   return root;
+}
+
+/**
+ * 判断原始订单详情或已捕获敏感数据中是否已包含明文联系电话（无星号掩码）
+ * 用于“智能跳过电话脱敏”策略，避免 1 秒内双重脱敏触发商户后台风控
+ */
+export function hasPlainMobileNumber(
+  rawDetail: unknown,
+  sensitive?: { guestMobile?: string } | null
+): boolean {
+  if (isPlainPhoneNumber(sensitive?.guestMobile)) {
+    return true;
+  }
+  if (!rawDetail || typeof rawDetail !== 'object') {
+    return false;
+  }
+  const root = rawDetail as Record<string, unknown>;
+  const data = (root.data && typeof root.data === 'object') ? (root.data as Record<string, unknown>) : null;
+  const orderDetail = data && data.orderDetail && typeof data.orderDetail === 'object'
+    ? (data.orderDetail as Record<string, unknown>)
+    : (data && data.order && typeof data.order === 'object'
+      ? (data.order as Record<string, unknown>)
+      : (data || (root.orderDetail && typeof root.orderDetail === 'object' ? root.orderDetail as Record<string, unknown> : root)));
+
+  // 1. 检查直接属性
+  const directCandidates = [orderDetail.guestMobile, orderDetail.phone, orderDetail.mobile];
+  for (const c of directCandidates) {
+    if (isPlainPhoneNumber(c)) return true;
+  }
+
+  // 2. 检查 contacts 与 guests 数组
+  const rawContacts = Array.isArray(orderDetail.contacts)
+    ? orderDetail.contacts
+    : Array.isArray(orderDetail.guests)
+      ? orderDetail.guests
+      : [];
+  for (const item of rawContacts) {
+    if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>;
+      if (isPlainPhoneNumber(rec.phone || rec.mobile)) return true;
+    }
+  }
+
+  return false;
 }
 
 /**

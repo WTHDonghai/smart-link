@@ -1,5 +1,5 @@
 import type { Page, Request, Response, Frame, Locator } from 'playwright';
-import { createPersistentBrowserSession, type BrowserSession } from '@/src/crawler/browserManager';
+import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import {
   BaseChannelDutyRunner,
@@ -148,21 +148,13 @@ export async function dismissDouyinNoticeModals(page: Page): Promise<boolean> {
 export class DouyinDutyRunner extends BaseChannelDutyRunner {
   public readonly channelCode = 'DOUYIN';
   public override readonly supportedTaskTypes: readonly SupportedDutyTaskType[] = ['OTA_COLLECT_ORDER'];
-  private session: BrowserSession | null = null;
-  private explicitTargetUrl?: string;
   private lastListRefreshTimes = new Map<'book' | 'refund', number>();
 
   // 在途请求合并门禁 (按 tab 分流独立合并)
   private inFlightListPromises = new Map<'book' | 'refund', Promise<DutyUnhandledOrderSummary[]>>();
 
-  // 任务互斥锁 (Task Mutex Lock) 保证单页面交互操作串行化
-  private taskMutex: Promise<void> = Promise.resolve();
-
   constructor(targetUrl?: string) {
-    super();
-    if (targetUrl && targetUrl.trim()) {
-      this.explicitTargetUrl = targetUrl.trim();
-    }
+    super(targetUrl);
   }
 
   public get targetUrl(): string {
@@ -171,41 +163,6 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
 
   private async dismissNoticeModals(page: Page): Promise<boolean> {
     return dismissDouyinNoticeModals(page);
-  }
-
-  /**
-   * 互斥锁封装：确保同一时刻只有一个页面交互动作在驱动 Playwright Page
-   */
-  private async runWithMutex<T>(action: () => Promise<T>): Promise<T> {
-    const previous = this.taskMutex;
-    let release: () => void = () => {};
-    this.taskMutex = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous.catch(() => {});
-    try {
-      return await action();
-    } finally {
-      release();
-    }
-  }
-
-  private getActivePage(operation: string): Page {
-    if (!this.running || !this.session) {
-      throw new DutyExecutionError(
-        `抖音值守执行器未运行，无法${operation}`,
-        'RUNNER_NOT_RUNNING',
-        false
-      );
-    }
-    if (this.session.page.isClosed?.()) {
-      throw new DutyExecutionError(
-        `抖音浏览器页面已关闭，无法${operation}`,
-        DouyinDutyErrorCode.TARGET_PAGE_NOT_READY,
-        false
-      );
-    }
-    return this.session.page;
   }
 
   /**
@@ -288,37 +245,7 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
     await updateVisualTrackerStatus(page, '🛡️ 抖音订单值守已激活，正在复用渠道绑定页面...', 'success');
   }
 
-  public async stop(): Promise<void> {
-    this.running = false;
-    if (this.session) {
-      try {
-        await this.session.close();
-      } catch {
-        // 忽略关闭异常
-      }
-      this.session = null;
-    }
-  }
 
-  /**
-   * 等待用户手动关闭浏览器；仅在诊断/验收 CLI 中使用
-   */
-  public async waitForBrowserClose(): Promise<void> {
-    const session = this.session;
-    if (!session) return;
-
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const close = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-
-      session.context.once('close', close);
-      session.page.once('close', close);
-    });
-  }
 
   /**
    * 获取指定 Tab 标签元素 Locator

@@ -1,4 +1,20 @@
 import type { Page, Frame } from 'playwright';
+import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+import { DutyExecutionError, MeituanDutyErrorCode } from './meituanDutyContracts';
+
+/**
+ * 页面级风控门禁断言器：若检测到人机验证/滑块/风控，立即更新 VisualTracker 并抛出结构化不可重试错误
+ */
+export async function assertNoMeituanPageRisk(page: Page): Promise<void> {
+  if (await checkMeituanPageRisk(page)) {
+    await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+    throw new DutyExecutionError(
+      '美团页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
+      MeituanDutyErrorCode.RISK_VERIFICATION_REQUIRED,
+      false
+    );
+  }
+}
 
 /**
  * 页面级人机验证、滑块与风控拦截嗅探函数（跨顶层与所有子 Frame 深度检测）

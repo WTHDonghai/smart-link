@@ -32,13 +32,14 @@
 
 ### 4. 美团订单采集、详情抓取与确认号回填技术方案
 - **文档路径**：[`docs/architecture/meituan-order-collection-trust-plan.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/meituan-order-collection-trust-plan.md)
-- **文档状态**：生产级架构基线（v2.1.0 已评审通过，待实施）
+- **文档状态**：生产级架构基线（v2.2.0 已全面实施并完成子模块解耦重构）
 - **核心内容**：
   - **权威网络响应为唯一数据源**：列表与详情 100% 来源于接口 JSON 响应，DOM 仅作交互与就绪断言，零 DOM 业务数据拼接（Fail-Fast）。
-  - **KISS 极简 3 核心模块**：收敛为契约层（`meituanDutyContracts.ts`）、纯函数层（`meituanOrderParsers.ts`）与执行层（`meituanDutyRunner.ts`）。
-  - **卡片内联流式交互**：基于美团真实 E-booking 卡片内联展开与卡片内回填，彻底废除模态弹窗（Modal）伪假设。
-  - **请求合并与防抖等待补偿**：在途 Promise 复用门禁位于互斥锁之前，防抖期内拟真等待补齐，杜绝误报 `VERIFIED_EMPTY`。
+  - **公共基类下沉 + 领域子模块解耦门面架构**：`BaseChannelDutyRunner` 统一抽象 session 与单页面任务互斥锁；美团渠道解耦为卡片定位、列表收集、详情嗅探、业务执行、风控防卫与纯函数解析等子模块，由 `MeituanDutyRunner` 门面统一对外委派。
+  - **Master-Detail 左右双栏联动与 MTD 模态回填**：左侧卡片点击即激活，头部「接受」弹出模态弹窗严格执行四步录入（防覆盖校验、模拟打字、读回校验、提交或演练取消）。
+  - **请求合并与防抖等待补偿**：在途 Promise 复用门禁位于互斥锁之前，`performance.now()` 高精度时钟补齐防抖差额，杜绝误报 `VERIFIED_EMPTY`。
   - **重试透传与边缘触发 Toast**：全链路结构化异常透传 `retryable: false` 杜绝无效重推，渲染层边缘触发避免 Toast 轰炸。
+
 
 ### 5. 美团商家后台（E-booking）DOM 结构与自动化交互参考规范
 - **文档路径**：[`docs/architecture/meituan-ebooking-dom-and-interaction-spec.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/meituan-ebooking-dom-and-interaction-spec.md)

@@ -4,7 +4,19 @@
 > **适用业务**：美团民宿 / 美团酒店（国内住宿业务）  
 > **商户系统**：美团商家中心（E-booking 综合订单处理中心）  
 > **实施状态**：🟢 **生产运行中 (Production Ready)**  
-> **维护代码位置**：[`src/crawler/duty/meituanDutyRunner.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/meituanDutyRunner.ts), [`src/crawler/duty/meituanOrderParsers.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/meituanOrderParsers.ts)
+> **维护代码位置**：
+> - 统一导出入口：[`src/crawler/duty/channels/meituan/index.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/index.ts)
+> - 门面执行器：[`src/crawler/duty/channels/meituan/meituanDutyRunner.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDutyRunner.ts) (继承 `BaseChannelDutyRunner`)
+> - 领域子模块：
+>   - 卡片定位：[`src/crawler/duty/channels/meituan/meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts)
+>   - 列表收集与屏障：[`src/crawler/duty/channels/meituan/meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)
+>   - 详情嗅探与解密：[`src/crawler/duty/channels/meituan/meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)
+>   - 业务动作执行：[`src/crawler/duty/channels/meituan/meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)
+>   - 安全风控探针：[`src/crawler/duty/channels/meituan/meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts)
+>   - 提示弹窗清理：[`src/crawler/duty/channels/meituan/meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)
+> - 纯函数解析层：[`src/crawler/duty/channels/meituan/meituanOrderParsers.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanOrderParsers.ts)
+> - 渠道领域契约：[`src/crawler/duty/channels/meituan/meituanDutyContracts.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDutyContracts.ts)
+
 
 ---
 
@@ -53,15 +65,18 @@
   - URL 重定向至 `verify.meituan.com`、`captcha.meituan.com` 或参数携带 `yodaReady`、`csecplatform`。
   - 页面特征提示语：`安全验证`、`操作频繁`、`稍后再试`、`请完成验证`、`人机`。
 - **系统应对规范**：
-  - Runner 中置入全局与 Frame 级别的 `checkMeituanPageRisk()` 探针；
+  - Runner 与各子模块中置入全局与 Frame 级别的 `assertNoMeituanPageRisk()` 探针（位于 [`meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts)）；
   - 一旦嗅探到风控挑战，**立即阻断作业**，通过 HUD VisualTracker 提示并在桌面弹出警告：“美团提示安全验证，需要人工在浏览器中完成验证”，严禁盲目静默重试。
 
 ### 3.2 敏感数据双重解密 1 秒风控 (Critical Risk)
 - **痛点发现**：美团对高频点击“解密客人姓名”和“解密联系电话”设有严格的短时间阈值监控。若在 1 秒内连续发起“查看姓名”与“查看电话”两个解密请求，极易立即触发 Yoda 人机滑块风控。
 - **工程解决对策（智能跳过电话解密）**：
   - 实测取证发现：在点击“查看姓名”接口返回的报文（`/sensitiveData`）中，通常已经同时包含了未脱敏的真实手机号；
-  - 系统在点击“查看姓名”后，立即解析响应报文。若已获取到明文手机号，**强制跳过点击“查看电话”按钮**，规避双重解密风险。
+  - 系统通过纯函数 `hasPlainMobileNumber()` 与 `isPlainPhoneNumber()` 进行严格校验（要求匹配 `^1[3-9]\d{9}$`，排除含 `*` 及 `暂无`、`未获取` 等占位符，并递归检查顶层及 `contacts`/`guests` 数组）；
+  - 若已获取到真实明文手机号，**强制跳过点击“查看电话”按钮**，规避双重解密风险。
 
 ### 3.3 列表刷新防抖与冷却机制
 - **冷却时间**：美团列表接口对调用频次有防抖保护，最短安全间隔为 **3000ms**。
-- **等待补偿机制**：调度引擎每次触发列表刷新前，计算距离上次刷新的时间差。若不足 3 秒，通过 `humanDelay` 补齐差额后才触发网络请求，**严禁直接返回空数组 `[]`**（防止漏单）。
+- **高精度等待补偿机制**：列表收集模块（[`meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)）基于 `performance.now()` 高精度时钟计算距离上次刷新的时间差。若不足 3 秒，通过 `humanDelay` 动态补齐差额后才触发网络请求，**严禁直接返回空数组 `[]`**（防止漏单）。
+- **在途请求合并 (Request Coalescing)**：在进入页面互斥锁之前，若存在未完成的列表刷新 Promise（`inFlightListPromise`），直接复用同一在途请求，避免并发调用重复轰炸美团接口。
+

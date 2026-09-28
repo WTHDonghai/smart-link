@@ -10,6 +10,8 @@ import {
   parseMeituanOrderDetailResponse,
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
+  hasPlainMobileNumber,
+  isPlainPhoneNumber,
   isMeituanRiskControlText,
 } from '@/src/crawler/duty/channels/meituan/meituanOrderParsers';
 
@@ -90,15 +92,32 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(isMeituanOrderTabListUrl('/api/v1/ebooking/orders/list')).toBe(false);
     });
 
-    it('isMeituanDetailUrl should match detail URLs', () => {
-      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/12345')).toBe(true);
-      expect(isMeituanDetailUrl('https://eb.meituan.com/orders/detail?id=123')).toBe(true);
-      expect(isMeituanDetailUrl('https://eb.meituan.com/ebooking/orders/123')).toBe(true);
-      expect(isMeituanDetailUrl('https://eb.meituan.com/orders/12345', '12345')).toBe(true);
+    it('isMeituanDetailUrl should match detail URLs strictly bound to v1 contract', () => {
+      const realDetailUrl =
+        'https://eb.meituan.com/api/v1/ebooking/orders/5035036087660556214?userId=295692068&pageRequestSource=1';
 
-      // Exclude list and sensitive
-      expect(isMeituanDetailUrl('https://eb.meituan.com/orders/task/list')).toBe(false);
-      expect(isMeituanDetailUrl('https://eb.meituan.com/orders/sensitiveData')).toBe(false);
+      // 1. 真实生产带参数详情 URL 命中
+      expect(isMeituanDetailUrl(realDetailUrl, '5035036087660556214')).toBe(true);
+
+      // 2. 纯路径格式命中
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/5035036087660556214', '5035036087660556214')).toBe(true);
+
+      // 3. 通用诊断（未传 targetOrderId 时）命中
+      expect(isMeituanDetailUrl(realDetailUrl)).toBe(true);
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/12345')).toBe(true);
+
+      // 4. 严格防串单：单号不匹配时坚决返回 false
+      expect(isMeituanDetailUrl(realDetailUrl, '9999999999999999999')).toBe(false);
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/OTHER_999', '12345')).toBe(false);
+
+      // 5. 天然拒绝 task/list 与 sensitiveData，无需黑名单
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/task/list?scenario=0', '5035036087660556214')).toBe(false);
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/task/list')).toBe(false);
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/sensitiveData/5035036087660556214', '5035036087660556214')).toBe(false);
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v1/ebooking/orders/sensitiveData/5035036087660556214')).toBe(false);
+
+      // 6. Fail-Fast：若美团接口协议升级至 v2，立即返回 false 阻断，杜绝跨版本脏数据解析
+      expect(isMeituanDetailUrl('https://eb.meituan.com/api/v2/ebooking/orders/5035036087660556214', '5035036087660556214')).toBe(false);
     });
 
     it('isMeituanSensitiveUrl should match sensitive data URLs', () => {
@@ -461,6 +480,101 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       expect(mergedOrder.data.order.guestName).toBe('王大拿');
       expect(mergedOrder.data.order.guestMobile).toBe('13900001111');
       expect(mergedOrder.data.order.guests[0].name).toBe('王大拿');
+    });
+  });
+
+  describe('isPlainPhoneNumber', () => {
+    it('should validate 11-digit mobile numbers and landlines', () => {
+      expect(isPlainPhoneNumber('13800138000')).toBe(true);
+      expect(isPlainPhoneNumber('13800138000#1234')).toBe(true);
+      expect(isPlainPhoneNumber('021-12345678')).toBe(true);
+      expect(isPlainPhoneNumber('075588888888')).toBe(true);
+    });
+
+    it('should reject masked phone numbers with asterisk', () => {
+      expect(isPlainPhoneNumber('138****8000')).toBe(false);
+      expect(isPlainPhoneNumber('138****8000#123')).toBe(false);
+    });
+
+    it('should reject placeholder text and empty values', () => {
+      expect(isPlainPhoneNumber('查看电话')).toBe(false);
+      expect(isPlainPhoneNumber('联系客人')).toBe(false);
+      expect(isPlainPhoneNumber('暂无')).toBe(false);
+      expect(isPlainPhoneNumber('未知')).toBe(false);
+      expect(isPlainPhoneNumber('')).toBe(false);
+      expect(isPlainPhoneNumber(null)).toBe(false);
+      expect(isPlainPhoneNumber(undefined)).toBe(false);
+    });
+  });
+
+  describe('hasPlainMobileNumber', () => {
+    it('should return true if sensitive contains plain guestMobile without asterisk', () => {
+      expect(hasPlainMobileNumber(null, { guestMobile: '13812345678' })).toBe(true);
+      expect(hasPlainMobileNumber({}, { guestMobile: '13812345678' })).toBe(true);
+    });
+
+    it('should return false if sensitive guestMobile contains asterisk or placeholder', () => {
+      expect(hasPlainMobileNumber(null, { guestMobile: '138****5678' })).toBe(false);
+      expect(hasPlainMobileNumber({}, { guestMobile: '138****5678' })).toBe(false);
+      expect(hasPlainMobileNumber(null, { guestMobile: '查看电话' })).toBe(false);
+    });
+
+    it('should check rawDetail when sensitive has no plain mobile', () => {
+      const rawWithPlain = {
+        data: {
+          orderDetail: {
+            guestMobile: '13987654321',
+          },
+        },
+      };
+      expect(hasPlainMobileNumber(rawWithPlain, null)).toBe(true);
+      expect(hasPlainMobileNumber(rawWithPlain, { guestMobile: '139****4321' })).toBe(true);
+
+      const rawWithMasked = {
+        data: {
+          orderDetail: {
+            guestMobile: '139****4321',
+          },
+        },
+      };
+      expect(hasPlainMobileNumber(rawWithMasked, null)).toBe(false);
+
+      const rawWithPlaceholder = {
+        data: {
+          orderDetail: {
+            guestMobile: '查看电话',
+          },
+        },
+      };
+      expect(hasPlainMobileNumber(rawWithPlaceholder, null)).toBe(false);
+
+      const rawEmpty = {};
+      expect(hasPlainMobileNumber(rawEmpty, null)).toBe(false);
+    });
+
+    it('should scan contacts and guests arrays for plain mobile numbers', () => {
+      const rawWithContacts = {
+        data: {
+          orderDetail: {
+            guestMobile: '139****4321', // masked on top
+            contacts: [
+              { name: '张三', phone: '13800138000' }, // plain in contacts
+            ],
+          },
+        },
+      };
+      expect(hasPlainMobileNumber(rawWithContacts, null)).toBe(true);
+
+      const rawWithGuests = {
+        data: {
+          orderDetail: {
+            guests: [
+              { name: '李四', mobile: '13700137000' }, // plain in guests
+            ],
+          },
+        },
+      };
+      expect(hasPlainMobileNumber(rawWithGuests, null)).toBe(true);
     });
   });
 });

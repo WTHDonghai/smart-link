@@ -1,4 +1,6 @@
-import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src/types'
+import type { Page } from 'playwright';
+import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src/types';
+import type { BrowserSession } from '@/src/crawler/browserManager';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 
 /**
@@ -36,6 +38,7 @@ export interface DutyUnhandledOrderSummary {
   afterSaleId?: string;
   orderDisplayLabel?: string;
 }
+
 
 export interface ExtractedOrderDetail {
   otaOrderId: string;
@@ -176,6 +179,16 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
   protected running = false;
   public confirmImportEnabled = true;
 
+  protected session: BrowserSession | null = null;
+  protected explicitTargetUrl?: string;
+  protected taskMutex: Promise<void> = Promise.resolve();
+
+  constructor(targetUrl?: string) {
+    if (targetUrl && targetUrl.trim()) {
+      this.explicitTargetUrl = targetUrl.trim();
+    }
+  }
+
   public isRunning(): boolean {
     return this.running;
   }
@@ -184,8 +197,79 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
     this.confirmImportEnabled = Boolean(enabled);
   }
 
+  /**
+   * 互斥锁封装：确保同一时刻只有一个页面交互动作在驱动 Playwright Page
+   */
+  protected async runWithMutex<T>(action: () => Promise<T>): Promise<T> {
+    const previous = this.taskMutex;
+    let release: () => void = () => {};
+    this.taskMutex = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => {});
+    try {
+      return await action();
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * 获取当前活动的 Playwright Page，若未启动或已关闭则抛出 Fail-Fast 异常
+   */
+  protected getActivePage(operation: string): Page {
+    const channelName = this.channelCode === 'MEITUAN' ? '美团' : this.channelCode === 'DOUYIN' ? '抖音' : this.channelCode;
+    if (!this.running || !this.session) {
+      throw new DutyExecutionError(
+        `${channelName}值守执行器未运行，无法${operation}`,
+        'RUNNER_NOT_RUNNING',
+        false
+      );
+    }
+    if (this.session.page.isClosed?.()) {
+      throw new DutyExecutionError(
+        `${channelName}浏览器页面已关闭，无法${operation}`,
+        'TARGET_PAGE_NOT_READY',
+        false
+      );
+    }
+    return this.session.page;
+  }
+
   public abstract start(): Promise<void>;
-  public abstract stop(): Promise<void>;
+
+  public async stop(): Promise<void> {
+    this.running = false;
+    if (this.session) {
+      try {
+        await this.session.close();
+      } catch {
+        // 忽略关闭异常
+      }
+      this.session = null;
+    }
+  }
+
+  /**
+   * 等待用户手动关闭浏览器；仅在诊断/验收 CLI 中使用
+   */
+  public async waitForBrowserClose(): Promise<void> {
+    const session = this.session;
+    if (!session || session.page.isClosed?.()) return;
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const close = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      session.context.once('close', close);
+      session.page.once('close', close);
+    });
+  }
+
   public abstract collectUnhandledOrders(context?: unknown): Promise<DutyUnhandledOrderSummary[]>;
   public abstract inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 

@@ -122,5 +122,20 @@ describe('BaseChannelDutyRunner 抽象基类与能力矩阵', () => {
       });
     });
   });
+
+  describe('waitForBrowserClose 调试等待短路保护', () => {
+    it('当 session 为 null 或 session.page 已处于关闭状态时应立即返回，杜绝死等挂起', async () => {
+      const runner = new MinimalChannelRunner();
+      // 1. session 为 null 时直接返回
+      await expect(runner.waitForBrowserClose()).resolves.toBeUndefined();
+
+      // 2. session 存在但 page 已被用户关闭时直接返回
+      (runner as unknown as { session: unknown }).session = {
+        page: { isClosed: () => true },
+        context: {},
+      };
+      await expect(runner.waitForBrowserClose()).resolves.toBeUndefined();
+    });
+  });
 });
 

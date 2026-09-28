@@ -95,7 +95,7 @@ flowchart TD
 | **桌面 IPC 网关** | `src/services/` | `*Bridge.ts` | 封装 `window.host`，提供强类型 IPC 调用，Electron 环境缺失时立即 Fail-Fast 阻断。 | `crawlerBridge.ts`, `dutyBridge.ts` |
 | **预加载脚本** | `electron/` | `preload.ts` | 通过 `contextBridge.exposeInMainWorld('host', ...)` 安全注入白名单 API，杜绝 Node 原生对象泄露。 | `preload.ts` |
 | **主进程宿主** | `electron/` | `main.ts` | 负责应用单实例锁、生命周期调度、窗口安全策略与原生 IPC 监听器注册。 | `main.ts` |
-| **自动化引擎与采集器** | `src/crawler/` | `*Engine.ts`, `*Collector.ts`, `*Runner.ts` | 运行于主进程，负责 Playwright 驱动、会话维持、任务认领与执行回执。 | `engine.ts`, `dutyOrchestrationEngine.ts`, `meituanDutyRunner.ts` |
+| **自动化引擎与采集器** | `src/crawler/` | `*Engine.ts`, `*Collector.ts`, `*Runner.ts` | 运行于主进程，负责 Playwright 驱动、会话维持、任务认领与执行回执。 | `engine.ts`, `dutyOrchestrationEngine.ts`, `channels/meituan/meituanDutyRunner.ts` |
 | **持久化与日志中间件** | `src/store/`, `src/services/` | `*Middleware.ts`, `*Storage.ts` | 统一管理 Redux 日志流与 IndexedDB (`SmartLink_LogDB`) 唯一持久化落库。 | `logPersistenceMiddleware.ts`, `logStorage.ts` |
 
 ---
@@ -133,3 +133,27 @@ flowchart TD
 2. **内容安全策略 (CSP)**：通过 `index.html` 限制仅允许本地脚本与受信任字体/连接。
 3. **导航拦截保护**：主进程监听 `will-navigate`，非白名单或非本地构建主页的跳转一律拦截，防止拖拽文件或恶意重定向导致界面状态丢失。
 4. **外链与权限**：新窗口统一由系统默认浏览器打开 (`shell.openExternal`)，静默拒绝所有未授权原生系统权限。
+
+### 3.5 多渠道值守工位协同与基类继承模型 (`BaseChannelDutyRunner`)
+针对多 OTA 渠道的差异化值守需求，系统确立了**抽象基类下沉 + 差异化领域子模块**的扩展架构：
+
+1. **公共基类能力下沉 (`BaseChannelDutyRunner`)**：
+   - 统一声明在 [`src/crawler/duty/dutyContracts.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/dutyContracts.ts)；
+   - **会话与目标 URL 管理**：统一维护 `session: ChannelBrowserSession | null` 与 `explicitTargetUrl`；
+   - **单页面任务互斥锁 (`runWithMutex`)**：通过串行 Promise 链，保证单工位页面上的 Tab 切换、详情抓取、确认号录入等操作互斥执行，彻底消除页面状态并发踩踏；
+   - **自愈式页面探测与唤醒 (`getActivePage`)**：若当前会话失效、窗口已关闭或尚未初始化，自动调起 `createChannelBrowserSession` 并导航至目标渠道后台，返回可用 `Page`；
+   - **窗口关闭安全监听 (`waitForBrowserClose`)**：带 `isClosed?.()` 短路安全探测，监听目标页面的 `'close'` 事件与所属 Context 的所有页面关闭，在用户手动关闭浏览器时立即重置 `session = null` 并清退资源；
+   - **优雅停止 (`stop`)**：安全关闭会话与浏览器进程。
+2. **两类渠道实现模式**：
+   - **轻量渠道（如 `DouyinDutyRunner`）**：
+     - 直接继承 `BaseChannelDutyRunner`；
+     - 零重复会话与互斥锁样板代码，仅专注于渠道特有页面导航、列表响应拦截与纯函数解析。
+   - **复杂生产渠道（如 `MeituanDutyRunner`）**：
+     - 继承 `BaseChannelDutyRunner` 作为对外统一门面（Facade），所有外部调用通过 `runWithMutex` 串行化保护；
+     - 内部遵循单一职责原则，委托专业领域子模块协同工作：
+       - [`meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts)：Iframe 作用域穿透与多阶梯卡片定位；
+       - [`meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)：Tab 切换状态机、网络屏障、高精度防抖补偿与在途合并；
+       - [`meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)：网络监听预注册、卡片激活防抖、单号严格比对与敏感数据解密；
+       - [`meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)：接单弹窗回填、输入读回校验、取消确认与 `dryRun` 演练；
+       - [`meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts) / [`meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)：风控探测与通知弹窗自动穿透。
+
