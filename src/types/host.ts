@@ -67,6 +67,11 @@ export interface PlatformBridgeApi {
   request(options: PlatformBridgeRequestOptions): Promise<PlatformBridgeResponse>;
 }
 
+export interface ClipboardBridgeApi {
+  writeText(text: string): Promise<boolean>;
+  readText(): Promise<string>;
+}
+
 export interface HostBridgeApi {
   crawler: CrawlerBridgeApi;
   duty: DutyBridgeApi;
@@ -74,6 +79,7 @@ export interface HostBridgeApi {
   update: AppUpdateBridgeApi;
   env: AppEnvSnapshot;
   platform?: PlatformBridgeApi;
+  clipboard?: ClipboardBridgeApi;
 }
 
 declare global {

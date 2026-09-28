@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { AppError } from '../../types/error';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export interface FriendlyErrorAlertProps {
   error: AppError;
@@ -36,15 +37,11 @@ export const FriendlyErrorAlert: React.FC<FriendlyErrorAlertProps> = ({
       `[技术详情] ${error.rawMessage}`,
     ].join('\n');
 
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(diagnosticInfo);
-        setCopied(true);
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => setCopied(false), 2000);
-      }
-    } catch {
-      // 忽略复制异常
+    const success = await copyToClipboard(diagnosticInfo);
+    if (success) {
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 2000);
     }
   }, [error]);
 

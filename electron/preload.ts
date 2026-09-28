@@ -94,6 +94,11 @@ const updateApi: HostBridgeApi['update'] = {
   },
 };
 
+const clipboardApi: NonNullable<HostBridgeApi['clipboard']> = {
+  writeText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
+  readText: () => ipcRenderer.invoke('clipboard:read-text'),
+};
+
 // 安全隔离注入至渲染进程主世界
 contextBridge.exposeInMainWorld('host', {
   crawler: crawlerApi,
@@ -102,4 +107,5 @@ contextBridge.exposeInMainWorld('host', {
   update: updateApi,
   env: exposedEnv,
   platform: platformApi,
+  clipboard: clipboardApi,
 });

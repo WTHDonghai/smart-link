@@ -47,7 +47,12 @@ vi.mock('electron', () => {
     session: {
       defaultSession: {
         setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
       },
+    },
+    clipboard: {
+      writeText: vi.fn(),
+      readText: vi.fn(),
     },
     shell: {
       openExternal: vi.fn(),
@@ -59,6 +64,7 @@ import {
   teardownApplicationResources,
   resetTeardownStateForTest,
   registerDutyIpcHandlers,
+  registerClipboardIpcHandlers,
   registerCrawlerIpcHandlers,
   resolveProcessEnvironment,
   createMainWindow,
@@ -315,6 +321,62 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(invalidateSpy).toHaveBeenCalledWith('CTRIP');
     });
   });
+
+  describe('registerClipboardIpcHandlers 操作系统级剪贴板 IPC 监听器', () => {
+    it('正确注册 clipboard:write-text 处理器并在调用时调度 clipboard.writeText', async () => {
+      registerClipboardIpcHandlers();
+
+      expect(ipcHandlers.has('clipboard:write-text')).toBe(true);
+      const handler = ipcHandlers.get('clipboard:write-text')!;
+
+      const { clipboard } = await import('electron');
+      const writeSpy = vi.spyOn(clipboard, 'writeText');
+
+      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MT-987654321');
+
+      expect(result).toBe(true);
+      expect(writeSpy).toHaveBeenCalledWith('MT-987654321');
+    });
+
+    it('当 clipboard.writeText 抛出系统级错误时捕获异常并返回 false', async () => {
+      registerClipboardIpcHandlers();
+
+      const handler = ipcHandlers.get('clipboard:write-text')!;
+      const { clipboard } = await import('electron');
+      vi.spyOn(clipboard, 'writeText').mockImplementationOnce(() => {
+        throw new Error('System pasteboard locked');
+      });
+
+      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MT-FAIL');
+      expect(result).toBe(false);
+    });
+
+    it('正确注册 clipboard:read-text 处理器并在调用时读取剪贴板内容', async () => {
+      registerClipboardIpcHandlers();
+
+      expect(ipcHandlers.has('clipboard:read-text')).toBe(true);
+      const handler = ipcHandlers.get('clipboard:read-text')!;
+
+      const { clipboard } = await import('electron');
+      vi.spyOn(clipboard, 'readText').mockReturnValue('COPIED_ORDER_TEXT');
+
+      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent);
+      expect(result).toBe('COPIED_ORDER_TEXT');
+    });
+
+    it('当 clipboard.readText 抛错时捕获并安全返回空字符串', async () => {
+      registerClipboardIpcHandlers();
+
+      const handler = ipcHandlers.get('clipboard:read-text')!;
+      const { clipboard } = await import('electron');
+      vi.spyOn(clipboard, 'readText').mockImplementationOnce(() => {
+        throw new Error('Access denied');
+      });
+
+      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent);
+      expect(result).toBe('');
+    });
+  });
 });
 
 describe('Electron main 进程环境决策 (resolveProcessEnvironment)', () => {
@@ -470,6 +532,42 @@ describe('Electron main 视窗安全防护 (configureWindowSecurity)', () => {
     willAttachWebview(event);
 
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
+
+    existsSyncSpy.mockRestore();
+    delete process.env[PROCESS_ENV_KEYS.startupMode];
+  });
+
+  it('allows clipboard permissions and denies other permission requests', async () => {
+    process.env[PROCESS_ENV_KEYS.startupMode] = 'built';
+    const existsSyncSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+
+    const { session } = await import('electron');
+    const setReqSpy = vi.spyOn(session.defaultSession, 'setPermissionRequestHandler');
+    const setCheckSpy = vi.spyOn(session.defaultSession, 'setPermissionCheckHandler');
+
+    await createMainWindow();
+
+    expect(setReqSpy).toHaveBeenCalled();
+    expect(setCheckSpy).toHaveBeenCalled();
+
+    const reqHandler = setReqSpy.mock.calls[0][0]!;
+    const checkHandler = setCheckSpy.mock.calls[0][0]!;
+
+    const cbAllowed1 = vi.fn();
+    reqHandler({} as never, 'clipboard-sanitized-write', cbAllowed1, {} as never);
+    expect(cbAllowed1).toHaveBeenCalledWith(true);
+
+    const cbAllowed2 = vi.fn();
+    reqHandler({} as never, 'clipboard-read', cbAllowed2, {} as never);
+    expect(cbAllowed2).toHaveBeenCalledWith(true);
+
+    const cbDenied = vi.fn();
+    reqHandler({} as never, 'geolocation', cbDenied, {} as never);
+    expect(cbDenied).toHaveBeenCalledWith(false);
+
+    expect(checkHandler({} as never, 'clipboard-sanitized-write', '', {} as never)).toBe(true);
+    expect(checkHandler({} as never, 'clipboard-read', '', {} as never)).toBe(true);
+    expect(checkHandler({} as never, 'notifications', '', {} as never)).toBe(false);
 
     existsSyncSpy.mockRestore();
     delete process.env[PROCESS_ENV_KEYS.startupMode];

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, session, shell } from 'electron';
 import { hotelCollectionEngine } from '../src/crawler/engine';
 import { syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
@@ -526,6 +526,29 @@ export function registerDutyIpcHandlers(): void {
   });
 }
 
+/**
+ * 注册操作系统级剪贴板 IPC 监听器
+ * 直接读写系统底层 Pasteboard，脱离 Chromium 窗口焦点与权限限制
+ */
+export function registerClipboardIpcHandlers(): void {
+  ipcMain.handle('clipboard:write-text', async (_event, text: string) => {
+    try {
+      clipboard.writeText(String(text ?? ''));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('clipboard:read-text', async () => {
+    try {
+      return clipboard.readText();
+    } catch {
+      return '';
+    }
+  });
+}
+
 let isTearingDown = false;
 let teardownPromise: Promise<ApplicationTeardownResult> | null = null;
 
@@ -665,8 +688,16 @@ function configureWindowSecurity(
     event.preventDefault();
   });
 
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+  session.defaultSession?.setPermissionRequestHandler?.((_webContents, permission, callback) => {
+    if (permission === 'clipboard-sanitized-write' || permission === 'clipboard-read') {
+      callback(true);
+      return;
+    }
     callback(false);
+  });
+
+  session.defaultSession?.setPermissionCheckHandler?.((_webContents, permission) => {
+    return permission === 'clipboard-sanitized-write' || permission === 'clipboard-read';
   });
 }
 
@@ -756,6 +787,7 @@ if (process.type === 'browser') {
     registerPlatformIpcHandlers();
     registerCrawlerIpcHandlers();
     registerDutyIpcHandlers();
+    registerClipboardIpcHandlers();
     registerDesktopUpdateIpcHandlers(createDesktopUpdateService());
     await createMainWindow();
     void desktopUpdateService?.check();

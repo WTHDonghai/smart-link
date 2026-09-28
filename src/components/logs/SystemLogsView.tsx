@@ -21,6 +21,7 @@ import { TASK_STAGES } from '../../utils/taskStage';
 import { isLogQuerySyntaxValid } from '../../utils/logQuery';
 import { getTodayDateString, getPastDateString } from '../../utils/logDate';
 import { formatLogsForExport } from '../../utils/logExport';
+import { copyToClipboard } from '../../utils/clipboard';
 import {
   Terminal,
   Search,
@@ -91,12 +92,8 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   }, []);
 
   const handleCopyText = async (key: string, text: string) => {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        throw new Error('当前环境不支持剪贴板写入');
-      }
+    const success = await copyToClipboard(text);
+    if (success) {
       setCopiedKey(key);
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current);
@@ -106,7 +103,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
         copyTimerRef.current = null;
       }, 1500);
       dispatch(showToast({ type: 'success', title: '已复制到剪贴板' }));
-    } catch {
+    } else {
       dispatch(showToast({ type: 'error', title: '复制失败，请手动选择复制' }));
     }
   };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { ToolkitOrder } from '../../types';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { StatusBadge } from '../common/StatusBadge';
@@ -8,6 +8,7 @@ import {
   getAllowedOrderActions,
   getOrderStatusMeta,
 } from '../../utils/orderHelpers';
+import { copyToClipboard } from '../../utils/clipboard';
 import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check, MoreVertical, AlertCircle } from 'lucide-react';
 
 export interface OrderTableProps {
@@ -20,6 +21,7 @@ export interface OrderTableProps {
   onImport: (order: ToolkitOrder) => void;
   onDelete: (order: ToolkitOrder) => void;
   onCancel: (order: ToolkitOrder) => void;
+  onCopy?: (text: string, success: boolean) => void;
 }
 
 export const OrderTable: React.FC<OrderTableProps> = ({
@@ -32,8 +34,10 @@ export const OrderTable: React.FC<OrderTableProps> = ({
   onImport,
   onDelete,
   onCancel,
+  onCopy,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(initialOpenMenuId || null);
   const [confirmAction, setConfirmAction] = useState<{
     orderId: string;
@@ -71,14 +75,26 @@ export const OrderTable: React.FC<OrderTableProps> = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handleClickOutside);
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
     };
   }, []);
 
-  const handleCopy = (text: string) => {
+  const handleCopy = async (text: string) => {
     if (!text) return;
-    void navigator.clipboard.writeText(text);
-    setCopiedId(text);
-    setTimeout(() => setCopiedId(null), 1500);
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopiedId(text);
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => {
+        setCopiedId(null);
+        copyTimerRef.current = null;
+      }, 1500);
+    }
+    onCopy?.(text, success);
   };
 
   return (
@@ -183,6 +199,7 @@ export const OrderTable: React.FC<OrderTableProps> = ({
                             }}
                             className="text-[#94a3b8] hover:text-[#004ac6] p-0.5 cursor-pointer rounded"
                             title="复制订单号"
+                            aria-label="复制订单号"
                           >
                             {isCopied ? (
                               <Check className="w-3 h-3 text-emerald-600" />

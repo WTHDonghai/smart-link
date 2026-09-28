@@ -69,4 +69,26 @@ describe('desktop preload log subscription', () => {
     expect(ipcRendererMock.invoke).toHaveBeenCalledWith('duty:update-template-cache', payload);
     expect(res).toEqual({ success: true });
   });
+
+  it('exposes clipboard.writeText and delegates to ipcRenderer', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce(true);
+
+    expect(host.clipboard).toBeDefined();
+    const res = await host.clipboard!.writeText('MT-ORDER-TEST');
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('clipboard:write-text', 'MT-ORDER-TEST');
+    expect(res).toBe(true);
+  });
+
+  it('exposes clipboard.readText and delegates to ipcRenderer', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce('PASTED-ORDER-123');
+
+    expect(host.clipboard).toBeDefined();
+    const res = await host.clipboard!.readText();
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('clipboard:read-text');
+    expect(res).toBe('PASTED-ORDER-123');
+  });
 });

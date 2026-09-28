@@ -99,6 +99,8 @@ describe('OrderTable 高密订单表格组件', () => {
     expect(html).toContain('隐居江南度假酒店');
     expect(html).toContain('MT-987654321');
     expect(html).toContain('title="点击查看订单详情"');
+    expect(html).toContain('title="复制订单号"');
+    expect(html).toContain('aria-label="复制订单号"');
     expect(html).toContain('2026-10-01');
     expect(html).toContain('至 2026-10-03 (2晚)');
     expect(html).toContain('¥400.00');

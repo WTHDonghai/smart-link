@@ -231,6 +231,13 @@ export const OrderGuardianView: React.FC = () => {
         onImport={handleImport}
         onDelete={handleDelete}
         onCancel={handleCancel}
+        onCopy={(orderNo, success) => {
+          if (success) {
+            dispatch(showToast({ type: 'success', title: `订单号已复制: ${orderNo}` }));
+          } else {
+            dispatch(showToast({ type: 'error', title: '复制失败，请手动选择复制' }));
+          }
+        }}
       />
 
       {/* 模块 5: 底部分页控件 */}
