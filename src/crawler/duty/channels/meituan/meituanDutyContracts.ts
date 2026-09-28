@@ -1,4 +1,4 @@
-import type { DutyUnhandledOrderSummary } from './dutyContracts';
+import type { DutyUnhandledOrderSummary } from '../../dutyContracts';
 
 /**
  * 美团值守核心业务错误代码
@@ -30,21 +30,7 @@ export enum MeituanDutyErrorCode {
   CONFIRM_RESULT_UNVERIFIED = 'CONFIRM_RESULT_UNVERIFIED',   // 确认接口返回失败或未通过校验
 }
 
-/**
- * 结构化执行异常，支持精准透传错误码与重试属性
- */
-export class DutyExecutionError extends Error {
-  public readonly errorCode: string;
-  public readonly retryable?: boolean;
-
-  constructor(message: string, errorCode: string, retryable?: boolean) {
-    super(message.includes(errorCode) ? message : `[${errorCode}] ${message}`);
-    this.name = 'DutyExecutionError';
-    this.errorCode = errorCode;
-    this.retryable = retryable;
-    Object.setPrototypeOf(this, DutyExecutionError.prototype);
-  }
-}
+export { DutyExecutionError } from '../../dutyContracts';
 
 /**
  * 列表采集结构化结果

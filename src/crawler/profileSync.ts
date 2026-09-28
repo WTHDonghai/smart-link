@@ -127,7 +127,10 @@ export function isSqliteDatabase(filePath: string): boolean {
 /**
  * 在目标 Profile 的 Cookies 数据库中执行白名单物理清洗，只保留美团及点评域名 Cookies
  */
-export function sanitizeTargetCookiesDatabase(targetProfileDir: string): {
+export function sanitizeTargetCookiesDatabase(
+  targetProfileDir: string,
+  channelCode: string = 'MEITUAN'
+): {
   cleanedCookiesPath: string;
   remainingCount: number;
 } {
@@ -158,8 +161,16 @@ export function sanitizeTargetCookiesDatabase(targetProfileDir: string): {
     try { fs.rmSync(shm, { force: true }); } catch {}
   }
 
+  const normalizedChannel = channelCode.trim().toUpperCase();
+  let whereClause = "host_key NOT LIKE '%meituan%' AND host_key NOT LIKE '%dianping%'";
+  if (normalizedChannel === 'DOUYIN' || normalizedChannel === 'DY') {
+    whereClause = "host_key NOT LIKE '%douyin%' AND host_key NOT LIKE '%bytedance%' AND host_key NOT LIKE '%amemv.com%'";
+  } else if (normalizedChannel === 'CTRIP') {
+    whereClause = "host_key NOT LIKE '%ctrip%' AND host_key NOT LIKE '%trip%'";
+  }
+
   const sql = `
-    DELETE FROM cookies WHERE host_key NOT LIKE '%meituan%' AND host_key NOT LIKE '%dianping%';
+    DELETE FROM cookies WHERE ${whereClause};
     VACUUM;
     SELECT count(*) FROM cookies;
   `;
@@ -405,11 +416,11 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     }
   }
 
-  // 4.3 物理执行 SQLite Cookies 白名单过滤，只保留美团/大众点评登录态，杜绝任何外部站点隐私泄露
-  let cleanedMeituanCount = 0;
+  // 4.3 物理执行 SQLite Cookies 白名单过滤，只保留目标渠道登录态，杜绝任何外部站点隐私泄露
+  let cleanedCookieCount = 0;
   try {
-    const sanitizeResult = sanitizeTargetCookiesDatabase(targetProfileDir);
-    cleanedMeituanCount = sanitizeResult.remainingCount;
+    const sanitizeResult = sanitizeTargetCookiesDatabase(targetProfileDir, channelCode);
+    cleanedCookieCount = sanitizeResult.remainingCount;
   } catch {
     // 忽略异常 (例如非 SQLite 文件测试桩)
   }
@@ -456,9 +467,17 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
     ? `${targetSourceProfile.id} (${targetSourceProfile.name})`
     : sourceProfileName;
 
-  const cookieInfo = cleanedMeituanCount > 0
-    ? `已保留 ${cleanedMeituanCount} 个美团登录态 Cookies (其余站点已物理清除)`
-    : '未检测到美团登录态 Cookies';
+  const channelNameMap: Record<string, string> = {
+    MEITUAN: '美团',
+    MEITUAN_BIZ: '美团商旅',
+    DOUYIN: '抖音',
+    CTRIP: '携程',
+  };
+  const channelDisplay = channelNameMap[channelCode] || channelCode;
+
+  const cookieInfo = cleanedCookieCount > 0
+    ? `已保留 ${cleanedCookieCount} 个${channelDisplay}登录态 Cookies (其余站点已物理清除)`
+    : `未检测到${channelDisplay}登录态 Cookies`;
 
   return {
     success: true,

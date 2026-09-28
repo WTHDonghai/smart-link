@@ -4,6 +4,7 @@ import {
   getMeituanCatalogUrl,
   getOtaOrderUrl,
   getMeituanOrderUrl,
+  getDouyinOrderUrl,
   getOtaProductUrl,
   getMeituanProductUrl,
   getDouyinProductUrl,
@@ -26,7 +27,7 @@ describe('otaUrls config & single source of truth', () => {
   describe('getOtaChannelUrl', () => {
     it('throws explicit error when environment variable is not set (Fail-Fast)', () => {
       delete process.env[APP_ENV_KEYS.otaCatalogMeituan];
-      expect(() => getOtaChannelUrl('MEITUAN')).toThrow('未配置渠道「MEITUAN」的目标访问地址');
+      expect(() => getOtaChannelUrl('MEITUAN')).toThrow('未配置渠道「MEITUAN」的产品采集地址');
     });
 
     it('throws explicit error for unsupported channel code', () => {
@@ -60,6 +61,15 @@ describe('otaUrls config & single source of truth', () => {
 
       expect(getOtaChannelUrl('MEITUAN_BIZ')).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
       expect(getOtaChannelUrl('meituanbiz')).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
+    });
+
+    it('throws explicit error when both MEITUAN_BIZ and MEITUAN catalog URLs are missing', () => {
+      delete process.env[APP_ENV_KEYS.otaCatalogMeituanBiz];
+      delete process.env[APP_ENV_KEYS.otaCatalogMeituan];
+
+      expect(() => getOtaChannelUrl('MEITUAN_BIZ')).toThrow(
+        `未配置美团商旅或美团的产品采集地址，请在环境变量中配置 ${APP_ENV_KEYS.otaCatalogMeituanBiz} 或 ${APP_ENV_KEYS.otaCatalogMeituan}`
+      );
     });
   });
 
@@ -105,7 +115,15 @@ describe('otaUrls config & single source of truth', () => {
       );
     });
 
-    it('supports MEITUAN_BIZ falling back to MEITUAN_ORDER_URL', () => {
+    it('returns configured Douyin order URL', () => {
+      process.env[APP_ENV_KEYS.otaOrderDouyin] =
+        'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list?status=waiting';
+      expect(getDouyinOrderUrl()).toBe(
+        'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list?status=waiting'
+      );
+    });
+
+    it('supports MEITUAN_BIZ sharing MEITUAN_ORDER_URL', () => {
       process.env[APP_ENV_KEYS.otaOrderMeituan] =
         'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
 
@@ -114,6 +132,14 @@ describe('otaUrls config & single source of truth', () => {
       );
       expect(getOtaOrderUrl('meituanbiz')).toBe(
         'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
+      );
+    });
+
+    it('throws explicit error when MEITUAN_BIZ order URL is not set', () => {
+      delete process.env[APP_ENV_KEYS.otaOrderMeituan];
+
+      expect(() => getOtaOrderUrl('MEITUAN_BIZ')).toThrow(
+        `未配置渠道「MEITUAN_BIZ」的订单值守地址，请在环境变量中配置 ${APP_ENV_KEYS.otaOrderMeituan}`
       );
     });
   });
@@ -143,7 +169,7 @@ describe('otaUrls config & single source of truth', () => {
       delete process.env[APP_ENV_KEYS.otaProductMeituan];
       delete process.env[APP_ENV_KEYS.otaCatalogMeituan];
 
-      expect(() => getMeituanProductUrl()).toThrow('未配置渠道「MEITUAN」的目标访问地址');
+      expect(() => getMeituanProductUrl()).toThrow('未配置渠道「MEITUAN」的产品采集地址');
     });
 
     it('throws explicit error when channelCode is empty', () => {

@@ -1,0 +1,126 @@
+import { describe, it, expect } from 'vitest';
+import {
+  BaseChannelDutyRunner,
+  SUPPORTED_DUTY_TASK_TYPES,
+  type DutyUnhandledOrderSummary,
+} from '@/src/crawler/duty/dutyContracts';
+import { MeituanDutyRunner } from '@/src/crawler/duty/channels/meituan/meituanDutyRunner';
+import { DouyinDutyRunner } from '@/src/crawler/duty/channels/douyin/douyinDutyRunner';
+
+class MinimalChannelRunner extends BaseChannelDutyRunner {
+  public readonly channelCode = 'TEST_CHANNEL';
+
+  public async start(): Promise<void> {
+    this.running = true;
+  }
+
+  public async stop(): Promise<void> {
+    this.running = false;
+  }
+
+  public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
+    return [];
+  }
+
+  public async inspectOrderDetail(): Promise<Record<string, unknown>> {
+    return {};
+  }
+}
+
+describe('BaseChannelDutyRunner 抽象基类与能力矩阵', () => {
+  it('默认提供系统标准的全量值守任务白名单 (SUPPORTED_DUTY_TASK_TYPES)', () => {
+    const runner = new MinimalChannelRunner();
+    expect(runner.supportedTaskTypes).toEqual(SUPPORTED_DUTY_TASK_TYPES);
+    expect(runner.supportedTaskTypes).toEqual([
+      'OTA_COLLECT_ORDER',
+      'OTA_IMPORT_ORDER',
+      'OTA_CONFIRM_IMPORT',
+      'OTA_CONFIRM_CANCEL',
+    ]);
+  });
+
+  it('初始运行状态 isRunning() 默认为 false，调用 start/stop 可正确切换', async () => {
+    const runner = new MinimalChannelRunner();
+    expect(runner.isRunning()).toBe(false);
+
+    await runner.start();
+    expect(runner.isRunning()).toBe(true);
+
+    await runner.stop();
+    expect(runner.isRunning()).toBe(false);
+  });
+
+  it('confirmImportEnabled 默认为 true，setConfirmImportEnabled 可正确切换', () => {
+    const runner = new MinimalChannelRunner();
+    expect(runner.confirmImportEnabled).toBe(true);
+
+    runner.setConfirmImportEnabled(false);
+    expect(runner.confirmImportEnabled).toBe(false);
+
+    runner.setConfirmImportEnabled(true);
+    expect(runner.confirmImportEnabled).toBe(true);
+  });
+
+  it('MeituanDutyRunner 应继承 BaseChannelDutyRunner，且默认拥有全量任务白名单', () => {
+    const meituanRunner = new MeituanDutyRunner();
+    expect(meituanRunner).toBeInstanceOf(BaseChannelDutyRunner);
+    expect(meituanRunner.channelCode).toBe('MEITUAN');
+    expect(meituanRunner.supportedTaskTypes).toEqual(SUPPORTED_DUTY_TASK_TYPES);
+    expect(meituanRunner.isRunning()).toBe(false);
+    expect(meituanRunner.confirmImportEnabled).toBe(true);
+  });
+
+  it('DouyinDutyRunner 应继承 BaseChannelDutyRunner，且阶段性 override 仅支持 OTA_COLLECT_ORDER', () => {
+    const douyinRunner = new DouyinDutyRunner();
+    expect(douyinRunner).toBeInstanceOf(BaseChannelDutyRunner);
+    expect(douyinRunner.channelCode).toBe('DOUYIN');
+    expect(douyinRunner.supportedTaskTypes).toEqual(['OTA_COLLECT_ORDER']);
+    expect(douyinRunner.isRunning()).toBe(false);
+    expect(douyinRunner.confirmImportEnabled).toBe(true);
+  });
+
+  describe('executeTask 统一任务执行入口', () => {
+    it('当执行器未处于运行状态时，executeTask 应直接 Fail-Fast 报错 RUNNER_NOT_RUNNING', async () => {
+      const runner = new MinimalChannelRunner();
+      expect(runner.isRunning()).toBe(false);
+
+      const result = await runner.executeTask({
+        id: 'task-not-running',
+        businessId: 'ORD-123',
+        businessType: 'ORDER',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({})).toString('base64'),
+      });
+
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('RUNNER_NOT_RUNNING');
+      expect(result.errorMessage).toContain('TEST_CHANNEL');
+    });
+
+    it('当执行器处于运行状态时，executeTask 应委托给 dispatchDutyTask 并返回执行结果', async () => {
+      const runner = new MinimalChannelRunner();
+      await runner.start();
+      expect(runner.isRunning()).toBe(true);
+
+      const result = await runner.executeTask({
+        id: 'task-collect',
+        businessId: 'ORD-COLLECT',
+        businessType: 'ORDER',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify({})).toString('base64'),
+      });
+
+      expect(result.status).toBe('SUCCEEDED');
+      expect(result.result).toEqual({
+        otaChannelCode: 'TEST_CHANNEL',
+        recordCount: 0,
+        orders: [],
+      });
+    });
+  });
+});
+

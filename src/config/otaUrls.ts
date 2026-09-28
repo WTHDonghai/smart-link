@@ -33,30 +33,30 @@ export const OTA_PRODUCT_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   DOUYIN: APP_ENV_KEYS.otaProductDouyin,
 };
 
-interface OtaUrlErrorContext {
-  subject: string;
-  unsupportedMessagePrefix: string;
-  sharedMeituanKey: AppEnvKey;
-}
-
 type OtaUrlType = 'catalog' | 'order';
 
-const OTA_URL_ERROR_CONTEXT: Record<OtaUrlType, OtaUrlErrorContext> = {
+interface OtaUrlTypeConfig {
+  subject: string;
+  unsupportedMessagePrefix: string;
+  envKeyMap: Record<string, AppEnvKey>;
+  fallbackEnvKeyMap?: Partial<Record<string, AppEnvKey>>;
+}
+
+const OTA_URL_CONFIG: Record<OtaUrlType, OtaUrlTypeConfig> = {
   catalog: {
-    subject: '目标访问地址',
+    subject: '产品采集地址',
     unsupportedMessagePrefix: '不支持的 OTA',
-    sharedMeituanKey: APP_ENV_KEYS.otaCatalogMeituan,
+    envKeyMap: OTA_CATALOG_ENV_KEY_MAP,
+    fallbackEnvKeyMap: {
+      MEITUAN_BIZ: APP_ENV_KEYS.otaCatalogMeituan,
+    },
   },
   order: {
     subject: '订单值守地址',
     unsupportedMessagePrefix: '不支持的订单值守 OTA',
-    sharedMeituanKey: APP_ENV_KEYS.otaOrderMeituan,
+    envKeyMap: OTA_ORDER_ENV_KEY_MAP,
   },
 };
-
-function getOtaEnvKeyMap(urlType: OtaUrlType): Record<string, AppEnvKey> {
-  return urlType === 'catalog' ? OTA_CATALOG_ENV_KEY_MAP : OTA_ORDER_ENV_KEY_MAP;
-}
 
 function resolveOtaUrl(channelCode: string, urlType: OtaUrlType): string {
   const code = channelCode.trim();
@@ -65,26 +65,33 @@ function resolveOtaUrl(channelCode: string, urlType: OtaUrlType): string {
   }
 
   const normalizedCode = normalizeOtaChannelCode(code);
-  const envKey = getOtaEnvKeyMap(urlType)[normalizedCode];
-  const errorContext = OTA_URL_ERROR_CONTEXT[urlType];
+  const config = OTA_URL_CONFIG[urlType];
+  const envKey = config.envKeyMap[normalizedCode];
 
   if (!envKey) {
-    throw new Error(`${errorContext.unsupportedMessagePrefix} 渠道编码: ${channelCode}`);
+    throw new Error(`${config.unsupportedMessagePrefix} 渠道编码: ${channelCode}`);
   }
 
   const value = getAppEnv(envKey);
   if (value) return value;
 
-  if (normalizedCode === 'MEITUAN_BIZ') {
-    const meituanValue = getAppEnv(errorContext.sharedMeituanKey);
-    if (meituanValue) return meituanValue;
+  const fallbackKey = config.fallbackEnvKeyMap?.[normalizedCode];
+  if (fallbackKey) {
+    const fallbackValue = getAppEnv(fallbackKey);
+    if (fallbackValue) return fallbackValue;
+
+    if (normalizedCode === 'MEITUAN_BIZ') {
+      throw new Error(
+        `未配置美团商旅或美团的${config.subject}，请在环境变量中配置 ${envKey} 或 ${fallbackKey}`
+      );
+    }
 
     throw new Error(
-      `未配置美团商旅或美团的${errorContext.subject}，请在环境变量中配置 ${envKey} 或 ${errorContext.sharedMeituanKey}`
+      `未配置渠道「${channelCode}」的${config.subject}，请在环境变量中配置 ${envKey} 或 ${fallbackKey}`
     );
   }
 
-  throw new Error(`未配置渠道「${channelCode}」的${errorContext.subject}，请在环境变量中配置 ${envKey}`);
+  throw new Error(`未配置渠道「${channelCode}」的${config.subject}，请在环境变量中配置 ${envKey}`);
 }
 
 /**
@@ -150,6 +157,13 @@ export function getOtaOrderUrl(channelCode: string): string {
  */
 export function getMeituanOrderUrl(): string {
   return getOtaOrderUrl('MEITUAN');
+}
+
+/**
+ * 快捷获取抖音待处理订单值守目标 URL
+ */
+export function getDouyinOrderUrl(): string {
+  return getOtaOrderUrl('DOUYIN');
 }
 
 /**

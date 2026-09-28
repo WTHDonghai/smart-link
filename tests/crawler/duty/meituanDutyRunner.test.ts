@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { Response as PlaywrightResponse } from 'playwright';
-import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk, dismissMeituanNoticeModals } from '../../../src/crawler/duty/meituanDutyRunner';
+import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk, dismissMeituanNoticeModals } from '@/src/crawler/duty/channels/meituan/meituanDutyRunner';
 import {
   extractMeituanOrdersFromPayload,
   extractMeituanOrderDetailFromPayload,
@@ -10,13 +10,13 @@ import {
   isMeituanDetailUrl,
   isMeituanListUrl,
   isMeituanSensitiveUrl,
-} from '../../../src/crawler/duty/meituanOrderParsers';
-import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
-import { APP_ENV_KEYS } from '../../../src/types/env';
-import type { DutyClaimedTask } from '../../../src/types';
-import { createPersistentBrowserSession } from '../../../src/crawler/browserManager';
+} from '@/src/crawler/duty/channels/meituan/meituanOrderParsers';
+import * as dutyRuntimeApi from '@/src/services/dutyRuntimeApi';
+import { APP_ENV_KEYS } from '@/src/types/env';
+import type { DutyClaimedTask } from '@/src/types';
+import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
 
-vi.mock('../../../src/crawler/browserManager', () => ({
+vi.mock('@/src/crawler/browserManager', () => ({
   createPersistentBrowserSession: vi.fn(),
 }));
 
@@ -2049,6 +2049,135 @@ describe('meituanDutyRunner', () => {
         .rejects
         .toThrow('详情头部未找到「我已知晓」确认取消操作按钮');
     });
+
+    it('confirmImport should support dryRun options to verify modal and input without submitting', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const clickedLabels: string[] = [];
+      let filledValue = '';
+
+      const acceptBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => clickedLabels.push('accept-btn')),
+      };
+
+      const modalInput = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: vi.fn().mockResolvedValue(undefined),
+        inputValue: vi.fn().mockImplementation(async () => filledValue),
+        pressSequentially: vi.fn().mockImplementation(async (val: string) => {
+          filledValue = val;
+        }),
+        fill: vi.fn().mockImplementation(async (val: string) => {
+          filledValue = val;
+        }),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const modalConfirmBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => clickedLabels.push('modal-confirm-btn')),
+      };
+
+      const modalCancelBtn = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => clickedLabels.push('modal-cancel-btn')),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => clickedLabels.push('card-click')),
+        locator: (sel: string) => ({
+          first: () => {
+            if (sel.includes('input')) return modalInput;
+            if (sel.includes('确认接受')) return modalConfirmBtn;
+            if (sel.includes('取消')) return modalCancelBtn;
+            if (sel.includes('button') || sel.includes('op-btn')) return acceptBtn;
+            return { isVisible: vi.fn().mockResolvedValue(false) };
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return modalInput;
+              if (selector.includes('.mtd-btn.op-btn.mtd-btn-primary') || selector.includes('.btn-wrap') || selector.includes('button')) return acceptBtn;
+              if (selector.includes('确认接受')) return modalConfirmBtn;
+              if (selector.includes('取消')) return modalCancelBtn;
+              if (selector.includes('.detail-header')) return { isVisible: vi.fn().mockResolvedValue(true) };
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          keyboard: { press: vi.fn().mockResolvedValue(undefined) },
+        },
+      };
+
+      const verification = await runner.confirmImport('CFM-DRY-123', 'MT-ORD-DRY', { dryRun: true });
+      expect(verification.dryRun).toBe(true);
+      expect(verification.orderId).toBe('MT-ORD-DRY');
+      expect(verification.action).toBe('confirmImport');
+      expect(verification.verifiedSteps).toContain('fill_confirm_no');
+      expect(verification.verifiedSteps).toContain('verify_submit_btn');
+      expect(verification.verifiedSteps).toContain('close_dialog_safely');
+      expect(filledValue).toBe('CFM-DRY-123');
+      // 核心断言：绝对没有点击提交确认按钮！
+      expect(clickedLabels).not.toContain('modal-confirm-btn');
+      expect(clickedLabels).toContain('accept-btn');
+      expect(clickedLabels).toContain('modal-cancel-btn');
+    });
+
+    it('confirmCancel should support dryRun options to verify acknowledge button visibility without clicking', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const clickedActions: string[] = [];
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedActions.push('card-click');
+        }),
+      };
+
+      const ackBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockImplementation(async () => {
+          clickedActions.push('ack-btn-click');
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('我已知晓')) return ackBtnLocator;
+              if (selector.includes('.detail-header')) return { isVisible: vi.fn().mockResolvedValue(true) };
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        },
+      };
+
+      const verification = await runner.confirmCancel('MT-ORD-CANCEL-DRY', { dryRun: true });
+      expect(verification.dryRun).toBe(true);
+      expect(verification.orderId).toBe('MT-ORD-CANCEL-DRY');
+      expect(verification.action).toBe('confirmCancel');
+      expect(verification.verifiedSteps).toContain('locate_ack_btn');
+      expect(verification.verifiedSteps).toContain('assert_ack_btn_visible');
+      // 核心断言：绝不点击「我已知晓」按钮！
+      expect(clickedActions).not.toContain('ack-btn-click');
+    });
   });
 
   describe('MeituanDutyRunner executeTask delegation via dispatchDutyTask', () => {
@@ -2115,6 +2244,7 @@ describe('meituanDutyRunner', () => {
         guestName: '孙悟空',
         guestMobile: '13900001111',
         roomTypeName: '水帘洞豪华大套房',
+        roomTypeId: 'SLD-SUITE-01',
         ratePlanName: '含早特惠',
         arrival: '2026-09-25',
         departure: '2026-09-27',
@@ -2166,7 +2296,7 @@ describe('meituanDutyRunner', () => {
               rateCode: '含早特惠',
               arrival: '2026-09-25',
               departure: '2026-09-27',
-              roomTypeId: 'ROOM_DEFAULT',
+              roomTypeId: 'SLD-SUITE-01',
               nights: 2,
               quantity: 1,
               totalPrice: 998,

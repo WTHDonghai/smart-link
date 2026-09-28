@@ -11,7 +11,7 @@ import {
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
   isMeituanRiskControlText,
-} from '../../../src/crawler/duty/meituanOrderParsers';
+} from '@/src/crawler/duty/channels/meituan/meituanOrderParsers';
 
 describe('meituanOrderParsers (Pure Parsing Functions)', () => {
   describe('fmtDate', () => {

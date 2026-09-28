@@ -156,6 +156,8 @@ export const authSlice = createSlice({
       state.failureError = null;
     },
     authFailed: (state, action: PayloadAction<string>) => {
+      state.tokens = null;
+      state.tokenState = null;
       state.status = 'login-required';
       state.isAuthorizing = false;
       state.isRefreshing = false;

@@ -34,6 +34,7 @@ const MAX_REFRESH_LIFETIME_FRACTION = 0.5;
 
 export interface ClassifiedAuthError extends Error {
   statusCode?: number;
+  businessCode?: number;
   terminal: boolean;
   retryable: boolean;
   oauthError?: string;
@@ -114,10 +115,11 @@ export function inspectTokenState(
 export function classifyAuthError(error: unknown): ClassifiedAuthError {
   const err = (error instanceof Error ? error : new Error(String(error))) as ClassifiedAuthError;
   const status = err.statusCode ?? 0;
-  const message = (err.message || '').toLowerCase();
   const oauthErr = (err.oauthError || '').toLowerCase();
+  const message = (err.message || '').toLowerCase();
 
   const isTerminal =
+    Boolean(err.terminal) ||
     (TERMINAL_STATUS_CODES as readonly number[]).includes(status) ||
     TERMINAL_OAUTH_ERRORS.some((code) => oauthErr === code || message.includes(code));
 
@@ -256,6 +258,8 @@ interface PlatformOAuthTokenResponse {
   error_description?: string;
   msg?: string;
   message?: string;
+  code?: number | string;
+  success?: boolean;
   data?: PlatformOAuthTokenResponse;
 }
 
@@ -429,11 +433,21 @@ export class PlatformAuthService {
         continue;
       }
 
+      const rawCode = payload.code ?? body.code;
+      let businessCode: number | undefined = undefined;
+      if (rawCode !== undefined && rawCode !== null) {
+        const parsed = Number(rawCode);
+        if (!Number.isNaN(parsed)) {
+          businessCode = parsed;
+        }
+      }
+
       const err = new Error(
-        payload.error_description || body.error_description || errCode || '轮询授权失败'
+        payload.error_description || body.error_description || body.msg || errCode || '轮询授权失败'
       ) as ClassifiedAuthError;
       err.statusCode = response.status;
       err.oauthError = errCode;
+      err.businessCode = businessCode;
       throw classifyAuthError(err);
     }
 
@@ -508,11 +522,42 @@ export class PlatformAuthService {
     }
     const payload = body.data || body;
     if (!response.ok || !payload.access_token) {
-      const errMsg = body.error_description || body.error || body.msg || `HTTP ${response.status}`;
+      const errMsg =
+        body.error_description ||
+        payload.error_description ||
+        body.error ||
+        payload.error ||
+        body.msg ||
+        payload.msg ||
+        body.message ||
+        payload.message ||
+        `HTTP ${response.status}`;
       const err = new Error(`刷新 Token 失败: ${errMsg}`) as ClassifiedAuthError;
       err.statusCode = response.status;
       err.oauthError = payload.error || body.error;
+
+      const rawCode = payload.code ?? body.code;
+      if (rawCode !== undefined && rawCode !== null) {
+        const parsedCode = Number(rawCode);
+        if (!Number.isNaN(parsedCode)) {
+          err.businessCode = parsedCode;
+        }
+      }
+
+      // 当调用 /identity/oauth/token 续期端点时，若 HTTP 请求到达应用层但无 access_token，
+      // 且服务端明确返回业务失败（如 success: false、业务 code: 2004、或提示认证信息无效），
+      // 说明 RefreshToken 已被服务端永久作废，绝非网络临时异常，必须标记为终端致命失效
+      const isExplicitBusinessReject =
+        body.success === false ||
+        payload.success === false ||
+        (err.businessCode !== undefined && err.businessCode !== 0 && err.businessCode !== 200);
+
       const classified = classifyAuthError(err);
+      if (isExplicitBusinessReject) {
+        classified.terminal = true;
+        classified.retryable = false;
+      }
+
       if (classified.terminal) {
         clearTokensFromStorage();
       }
@@ -520,8 +565,14 @@ export class PlatformAuthService {
         module: 'AUTH',
         level: 'ERROR',
         message: `[Auth] 平台访问凭证 (AccessToken) 自动续期失败: ${errMsg}`,
-        details: `终端错误: ${classified.terminal} | 状态码: ${response.status}`,
-        meta: { terminal: classified.terminal, statusCode: response.status }
+        details: `终端错误: ${classified.terminal} | 状态码: ${response.status}${
+          err.businessCode !== undefined ? ` | 业务码: ${err.businessCode}` : ''
+        }`,
+        meta: {
+          terminal: classified.terminal,
+          statusCode: response.status,
+          businessCode: err.businessCode,
+        },
       });
       throw classified;
     }

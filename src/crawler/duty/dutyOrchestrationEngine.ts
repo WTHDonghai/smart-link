@@ -3,7 +3,6 @@ import type {
   ChannelDutyStatus,
   DutyCoordinatorStatus,
   StationIdentity,
-  ActualStateReportPayload,
   SystemLogEntry,
   DutyClaimedTask,
   DutyTaskResultDetail,
@@ -12,24 +11,21 @@ import type {
   DutyTaskCreationBatch,
   DesktopOperationResult,
 } from '../../types';
-import type { ChannelDutyRunner } from './dutyContracts';
-import { MeituanDutyRunner } from './meituanDutyRunner';
+import type { ChannelDutyRunner, DutyTaskExecutionResult } from './dutyContracts';
+import { isSupportedDutyTaskType } from './dutyContracts';
+import { MeituanDutyRunner } from './channels/meituan/meituanDutyRunner';
+import { DouyinDutyRunner } from './channels/douyin/douyinDutyRunner';
 import { SYSTEM_TIMING } from './dutyTimingConfig';
-import { stationIdentityManager, getOrRegisterStationIdentity } from './stationIdentity';
-import { getPlatformBaseUrl } from '../../services/platformAuth';
+import { StationCoordinator } from './stationCoordinator';
 import {
   claimDutyTask,
   createDutyTasks,
-  reportDutyActualState,
   submitDutyTaskResult,
 } from '../../services/dutyRuntimeApi';
 import { logger } from '../../services/logger';
-import { dispatchDutyTask } from './dutyTaskDispatcher';
 import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';
-import { createTaskLogger } from './dutyTaskLogger';
+import { createTaskLogger, type DutyTaskLogger } from './dutyTaskLogger';
 import { hotelCollectionEngine } from '../engine';
-
-export { dispatchDutyTask };
 
 export interface TaskResultPayloadOptions {
   status: DutyTaskWireStatus;
@@ -102,9 +98,8 @@ export class DutyOrchestrationEngine {
   private runners = new Map<string, ChannelDutyRunner>();
   private channelStates = new Map<string, ChannelDutyInfo>();
   private coordinatorStatus: DutyCoordinatorStatus = 'STOPPED';
-  private stationIdentity: StationIdentity | null = null;
+  private stationCoordinator = new StationCoordinator();
   private isClaimingLoopRunning = false;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private stopSignal = false;
   private recentLogs: SystemLogEntry[] = [];
   private readonly MAX_LOGS = 200;
@@ -112,8 +107,14 @@ export class DutyOrchestrationEngine {
   private unsubscribeLogger?: () => void;
 
   constructor() {
-    // 注册内置渠道执行器（首期美团酒店）
+    // 注册内置渠道执行器（美团酒店、抖音生活服务）
     this.registerRunner(new MeituanDutyRunner());
+    this.registerRunner(new DouyinDutyRunner());
+
+    // 绑定工位调度器的日志回调至本地日志系统
+    this.stationCoordinator.setLogCallback((entry) => {
+      this.appendDutyLog(entry);
+    });
 
     // 订阅系统统一日志中枢，将值守任务关联日志镜像保留至最近缓存供前端轮询补偿查询
     this.unsubscribeLogger = logger.subscribe((entry) => {
@@ -128,6 +129,7 @@ export class DutyOrchestrationEngine {
       this.unsubscribeLogger();
       this.unsubscribeLogger = undefined;
     }
+    this.stationCoordinator.dispose();
   }
 
   public setConfirmImportEnabled(enabled: boolean): void {
@@ -180,8 +182,7 @@ export class DutyOrchestrationEngine {
   }
 
   public getStationIdentity(): StationIdentity | null {
-    if (this.stationIdentity) return this.stationIdentity;
-    return stationIdentityManager.getCurrentIdentity();
+    return this.stationCoordinator.getIdentity();
   }
 
   public getRecentDutyLogs(sinceTime = 0): SystemLogEntry[] {
@@ -226,19 +227,15 @@ export class DutyOrchestrationEngine {
       httpStatus: entryPartial.httpStatus,
     });
 
-    this.appendDutyLogDirect(entry);
-
     return entry;
-  }
-
-  private async ensureStationIdentity(): Promise<StationIdentity> {
-    const currentBaseUrl = getPlatformBaseUrl();
-    this.stationIdentity = await getOrRegisterStationIdentity('smart-link', undefined, currentBaseUrl);
-    return this.stationIdentity;
   }
 
   private getActiveRunners(): ChannelDutyRunner[] {
     return Array.from(this.runners.values()).filter((r) => r.isRunning());
+  }
+
+  private getActiveChannelCodes(): string[] {
+    return this.getActiveRunners().map((r) => r.channelCode);
   }
 
   /**
@@ -289,9 +286,9 @@ export class DutyOrchestrationEngine {
 
       // 2. 建立中台工位身份并启动心跳
       try {
-        const identity = await this.ensureStationIdentity();
-        await this.reportActualState(identity.stationId);
-        this.ensureHeartbeat(identity.stationId);
+        await this.stationCoordinator.ensureIdentity();
+        await this.stationCoordinator.reportActualState(this.getActiveChannelCodes());
+        this.stationCoordinator.startHeartbeat(() => this.getActiveChannelCodes());
       } catch (stationErr) {
         const msg = stationErr instanceof Error ? stationErr.message : String(stationErr);
         this.appendDutyLog({
@@ -357,15 +354,12 @@ export class DutyOrchestrationEngine {
     if (active.length === 0) {
       this.coordinatorStatus = 'STOPPED';
       this.stopSignal = true;
-      if (this.heartbeatTimer) {
-        clearInterval(this.heartbeatTimer);
-        this.heartbeatTimer = null;
+      this.stationCoordinator.stopHeartbeat();
+      if (this.stationCoordinator.getIdentity()) {
+        await this.stationCoordinator.reportActualState([], true);
       }
-      if (this.stationIdentity) {
-        await this.reportActualState(this.stationIdentity.stationId, true);
-      }
-    } else if (this.stationIdentity) {
-      await this.reportActualState(this.stationIdentity.stationId);
+    } else if (this.stationCoordinator.getIdentity()) {
+      await this.stationCoordinator.reportActualState(this.getActiveChannelCodes());
     }
 
     return { success: true };
@@ -378,11 +372,8 @@ export class DutyOrchestrationEngine {
     // 1. 设置 stopSignal = true 阻断长轮询任务认领
     this.stopSignal = true;
 
-    // 2. 清除心跳定时器 heartbeatTimer
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
+    // 2. 清除心跳定时器
+    this.stationCoordinator.stopHeartbeat();
 
     // 3. 安全停止所有当前激活的渠道 Runner
     const activeRunners = this.getActiveRunners();
@@ -422,10 +413,10 @@ export class DutyOrchestrationEngine {
     this.coordinatorStatus = 'STOPPED';
 
     // 5. 向中台发送工位离线报文 (status: 'STOP', otaCollectionTargets: [])
-    const station = this.getStationIdentity();
+    const station = this.stationCoordinator.getIdentity();
     if (station?.stationId) {
       try {
-        await this.reportActualState(station.stationId, true);
+        await this.stationCoordinator.reportActualState([], true);
       } catch (reportErr) {
         const errMsg = reportErr instanceof Error ? reportErr.message : String(reportErr);
         this.appendDutyLog({
@@ -451,48 +442,6 @@ export class DutyOrchestrationEngine {
     return { success: true };
   }
 
-  private async reportActualState(stationId: string, forceStop = false): Promise<void> {
-    const active = this.getActiveRunners();
-    const isRunning = !forceStop && active.length > 0;
-
-    const payload: ActualStateReportPayload = {
-      stationId,
-      apps: [
-        {
-          appId: 'smart-link',
-          actualVersion: '1.0.0',
-          status: isRunning ? 'RUNNING' : 'STOP',
-          lastStartedAt: Date.now(),
-          reportedAt: Date.now(),
-          otaCollectionTargets: isRunning
-            ? active.map((r) => ({ otaChannelCode: r.channelCode }))
-            : [],
-        },
-      ],
-    };
-
-    try {
-      await reportDutyActualState(payload);
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      this.appendDutyLog({
-        level: 'WARN',
-        event: 'DUTY_ACTUAL_STATE_REPORT_FAILED',
-        taskActionStage: 'report',
-        message: `[值守心跳] actual-state/report 上报异常: ${errMsg}`,
-        details: e instanceof Error ? e.stack : errMsg,
-      });
-    }
-  }
-
-  private ensureHeartbeat(initialStationId: string): void {
-    if (this.heartbeatTimer) return;
-    this.heartbeatTimer = setInterval(() => {
-      const currentStationId = this.stationIdentity?.stationId || initialStationId;
-      void this.reportActualState(currentStationId);
-    }, SYSTEM_TIMING.HEARTBEAT_INTERVAL);
-  }
-
   private ensureClaimLoop(): void {
     if (this.isClaimingLoopRunning) return;
     this.isClaimingLoopRunning = true;
@@ -500,511 +449,502 @@ export class DutyOrchestrationEngine {
     void this.runClaimLoop();
   }
 
+  /**
+   * 统一拒单辅助方法：构造标准失败回执、记录结构化审计日志并提交中台
+   */
+  public async rejectClaimedTask(
+    task: DutyClaimedTask,
+    stationId: string,
+    errorCode: string,
+    errorMessage: string,
+    logTag: string,
+    customStage: SystemLogEntry['taskActionStage'] = 'result',
+    customRetryable = false,
+    options?: {
+      event?: SystemLogEntry['event'];
+      level?: SystemLogEntry['level'];
+      channelId?: string;
+      orderId?: string;
+      orderNo?: string;
+    }
+  ): Promise<DutyTaskResultPayload> {
+    const isConfirmIntercept = errorCode === 'CONFIRM_IMPORT_DISABLED';
+    const event =
+      options?.event ?? (isConfirmIntercept ? 'DUTY_TASK_CONFIRM_IMPORT_INTERCEPTED' : 'DUTY_TASK_EXECUTE_FAILED');
+    const level = options?.level ?? (isConfirmIntercept ? 'WARN' : 'ERROR');
+
+    const rejectPayload = buildTaskResultPayload(task, stationId, {
+      status: 'FAIL',
+      errorCode,
+      errorMessage,
+      retryable: customRetryable,
+    });
+
+    const resolvedOrderNo = options?.orderId ?? options?.orderNo;
+
+    this.appendDutyLog({
+      level,
+      module: 'DUTY_TASK',
+      event,
+      taskActionStage: customStage,
+      msgType: task.msgType,
+      taskId: task.id,
+      taskStatus: 'FAILED',
+      ...(options?.channelId ? { channelId: options.channelId } : {}),
+      ...(resolvedOrderNo ? { orderNo: resolvedOrderNo } : {}),
+      apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+      apiMethod: 'PUT',
+      apiParams: rejectPayload,
+      message: `[${logTag}] ${errorMessage} (ID: ${task.id})`,
+      details: errorMessage,
+    });
+
+    try {
+      await submitDutyTaskResult(task.id, rejectPayload);
+    } catch (submitErr) {
+      const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      this.appendDutyLog({
+        level: 'ERROR',
+        module: 'DUTY_TASK',
+        event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
+        taskActionStage: customStage,
+        msgType: task.msgType,
+        taskId: task.id,
+        taskStatus: 'FAILED',
+        ...(options?.channelId ? { channelId: options.channelId } : {}),
+        ...(resolvedOrderNo ? { orderNo: resolvedOrderNo } : {}),
+        apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+        apiMethod: 'PUT',
+        apiParams: rejectPayload,
+        apiResponse: { error: submitErrMsg },
+        message: `[回执提交失败] 任务 ${task.msgType} 异常回执提交中台失败: ${submitErrMsg} (ID: ${task.id})`,
+        details: submitErrMsg,
+      });
+      throw submitErr;
+    }
+    return rejectPayload;
+  }
+
+  /**
+   * 任务前置协议校验与上下文解析逻辑：Fail-Fast 阻断非法报文并向中台如实报告
+   */
+  public async validateAndParseClaimedTask(
+    task: DutyClaimedTask,
+    stationId: string
+  ): Promise<ParsedDutyTaskContext | null> {
+    // 1. 基础报文结构合规性校验 (Fail-Fast 阻断，向中台如实报告协议违规)
+    if (task.businessType !== 'OTA_MIGRATION') {
+      const failureMsg = `中台任务 businessType 必须为 OTA_MIGRATION (实际: ${task.businessType || '-'})`;
+      await this.rejectClaimedTask(task, stationId, 'TASK_PAYLOAD_INVALID', failureMsg, '任务协议校验失败');
+      return null;
+    }
+
+    if (!task.businessId || !String(task.businessId).trim()) {
+      const failureMsg = '中台任务缺失有效的 businessId 业务标识';
+      await this.rejectClaimedTask(task, stationId, 'TASK_PAYLOAD_INVALID', failureMsg, '任务协议校验失败');
+      return null;
+    }
+
+    // 校验任务消息类型是否在客户端执行器支持范围内（前置 Fail-Fast，避免进入无意义重试）
+    if (!isSupportedDutyTaskType(task.msgType)) {
+      const failureMsg = `不支持的任务消息类型: ${task.msgType}`;
+      await this.rejectClaimedTask(task, stationId, 'TASK_TYPE_UNSUPPORTED', failureMsg, '不支持的任务类型');
+      return null;
+    }
+
+    // 解码与校验中台下发任务的上下文载荷
+    let parsedContext: ParsedDutyTaskContext;
+    try {
+      parsedContext = parseDutyTaskContext(task);
+    } catch (decodeErr) {
+      const failureMsg = `任务 data 解码校验失败: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`;
+      await this.rejectClaimedTask(task, stationId, 'TASK_PAYLOAD_INVALID', failureMsg, '任务载荷解析失败');
+      return null;
+    }
+
+    if (!parsedContext.channelCode) {
+      const failureMsg = '任务载荷缺失目标渠道代号 (channelCode)';
+      await this.rejectClaimedTask(task, stationId, 'MISSING_CHANNEL_CODE', failureMsg, '任务缺失渠道');
+      return null;
+    }
+
+    return parsedContext;
+  }
+
+  /**
+   * 采集任务下游任务派发逻辑：处理 OTA_COLLECT_ORDER 成功后的订单映射、createDutyTasks、日志与异常降级
+   */
+  public async dispatchDownstreamTasks(
+    task: DutyClaimedTask,
+    identity: StationIdentity,
+    targetChannel: string,
+    execRes: DutyTaskExecutionResult,
+    taskLogger: DutyTaskLogger,
+    currentPayload: DutyTaskResultPayload
+  ): Promise<DutyTaskResultPayload> {
+    if (task.msgType !== 'OTA_COLLECT_ORDER' || execRes.status !== 'SUCCEEDED' || !execRes.result?.orders) {
+      return currentPayload;
+    }
+
+    const orders = execRes.result.orders as Array<{ orderId: string; hotelId?: string; cancelOrder?: boolean }>;
+    if (orders.length === 0) {
+      return currentPayload;
+    }
+
+    try {
+      const channelCode = targetChannel.toLowerCase();
+      const creationItems: DutyTaskCreationBatch['items'] = orders.map((o) => {
+        if (o.cancelOrder) {
+          return {
+            msgType: 'OTA_CANCEL_ORDER',
+            businessType: 'OTA_MIGRATION',
+            businessId: o.orderId,
+            data: {
+              channel: channelCode,
+              reason: '待处理取消订单',
+            },
+          };
+        } else {
+          return {
+            msgType: 'OTA_IMPORT_ORDER',
+            businessType: 'OTA_MIGRATION',
+            businessId: o.orderId,
+            unitId: o.hotelId || undefined,
+            data: {
+              channel: channelCode,
+              extUnitCode: o.hotelId || '',
+              orders: [
+                {
+                  otaOrderId: o.orderId,
+                  otaChannel: targetChannel.toUpperCase(),
+                },
+              ],
+            },
+          };
+        }
+      });
+
+      await createDutyTasks({
+        stationId: identity.stationId,
+        appId: identity.appId,
+        items: creationItems,
+      });
+
+      taskLogger.log({
+        level: 'INFO',
+        event: 'DUTY_TASK_CREATE_DOWNSTREAM',
+        taskActionStage: 'downstream-create',
+        apiUrl: '/toolkit/toolbox/tasks',
+        apiMethod: 'POST',
+        apiParams: {
+          stationId: identity.stationId,
+          appId: identity.appId,
+          items: creationItems,
+        },
+        apiResponse: { success: true, count: orders.length },
+        message: `[下游派发 downstream-create] 发现 ${orders.length} 个订单，已批量创建下游中台处理任务`,
+        details: `订单列表: ${orders.map((o) => `${o.orderId}(${o.cancelOrder ? '退单' : '入单'})`).join(', ')}`,
+      });
+
+      return currentPayload;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      taskLogger.log({
+        level: 'ERROR',
+        event: 'DUTY_TASK_CREATE_DOWNSTREAM',
+        taskActionStage: 'downstream-create',
+        apiUrl: '/toolkit/toolbox/tasks',
+        apiMethod: 'POST',
+        apiParams: {
+          stationId: identity.stationId,
+          appId: identity.appId,
+          count: orders.length,
+        },
+        apiResponse: { error: errMsg },
+        message: `[下游派发失败 downstream-create] 创建下游订单处理任务异常: ${errMsg}`,
+        details: errMsg,
+      });
+
+      // Fail-Fast 刚性约束：下游任务创建失败绝不能向中台虚报成功，转为失败回执并标明可重试
+      return buildTaskResultPayload(task, identity.stationId, {
+        status: 'FAIL',
+        errorCode: 'DOWNSTREAM_CREATION_FAILED',
+        errorMessage: `下游订单处理任务创建失败: ${errMsg}`,
+        retryable: true,
+        result: execRes.result,
+      });
+    }
+  }
+
+  /**
+   * 单任务执行与回执主干方法：驱动认领、前置校验、执行器调度、下游派发及结果回执提交
+   */
+  public async processClaimedTask(task: DutyClaimedTask, identity: StationIdentity): Promise<void> {
+    const parsedContext = await this.validateAndParseClaimedTask(task, identity.stationId);
+    if (!parsedContext) {
+      return;
+    }
+
+    const targetChannel = parsedContext.channelCode!;
+    const taskOrderId = parsedContext.orderId;
+    const taskLogger = createTaskLogger(
+      task,
+      { channelCode: targetChannel, orderId: taskOrderId },
+      (entry) => this.appendDutyLog(entry)
+    );
+
+    // 1. 任务认领日志 (CLAIM)
+    taskLogger.log({
+      level: 'INFO',
+      event: 'DUTY_TASK_CLAIM',
+      taskActionStage: 'claim',
+      taskStatus: 'PROCESSING',
+      apiUrl: '/toolkit/toolbox/task-claims',
+      apiMethod: 'POST',
+      apiParams: {
+        stationId: identity.stationId,
+        appId: identity.appId,
+        direction: 'INBOUND',
+      },
+      apiResponse: task,
+      httpStatus: 200,
+      message: `[任务认领 claim] 任务类型: ${task.msgType} (ID: ${task.id})`,
+      details: `业务标识: ${task.businessId || '-'} | 所属渠道: ${targetChannel} | 工位: ${identity.stationId}${
+        taskOrderId ? ` | 订单号: ${taskOrderId}` : ''
+      }`,
+    });
+
+    // 开发调试保护：若关闭确认号回填开关，拦截 OTA_CONFIRM_IMPORT 任务，避免误在渠道后台接单确认
+    if (task.msgType === 'OTA_CONFIRM_IMPORT' && !this.confirmImportEnabled) {
+      const failureMsg = '已关闭订单确认号回填开关，系统已拦截确认号回填与接单操作（开发调试保护模式）';
+      await this.rejectClaimedTask(
+        task,
+        identity.stationId,
+        'CONFIRM_IMPORT_DISABLED',
+        failureMsg,
+        '回填拦截',
+        'result',
+        false,
+        { channelId: targetChannel, orderId: taskOrderId }
+      );
+      return;
+    }
+
+    const runner = this.runners.get(targetChannel);
+    if (!runner || !runner.isRunning()) {
+      const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
+      const isCollect = task.msgType === 'OTA_COLLECT_ORDER';
+      await this.rejectClaimedTask(
+        task,
+        identity.stationId,
+        'TASK_ROUTE_UNAVAILABLE',
+        failureMsg,
+        '渠道未就绪',
+        'result',
+        !isCollect,
+        { channelId: targetChannel, orderId: taskOrderId }
+      );
+      return;
+    }
+
+    // 检查渠道能力白名单：若渠道执行器明确声明不支持该任务类型，立即 Fail-Fast 拒单
+    if (
+      runner.supportedTaskTypes &&
+      !runner.supportedTaskTypes.includes(task.msgType as import('./dutyContracts').SupportedDutyTaskType)
+    ) {
+      const failureMsg = `渠道「${targetChannel}」执行器暂不支持任务类型「${task.msgType}」`;
+      await this.rejectClaimedTask(
+        task,
+        identity.stationId,
+        'TASK_NOT_SUPPORTED_BY_CHANNEL',
+        failureMsg,
+        '能力不支持',
+        'result',
+        false,
+        { channelId: targetChannel, orderId: taskOrderId }
+      );
+      return;
+    }
+
+    this.coordinatorStatus = 'EXECUTING';
+
+    // 2. 任务执行开始日志 (EXECUTE)
+    taskLogger.log({
+      level: 'PLAYWRIGHT',
+      event: 'DUTY_TASK_EXECUTE_START',
+      taskActionStage: 'execute',
+      taskStatus: 'PROCESSING',
+      message: `[任务执行 execute] 正在执行 ${task.msgType} (ID: ${task.id})`,
+      details: `执行渠道: ${targetChannel} | 业务主键: ${task.businessId || '-'}${
+        taskOrderId ? ` | 订单号: ${taskOrderId}` : ''
+      }`,
+    });
+
+    const startTime = Date.now();
+    const execRes: DutyTaskExecutionResult = await runner.executeTask(task, (entry) => taskLogger.log(entry));
+    const durationMs = Date.now() - startTime;
+
+    // 3. 任务执行完成与结果日志 (RESULT)
+    const isSuccess = execRes.status === 'SUCCEEDED';
+    const isRiskIntercepted = execRes.errorCode === 'RISK_VERIFICATION_REQUIRED';
+    const wireStatus: DutyTaskWireStatus = isSuccess ? 'SUCCESS' : 'FAIL';
+    const confirmationNo =
+      isSuccess && execRes.result
+        ? String(
+            execRes.result.confirmationNo ||
+              execRes.result.confirmNo ||
+              execRes.result.confirmationNumber ||
+              ''
+          )
+        : '';
+
+    let resultPayload = buildTaskResultPayload(task, identity.stationId, {
+      status: wireStatus,
+      confirmationNo,
+      result: execRes.result,
+      errorCode: execRes.errorCode || (isSuccess ? undefined : 'TASK_EXECUTION_FAILED'),
+      errorMessage: execRes.errorMessage,
+      retryable: isSuccess
+        ? undefined
+        : typeof execRes.retryable === 'boolean'
+          ? execRes.retryable
+          : (isRiskIntercepted ? false : true),
+    });
+
+    if (isRiskIntercepted) {
+      taskLogger.log({
+        level: 'WARN',
+        event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
+        taskActionStage: 'execute',
+        message: '[风控拦截熔断] 页面遭遇美团安全验证/滑块/人机拦截，已自动熔断阻断机器重试',
+        details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
+      });
+    }
+
+    taskLogger.log({
+      level: isSuccess ? 'SUCCESS' : 'ERROR',
+      event: isSuccess ? 'DUTY_TASK_EXECUTE_SUCCESS' : 'DUTY_TASK_EXECUTE_FAILED',
+      taskActionStage: 'result',
+      taskStatus: execRes.status,
+      taskResult: execRes.result,
+      durationMs,
+      apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+      apiMethod: 'PUT',
+      apiParams: resultPayload,
+      apiResponse: execRes.result,
+      message: `[任务结果 result] 任务 ${task.msgType} 执行${isSuccess ? '成功' : '失败'} (ID: ${task.id})`,
+      details: isSuccess
+        ? `耗时: ${durationMs}ms | 状态: SUCCESS${execRes.result ? ` | 结果: ${JSON.stringify(execRes.result)}` : ''}`
+        : `状态: FAIL | 错误代码: ${execRes.errorCode || '-'} | 错误信息: ${execRes.errorMessage || '未知异常'}`,
+    });
+
+    // 4. 下游任务派发
+    resultPayload = await this.dispatchDownstreamTasks(
+      task,
+      identity,
+      targetChannel,
+      execRes,
+      taskLogger,
+      resultPayload
+    );
+
+    this.coordinatorStatus = 'REPORTING';
+    try {
+      await submitDutyTaskResult(task.id, resultPayload);
+      const isResultSuccess = resultPayload.status === 'SUCCESS';
+      taskLogger.log({
+        level: isResultSuccess ? 'INFO' : 'ERROR',
+        event: isResultSuccess ? 'DUTY_TASK_RESULT_SUBMIT' : 'DUTY_TASK_RESULT_SUBMIT_FAILED',
+        taskActionStage: 'result',
+        taskStatus: isResultSuccess ? 'SUCCEEDED' : 'FAILED',
+        apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+        apiMethod: 'PUT',
+        apiParams: resultPayload,
+        apiResponse: { success: isResultSuccess },
+        httpStatus: 200,
+        message: `[回执提交 RESULT] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
+        details: `回执状态: ${resultPayload.status}${taskOrderId ? ` | 订单号: ${taskOrderId}` : ''}`,
+      });
+    } catch (submitErr) {
+      const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      taskLogger.log({
+        level: 'ERROR',
+        event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
+        taskActionStage: 'result',
+        taskStatus: 'FAILED',
+        apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
+        apiMethod: 'PUT',
+        apiParams: resultPayload,
+        apiResponse: { error: submitErrMsg },
+        message: `[回执提交失败 RESULT] 任务 ${task.msgType} 回执中台失败: ${submitErrMsg} (ID: ${task.id})`,
+        details: submitErrMsg,
+      });
+      throw submitErr;
+    }
+
+    this.coordinatorStatus = 'IDLE';
+  }
+
+  private async acquireStationIdentity(): Promise<StationIdentity | null> {
+    try {
+      const identity = await this.stationCoordinator.ensureIdentity();
+      if (!this.stationCoordinator.isHeartbeatActive()) {
+        void this.stationCoordinator.reportActualState(this.getActiveChannelCodes());
+        this.stationCoordinator.startHeartbeat(() => this.getActiveChannelCodes());
+      }
+      return identity;
+    } catch {
+      this.coordinatorStatus = 'CLAIM_BACKOFF';
+      return null;
+    }
+  }
+
+  private async handleClaimLoopError(err: unknown): Promise<void> {
+    if (!this.stopSignal && this.getActiveRunners().length > 0) {
+      this.coordinatorStatus = 'CLAIM_BACKOFF';
+    }
+    const errMsg = err instanceof Error ? err.message : String(err);
+    this.appendDutyLog({
+      level: 'ERROR',
+      module: 'DUTY_TASK',
+      event: 'DUTY_TASK_CLAIM_LOOP_ERROR',
+      taskActionStage: 'claim',
+      message: `[任务调度异常] 任务调度认领与回执循环异常: ${errMsg}`,
+      details: err instanceof Error ? err.stack : '调度器已进入退避状态，将在 3 秒后自动重试',
+    });
+    if (this.stopSignal || this.getActiveRunners().length === 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF));
+  }
+
   private async runClaimLoop(): Promise<void> {
     while (!this.stopSignal && this.getActiveRunners().length > 0) {
       try {
-        let identity: StationIdentity;
-        try {
-          identity = await this.ensureStationIdentity();
-          // 若工位刚刚建立且心跳未开启，自动补全首轮状态上报与周期心跳
-          if (!this.heartbeatTimer) {
-            void this.reportActualState(identity.stationId);
-            this.ensureHeartbeat(identity.stationId);
-          }
-        } catch (stationErr) {
-          this.coordinatorStatus = 'CLAIM_BACKOFF';
+        const identity = await this.acquireStationIdentity();
+        if (!identity || this.stopSignal || this.getActiveRunners().length === 0) {
           if (this.stopSignal || this.getActiveRunners().length === 0) break;
           await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF));
           continue;
         }
 
         this.coordinatorStatus = 'CLAIMING';
-
-        const task = await claimDutyTask({
-          stationId: identity.stationId,
-          appId: identity.appId,
-          direction: 'INBOUND',
-        });
-
+        const task = await claimDutyTask({ stationId: identity.stationId, appId: identity.appId, direction: 'INBOUND' });
+        if (this.stopSignal || this.getActiveRunners().length === 0) break;
         if (!task) {
           this.coordinatorStatus = 'IDLE';
-          const idleJitter =
-            SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE +
-            Math.floor(Math.random() * SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD);
-          await new Promise((resolve) => setTimeout(resolve, idleJitter));
+          const jitter = SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE + Math.floor(Math.random() * SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD);
+          await new Promise((resolve) => setTimeout(resolve, jitter));
           continue;
         }
 
-        // 1. 基础报文结构合规性校验 (Fail-Fast 阻断，向中台如实报告协议违规)
-        if (task.businessType !== 'OTA_MIGRATION') {
-          const failureMsg = `中台任务 businessType 必须为 OTA_MIGRATION (实际: ${task.businessType || '-'})`;
-          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_PAYLOAD_INVALID',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-          this.appendDutyLog({
-            level: 'ERROR',
-            module: 'DUTY_TASK',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: "result",
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: rejectPayload,
-            message: `[任务协议校验失败] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, rejectPayload);
-          continue;
-        }
-
-        if (!task.businessId || !String(task.businessId).trim()) {
-          const failureMsg = '中台任务缺失有效的 businessId 业务标识';
-          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_PAYLOAD_INVALID',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-          this.appendDutyLog({
-            level: 'ERROR',
-            module: 'DUTY_TASK',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: "result",
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: rejectPayload,
-            message: `[任务协议校验失败] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, rejectPayload);
-          continue;
-        }
-
-        // OTA_CANCEL_ORDER 为取消事实上报消息，文旅中台不应向客户端下发消费
-        if (task.msgType === 'OTA_CANCEL_ORDER') {
-          const failureMsg = '文旅中台不应向客户端下发 OTA_CANCEL_ORDER 任务';
-          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_TYPE_UNSUPPORTED',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-          this.appendDutyLog({
-            level: 'ERROR',
-            module: 'DUTY_TASK',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: "result",
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: rejectPayload,
-            message: `[不支持的任务类型] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, rejectPayload);
-          continue;
-        }
-
-        // 解码与校验中台下发任务的上下文载荷
-        let parsedContext: ParsedDutyTaskContext;
-        try {
-          parsedContext = parseDutyTaskContext(task);
-        } catch (decodeErr) {
-          const failureMsg = `任务 data 解码校验失败: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`;
-          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_PAYLOAD_INVALID',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-          this.appendDutyLog({
-            level: 'ERROR',
-            module: 'DUTY_TASK',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: "result",
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: rejectPayload,
-            message: `[任务载荷解析失败] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, rejectPayload);
-          continue;
-        }
-
-        // 校验任务消息类型是否在客户端执行器支持范围内
-        const supportedTypes = ['OTA_COLLECT_ORDER', 'OTA_IMPORT_ORDER', 'OTA_CONFIRM_IMPORT', 'OTA_CONFIRM_CANCEL'];
-        if (!supportedTypes.includes(task.msgType)) {
-          const failureMsg = `不支持的任务消息类型: ${task.msgType}`;
-          const rejectPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_TYPE_UNSUPPORTED',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-          this.appendDutyLog({
-            level: 'ERROR',
-            module: 'DUTY_TASK',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: 'result',
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: rejectPayload,
-            message: `[不支持的任务类型] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, rejectPayload);
-          continue;
-        }
-
-        const targetChannel = parsedContext.channelCode;
-        const taskOrderNo = parsedContext.orderNo;
-        const taskLogger = createTaskLogger(
-          task,
-          { channelCode: targetChannel, orderNo: taskOrderNo },
-          (entry) => this.appendDutyLog(entry)
-        );
-
-        // 1. 任务认领日志 (CLAIM)
-        taskLogger.log({
-          level: 'INFO',
-          event: 'DUTY_TASK_CLAIM',
-          taskActionStage: "claim",
-          taskStatus: 'PROCESSING',
-          apiUrl: '/toolkit/toolbox/task-claims',
-          apiMethod: 'POST',
-          apiParams: {
-            stationId: identity.stationId,
-            appId: identity.appId,
-            direction: 'INBOUND',
-          },
-          apiResponse: task,
-          httpStatus: 200,
-          message: `[任务认领 claim] 任务类型: ${task.msgType} (ID: ${task.id})`,
-          details: `业务标识: ${task.businessId || '-'} | 所属渠道: ${targetChannel} | 工位: ${identity.stationId}${
-            taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''
-          }`,
-        });
-
-        // 开发调试保护：若关闭确认号回填开关，拦截 OTA_CONFIRM_IMPORT 任务，避免误在渠道后台接单确认
-        if (task.msgType === 'OTA_CONFIRM_IMPORT' && !this.confirmImportEnabled) {
-          const failureMsg = '已关闭订单确认号回填开关，系统已拦截确认号回填与接单操作（开发调试保护模式）';
-          const interceptPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'CONFIRM_IMPORT_DISABLED',
-            errorMessage: failureMsg,
-            retryable: false,
-          });
-
-          taskLogger.log({
-            level: 'WARN',
-            event: 'DUTY_TASK_CONFIRM_IMPORT_INTERCEPTED',
-            taskActionStage: 'result',
-            msgType: task.msgType,
-            taskId: task.id,
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: interceptPayload,
-            message: `[回填拦截] ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-          await submitDutyTaskResult(task.id, interceptPayload);
-          continue;
-        }
-
-        const runner = this.runners.get(targetChannel);
-        if (!runner || !runner.isRunning()) {
-          const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
-          const isCollect = task.msgType === 'OTA_COLLECT_ORDER';
-          const unavailResultPayload = buildTaskResultPayload(task, identity.stationId, {
-            status: 'FAIL',
-            errorCode: 'TASK_ROUTE_UNAVAILABLE',
-            errorMessage: failureMsg,
-            retryable: !isCollect,
-          });
-
-          taskLogger.log({
-            level: 'ERROR',
-            event: 'DUTY_TASK_EXECUTE_FAILED',
-            taskActionStage: "result",
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: unavailResultPayload,
-            apiResponse: { success: false, error: failureMsg },
-            message: `[任务结果 result] 任务 ${task.msgType} 执行失败: ${failureMsg} (ID: ${task.id})`,
-            details: failureMsg,
-          });
-
-          try {
-            await submitDutyTaskResult(task.id, unavailResultPayload);
-          } catch (submitErr) {
-            const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
-            taskLogger.log({
-              level: 'ERROR',
-              event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
-              taskActionStage: "result",
-              taskStatus: 'FAILED',
-              apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-              apiMethod: 'PUT',
-              apiParams: unavailResultPayload,
-              apiResponse: { error: submitErrMsg },
-              message: `[回执提交失败] 任务 ${task.msgType} 异常回执提交中台失败: ${submitErrMsg} (ID: ${task.id})`,
-              details: submitErrMsg,
-            });
-            throw submitErr;
-          }
-          continue;
-        }
-
-        this.coordinatorStatus = 'EXECUTING';
-
-        // 2. 任务执行开始日志 (EXECUTE)
-        taskLogger.log({
-          level: 'PLAYWRIGHT',
-          event: 'DUTY_TASK_EXECUTE_START',
-          taskActionStage: "execute",
-          taskStatus: 'PROCESSING',
-          message: `[任务执行 execute] 正在执行 ${task.msgType} (ID: ${task.id})`,
-          details: `执行渠道: ${targetChannel} | 业务主键: ${task.businessId || '-'}${
-            taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''
-          }`,
-        });
-
-        const startTime = Date.now();
-        const execRes =
-          typeof runner.executeTask === 'function'
-            ? await runner.executeTask(task, (entry) =>
-                taskLogger.log(entry)
-              )
-            : await dispatchDutyTask(
-                task,
-                runner,
-                (entry) => taskLogger.log(entry),
-                { confirmImportEnabled: this.confirmImportEnabled }
-              );
-        const durationMs = Date.now() - startTime;
-
-        // 3. 任务执行完成与结果日志 (RESULT)
-        const isSuccess = execRes.status === 'SUCCEEDED';
-        const isRiskIntercepted = execRes.errorCode === 'RISK_VERIFICATION_REQUIRED';
-        const wireStatus: DutyTaskWireStatus = isSuccess ? 'SUCCESS' : 'FAIL';
-        const confirmationNo =
-          isSuccess && execRes.result
-            ? String(
-                execRes.result.confirmationNo ||
-                  execRes.result.confirmNo ||
-                  execRes.result.confirmationNumber ||
-                  ''
-              )
-            : '';
-
-        let resultPayload = buildTaskResultPayload(task, identity.stationId, {
-          status: wireStatus,
-          confirmationNo,
-          result: execRes.result,
-          errorCode: execRes.errorCode || (isSuccess ? undefined : 'TASK_EXECUTION_FAILED'),
-          errorMessage: execRes.errorMessage,
-          retryable: isSuccess
-            ? undefined
-            : (typeof execRes.retryable === 'boolean'
-                ? execRes.retryable
-                : (isRiskIntercepted ? false : true)),
-        });
-
-        if (isRiskIntercepted) {
-          taskLogger.log({
-            level: 'WARN',
-            event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
-            taskActionStage: "execute",
-            message: `[风控拦截熔断] 页面遭遇美团安全验证/滑块/人机拦截，已自动熔断阻断机器重试`,
-            details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
-          });
-        }
-
-        taskLogger.log({
-          level: isSuccess ? 'SUCCESS' : 'ERROR',
-          event: isSuccess ? 'DUTY_TASK_EXECUTE_SUCCESS' : 'DUTY_TASK_EXECUTE_FAILED',
-          taskActionStage: "result",
-          taskStatus: execRes.status,
-          taskResult: execRes.result,
-          durationMs,
-          apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-          apiMethod: 'PUT',
-          apiParams: resultPayload,
-          apiResponse: execRes.result,
-          message: `[任务结果 result] 任务 ${task.msgType} 执行${isSuccess ? '成功' : '失败'} (ID: ${task.id})`,
-          details: isSuccess
-            ? `耗时: ${durationMs}ms | 状态: SUCCESS${execRes.result ? ` | 结果: ${JSON.stringify(execRes.result)}` : ''}`
-            : `状态: FAIL | 错误代码: ${execRes.errorCode || '-'} | 错误信息: ${execRes.errorMessage || '未知异常'}`,
-        });
-
-        // 如果是采集任务且有发现订单，批量创建下游任务
-        if (task.msgType === 'OTA_COLLECT_ORDER' && execRes.status === 'SUCCEEDED' && execRes.result?.orders) {
-          const orders = execRes.result.orders as Array<{ orderId: string; hotelId?: string; cancelOrder?: boolean }>;
-          if (orders.length > 0) {
-            try {
-              const channelCode = targetChannel.toLowerCase();
-              const creationItems: DutyTaskCreationBatch['items'] = orders.map((o) => {
-                if (o.cancelOrder) {
-                  return {
-                    msgType: 'OTA_CANCEL_ORDER',
-                    businessType: 'OTA_MIGRATION',
-                    businessId: o.orderId,
-                    data: {
-                      channel: channelCode,
-                      reason: '待处理取消订单',
-                    },
-                  };
-                } else {
-                  return {
-                    msgType: 'OTA_IMPORT_ORDER',
-                    businessType: 'OTA_MIGRATION',
-                    businessId: o.orderId,
-                    unitId: o.hotelId || undefined,
-                    data: {
-                      channel: channelCode,
-                      extUnitCode: o.hotelId || '',
-                      orders: [
-                        {
-                          otaOrderId: o.orderId,
-                          otaChannel: targetChannel.toUpperCase(),
-                        },
-                      ],
-                    },
-                  };
-                }
-              });
-
-              await createDutyTasks({
-                stationId: identity.stationId,
-                appId: identity.appId,
-                items: creationItems,
-              });
-
-              taskLogger.log({
-                level: 'INFO',
-                event: 'DUTY_TASK_CREATE_DOWNSTREAM',
-                taskActionStage: 'downstream-create',
-                apiUrl: '/toolkit/toolbox/tasks',
-                apiMethod: 'POST',
-                apiParams: {
-                  stationId: identity.stationId,
-                  appId: identity.appId,
-                  items: creationItems,
-                },
-                apiResponse: { success: true, count: orders.length },
-                message: `[下游派发 downstream-create] 发现 ${orders.length} 个订单，已批量创建下游中台处理任务`,
-                details: `订单列表: ${orders.map((o) => `${o.orderId}(${o.cancelOrder ? '退单' : '入单'})`).join(', ')}`,
-              });
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              taskLogger.log({
-                level: 'ERROR',
-                event: 'DUTY_TASK_CREATE_DOWNSTREAM',
-                taskActionStage: 'downstream-create',
-                apiUrl: '/toolkit/toolbox/tasks',
-                apiMethod: 'POST',
-                apiParams: {
-                  stationId: identity.stationId,
-                  appId: identity.appId,
-                  count: orders.length,
-                },
-                apiResponse: { error: errMsg },
-                message: `[下游派发失败 downstream-create] 创建下游订单处理任务异常: ${errMsg}`,
-                details: errMsg,
-              });
-
-              // Fail-Fast 刚性约束：下游任务创建失败绝不能向中台虚报成功，转为失败回执并标明可重试
-              resultPayload = buildTaskResultPayload(task, identity.stationId, {
-                status: 'FAIL',
-                errorCode: 'DOWNSTREAM_CREATION_FAILED',
-                errorMessage: `下游订单处理任务创建失败: ${errMsg}`,
-                retryable: true,
-                result: execRes.result,
-              });
-            }
-          }
-        }
-
-        this.coordinatorStatus = 'REPORTING';
-        try {
-          await submitDutyTaskResult(task.id, resultPayload);
-          const isResultSuccess = resultPayload.status === 'SUCCESS';
-          taskLogger.log({
-            level: isResultSuccess ? 'INFO' : 'ERROR',
-            event: isResultSuccess ? 'DUTY_TASK_RESULT_SUBMIT' : 'DUTY_TASK_RESULT_SUBMIT_FAILED',
-            taskActionStage: "result",
-            taskStatus: isResultSuccess ? 'SUCCEEDED' : 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: resultPayload,
-            apiResponse: { success: isResultSuccess },
-            httpStatus: 200,
-            message: `[回执提交 RESULT] 任务 ${task.msgType} 执行结果已成功回执中台 (ID: ${task.id})`,
-            details: `回执状态: ${resultPayload.status}${taskOrderNo ? ` | 订单号: ${taskOrderNo}` : ''}`,
-          });
-        } catch (submitErr) {
-          const submitErrMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
-          taskLogger.log({
-            level: 'ERROR',
-            event: 'DUTY_TASK_RESULT_SUBMIT_FAILED',
-            taskActionStage: "result",
-            taskStatus: 'FAILED',
-            apiUrl: `/toolkit/toolbox/tasks/${task.id}/result`,
-            apiMethod: 'PUT',
-            apiParams: resultPayload,
-            apiResponse: { error: submitErrMsg },
-            message: `[回执提交失败 RESULT] 任务 ${task.msgType} 回执中台失败: ${submitErrMsg} (ID: ${task.id})`,
-            details: submitErrMsg,
-          });
-          throw submitErr;
-        }
-
-        this.coordinatorStatus = 'IDLE';
+        await this.processClaimedTask(task, identity);
       } catch (err) {
-        if (!this.stopSignal && this.getActiveRunners().length > 0) {
-          this.coordinatorStatus = 'CLAIM_BACKOFF';
-        }
-        const errMsg = err instanceof Error ? err.message : String(err);
-        this.appendDutyLog({
-          level: 'ERROR',
-          module: 'DUTY_TASK',
-          event: 'DUTY_TASK_CLAIM_LOOP_ERROR',
-          taskActionStage: "claim",
-          message: `[任务调度异常] 任务调度认领与回执循环异常: ${errMsg}`,
-          details: err instanceof Error ? err.stack : `调度器已进入退避状态，将在 3 秒后自动重试`,
-        });
-        if (this.stopSignal || this.getActiveRunners().length === 0) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF));
+        await this.handleClaimLoopError(err);
       }
     }
-
     this.isClaimingLoopRunning = false;
-    if (this.getActiveRunners().length === 0 || this.stopSignal) {
-      this.coordinatorStatus = 'STOPPED';
-    } else {
-      this.coordinatorStatus = 'IDLE';
-    }
+    this.coordinatorStatus = this.getActiveRunners().length === 0 || this.stopSignal ? 'STOPPED' : 'IDLE';
   }
 }
 

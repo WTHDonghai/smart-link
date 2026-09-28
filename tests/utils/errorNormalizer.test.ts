@@ -33,6 +33,17 @@ describe('errorNormalizer - 统一错误智能归一化解析器', () => {
     expect(normalized.rawMessage).toContain('invalid_grant');
   });
 
+  it('应当精准识别中文认证信息错误或无效并映射为 AUTH_CRED_INVALID', () => {
+    const errorObj = new Error('刷新 Token 失败: 认证信息错误或无效');
+    const normalized = normalizeAppError(errorObj, 'AUTH');
+
+    expect(normalized.code).toBe('AUTH_CRED_INVALID');
+    expect(normalized.domain).toBe('AUTH');
+    expect(normalized.userTitle).toBe('登录凭据已失效');
+    expect(normalized.retryable).toBe(false);
+    expect(normalized.rawMessage).toBe('刷新 Token 失败: 认证信息错误或无效');
+  });
+
   it('应当精准识别用户主动取消操作为 AUTH_USER_CANCELLED', () => {
     const normalized = normalizeAppError('授权流程已被用户取消', 'AUTH');
 

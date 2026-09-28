@@ -13,6 +13,8 @@ import {
 import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
   DOUYIN_RAW_SAMPLE_ORDER,
+  DouyinOrderProtocol,
+  cleanDouyinOrder,
 } from './douyinProtocol';
 
 export {
@@ -22,6 +24,8 @@ export {
   cleanMeituanOrder,
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
   DOUYIN_RAW_SAMPLE_ORDER,
+  DouyinOrderProtocol,
+  cleanDouyinOrder,
 };
 
 /**
@@ -54,6 +58,10 @@ export function cleanChannelOrder(
 
   if (normalized === 'MEITUAN' || normalized === 'MEITUANBIZ' || normalized.includes('MEITUAN')) {
     return cleanMeituanOrder(rawPayload, customSchema, targetOrderId);
+  }
+
+  if (normalized === 'DOUYIN' || normalized.includes('DOUYIN')) {
+    return cleanDouyinOrder(rawPayload, customSchema, targetOrderId);
   }
 
   throw new Error(`[ProtocolRouter] 暂未实现渠道「${channelCode}」的订单协议清洗器`);

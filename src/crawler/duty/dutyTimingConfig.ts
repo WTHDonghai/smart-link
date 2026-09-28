@@ -1,4 +1,4 @@
-import type { Locator } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import { SYSTEM_TIMING } from '../../config/timing';
 
 /**
@@ -134,3 +134,24 @@ export async function isModalVisible(
   if (!locator || typeof locator.isVisible !== 'function') return false;
   return locator.isVisible({ timeout: getScaledTimeout(timeout) }).catch(() => false);
 }
+
+/**
+ * 拟真人随机延迟函数，以毫秒为单位（默认 3000~8000 毫秒），确保接口调用完毕并规避风控
+ * @param page Playwright Page
+ * @param minMs 最小等待毫秒数
+ * @param maxMs 最大等待毫秒数
+ */
+export async function humanDelay(
+  page?: Page | null,
+  minMs: number = HUMAN_DELAY.SETTLING[0],
+  maxMs: number = HUMAN_DELAY.SETTLING[1]
+): Promise<void> {
+  const [scaledMin, scaledMax] = getScaledDelayRange(minMs, maxMs);
+  const delay = Math.floor(Math.random() * Math.max(1, scaledMax - scaledMin + 1)) + scaledMin;
+  if (page && typeof page.waitForTimeout === 'function') {
+    await page.waitForTimeout(delay);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+

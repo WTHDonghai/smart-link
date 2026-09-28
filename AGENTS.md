@@ -289,6 +289,25 @@
      - 前端向外发起请求的客户端 SDK 位于 `src/services/`，统一以 `*Api.ts` 结尾（如 `channelApi.ts`、`hotelApi.ts`）；
      - Electron 渲染进程到主进程的 IPC 网关位于 `src/services/`，统一以 `*Bridge.ts` 结尾（如 `crawlerBridge.ts`）；
      - 自动化采集器与调度器位于 `src/crawler/`，统一以 `*Collector.ts`、`*Engine.ts` 等领域模型命名。
+6. **模块导入与路径别名规范 (Module Imports & Path Aliases - 近用相对，远用别名)**：
+   - **红线准则：彻底消除“点点地狱 (Dot-Dot Hell)”**。严禁在代码中出现 3 层及以上的长相对路径（如 `../../../../config/otaUrls`、`../../../../types`）。多层回溯不仅视觉噪音大、极易数错层级，且在目录结构轻微调整时极易大面积断链。
+   - **近用相对 (Local Domain Modules)**：在同一业务域、同级目录或仅向上回溯 1~2 层的紧密协同文件之间，优先使用简短清晰的相对路径（如 `./meituanOrderParsers`、`../../dutyContracts`），保持模块自治与就近内聚。
+   - **远用别名 (Cross-Domain & Global Layers)**：当跨越顶层架构分层，引用全局实体（`@/src/types/`）、配置（`@/src/config/`）、服务（`@/src/services/`）、工具函数（`@/src/utils/`）或跨域基础设施（`@/src/crawler/...`）时，**强制使用 `@/*` 绝对路径别名**。
+   - **示例对比**：
+     ```typescript
+     // ❌ 严重违规：脆弱、晦涩且难以维护的多层相对路径
+     import { getMeituanOrderUrl } from '../../../../config/otaUrls';
+     import { PROCESS_ENV_KEYS } from '../../../../types/env';
+     import { updateVisualTrackerStatus } from '../../../visualTracker';
+     import { safeFormatDate } from '../../../../utils/template/filters';
+
+     // ✅ 规范写法：结构分明、语义清晰、层级自解释
+     import { getMeituanOrderUrl } from '@/src/config/otaUrls';
+     import { PROCESS_ENV_KEYS } from '@/src/types/env';
+     import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+     import { safeFormatDate } from '@/src/utils/template/filters';
+     import { dispatchDutyTask } from '../../dutyTaskDispatcher'; // 域内协作使用短相对路径
+     ```
 
 ---
 
@@ -299,6 +318,7 @@
 - [ ] **技术栈与架构基线**：是否严格基于 React 19 + TypeScript + Redux Toolkit + Tailwind CSS v4？是否无未经批准的第三方冗余依赖引入？
 - [ ] **强类型与类型治理**：是否杜绝了所有显式与隐式 `any`？跨模块领域实体是否在 `src/types/` 中集中定义与维护？
 - [ ] **分层架构与无同名冲突**：是否存在跨目录同名文件？命名后缀是否严格契合分层定位（`*Api.ts` vs `*Bridge.ts`）？
+- [ ] **模块导入与路径别名**：是否彻底杜绝了 3 层及以上的 `../../../` 深层点点地狱？跨越顶层分层（types, config, services, utils, crawler 等）是否规范采用了 `@/src/...` 绝对路径别名？
 - [ ] **代码极简与零死代码**：
   - 代码是否直观易读？是否存在为了模式而模式的过度抽象？
   - 是否已彻底清理所有未使用的 import、未使用的变量/常量与废弃导出？是否无遗留注释代码与调试日志？

@@ -140,6 +140,8 @@ describe('authSlice - 同步 Reducers 状态机流转', () => {
     expect(nextState.failureReason).toBe(
       '文旅平台授权已过期，Refresh Token 失效 [401 invalid_grant]'
     );
+    expect(nextState.tokens).toBeNull();
+    expect(nextState.tokenState).toBeNull();
     expect(nextState.failureError?.code).toBe('AUTH_CRED_INVALID');
     expect(nextState.failureError?.userTitle).toBe('登录凭据已失效');
     expect(nextState.failureError?.retryable).toBe(false);

@@ -22,6 +22,7 @@ class MockChannelRunner implements ChannelDutyRunner {
   public executedTasks: DutyClaimedTask[] = [];
   public executeResult: DutyTaskExecutionResult = { status: 'SUCCEEDED', result: { test: true } };
   public confirmImportEnabled = true;
+  public supportedTaskTypes?: readonly import('../../../src/crawler/duty/dutyContracts').SupportedDutyTaskType[];
 
   public setConfirmImportEnabled(enabled: boolean): void {
     this.confirmImportEnabled = enabled;
@@ -108,6 +109,14 @@ describe('dutyOrchestrationEngine', () => {
       expect(statusMap['MOCK_OTA']).toBeDefined();
       expect(statusMap['MOCK_OTA'].status).toBe('STOPPED');
       expect(statusMap['MOCK_OTA'].channelCode).toBe('MOCK_OTA');
+    });
+
+    it('should have built-in MEITUAN and DOUYIN runners initialized to STOPPED', () => {
+      const statusMap = engine.getChannelDutyStatus();
+      expect(statusMap['MEITUAN']).toBeDefined();
+      expect(statusMap['MEITUAN'].status).toBe('STOPPED');
+      expect(statusMap['DOUYIN']).toBeDefined();
+      expect(statusMap['DOUYIN'].status).toBe('STOPPED');
     });
 
     it('should format appendDutyLog timestamp as standard YYYY-MM-DD HH:mm:ss.SSS in local timezone', () => {
@@ -623,6 +632,45 @@ describe('dutyOrchestrationEngine', () => {
             expect.objectContaining({
               status: 'FAIL',
               ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_TYPE_UNSUPPORTED' }), 'utf-8').toString('base64'),
+            }),
+          ],
+        })
+      );
+    });
+
+    it('当渠道执行器声明了能力白名单且任务类型不支持时，阻断执行并向中台提交 TASK_NOT_SUPPORTED_BY_CHANNEL', async () => {
+      mockRunner.supportedTaskTypes = ['OTA_COLLECT_ORDER'];
+
+      const task: DutyClaimedTask = {
+        id: 'task-import-unsupported-by-runner',
+        businessId: 'ORD-IMP-001',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_CONFIRM_IMPORT',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-unsupp-1',
+        data: Buffer.from(JSON.stringify({ channelCode: 'MOCK_OTA', otaOrderId: 'ORD-IMP-001', confirmNo: 'CFM-1' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-import-unsupported-by-runner',
+        expect.objectContaining({
+          status: 'FAIL',
+          retryable: false,
+          errorMessage: expect.stringContaining('暂不支持任务类型「OTA_CONFIRM_IMPORT」'),
+          details: [
+            expect.objectContaining({
+              status: 'FAIL',
+              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_NOT_SUPPORTED_BY_CHANNEL' }), 'utf-8').toString('base64'),
             }),
           ],
         })

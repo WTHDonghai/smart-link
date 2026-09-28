@@ -1,12 +1,12 @@
-import type { Page, Request, Response, Frame, Locator, FrameLocator } from 'playwright';
-import { createPersistentBrowserSession, type BrowserSession } from '../browserManager';
-import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker';
-import type { DutyClaimedTask, SystemLogEntry } from '../../types';
-import type {
-  ChannelDutyRunner,
-  DutyTaskExecutionResult,
-  DutyUnhandledOrderSummary,
-} from './dutyContracts';
+import type { Page, Request, Response, Locator } from 'playwright';
+import { createPersistentBrowserSession, type BrowserSession } from '@/src/crawler/browserManager';
+import { updateVisualTrackerStatus, visualClickLocator } from '@/src/crawler/visualTracker';
+import {
+  BaseChannelDutyRunner,
+  type DutyUnhandledOrderSummary,
+  type DutyActionDryRunOptions,
+  type DutyActionVerificationResult,
+} from '../../dutyContracts';
 import {
   MeituanDutyErrorCode,
   DutyExecutionError,
@@ -20,212 +20,28 @@ import {
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
 } from './meituanOrderParsers';
-import { getMeituanOrderUrl } from '../../config/otaUrls';
-import { dispatchDutyTask } from './dutyTaskDispatcher';
-import { PROCESS_ENV_KEYS } from '../../types/env';
+import { getMeituanOrderUrl } from '@/src/config/otaUrls';
+import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import {
   ACTION_TIMEOUT,
   HUMAN_DELAY,
   DEFAULT_DUTY_TIMING,
-  getScaledDelayRange,
+  humanDelay,
   getScaledTimeout,
   isProbeVisible,
   isElementVisible,
   isModalVisible,
-} from './dutyTimingConfig';
+} from '../../dutyTimingConfig';
+import { checkMeituanPageRisk } from './meituanRiskGuard';
+import { dismissMeituanNoticeModals } from './meituanModalGuard';
 
-/**
- * 页面级人机验证、滑块与风控拦截嗅探函数（跨顶层与所有子 Frame 深度检测）
- */
-export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
-  if (!page) return false;
-  try {
-    // 1. 检查页面 URL 本身是否包含风控/验证重定向
-    const pageUrl = typeof page.url === 'function' ? page.url() : '';
-    if (pageUrl && /(?:verify|captcha|yoda|secsdk)\.meituan\.com|yoda/i.test(pageUrl)) {
-      return true;
-    }
+export { checkMeituanPageRisk, dismissMeituanNoticeModals, humanDelay };
 
-    // 2. 检查顶层及所有子 Frame
-    const frames = typeof page.frames === 'function' ? page.frames() : [page as unknown as Frame];
-    for (const frame of frames) {
-      try {
-        const frameUrl = frame.url();
-        if (frameUrl && /(?:verify|captcha|yoda|secsdk)\.meituan\.com|yoda/i.test(frameUrl)) {
-          return true;
-        }
-      } catch {
-        // 忽略跨域或已销毁 frame
-      }
-
-      if (typeof frame.evaluate === 'function') {
-        const riskFound = await frame.evaluate(() => {
-          // A. 检查风控 iframe、容器或滑块 DOM 节点
-          const hasCaptchaEl = Boolean(
-            document.querySelector(
-              'iframe[src*="captcha"], iframe[src*="verify"], iframe[src*="yoda"], iframe[src*="secsdk"], ' +
-              '#yodaBox, #yodaContainer, .yoda-captcha, .yoda-dialog, .yoda-modal, [data-test="captcha"], ' +
-              '.secsdk-captcha-drag-wrapper, .geetest_holder, #waf_nc_wrapper, .waf-nc-wrapper, ' +
-              'div[id*="yoda"], div[class*="yoda"]'
-            )
-          );
-          if (hasCaptchaEl) return true;
-
-          // B. 嗅探页面主体、标题与特征文本
-          const norm = (str: string | null | undefined) => String(str || '').replace(/\s+/g, ' ').trim();
-          const bodyText = norm(document.body ? document.body.innerText || document.body.textContent : '');
-          const title = norm(document.title);
-          const url = String(window.location.href || '');
-          const combined = `${title}\n${url}\n${bodyText.slice(0, 3000)}`;
-          return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|yoda|captcha|secsdk/i.test(combined);
-        }).catch(() => false);
-
-        if (riskFound === true) return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 拟真人随机延迟函数，以毫秒为单位（默认 3000~8000 毫秒），确保接口调用完毕并规避风控
- * @param page Playwright Page
- * @param minMs 最小等待毫秒数
- * @param maxMs 最大等待毫秒数
- */
-export async function humanDelay(
-  page: Page,
-  minMs: number = HUMAN_DELAY.SETTLING[0],
-  maxMs: number = HUMAN_DELAY.SETTLING[1]
-): Promise<void> {
-  const [scaledMin, scaledMax] = getScaledDelayRange(minMs, maxMs);
-  const delay = Math.floor(Math.random() * Math.max(1, scaledMax - scaledMin + 1)) + scaledMin;
-  if (page && typeof page.waitForTimeout === 'function') {
-    await page.waitForTimeout(delay);
-  } else {
-    await new Promise((resolve) => setTimeout(resolve, delay));
-  }
-}
-
-/**
- * 自动检测并安全关闭美团后台提示性通知弹窗（如“联系客人”虚拟号说明、商家规则须知、系统公告等）
- * 严格避让核心业务弹窗（接单确认号填报）与安全风控验证弹窗。
- *
- * @param page Playwright Page
- * @param preferredScope 优先探查的作用域（通常为 iframe scope 或顶层 page）
- * @returns 是否成功关闭了至少一个提示弹窗
- */
-export async function dismissMeituanNoticeModals(
-  page: Page,
-  preferredScope?: Page | FrameLocator
-): Promise<boolean> {
-  if (!page) return false;
-
-  const scopes: (Page | FrameLocator)[] = [];
-  if (preferredScope) {
-    scopes.push(preferredScope);
-  }
-  if (!scopes.includes(page)) {
-    scopes.push(page);
-  }
-
-  let dismissedAny = false;
-
-  for (const scope of scopes) {
-    if (!scope || typeof scope.locator !== 'function') continue;
-
-    // 支持连续关闭可能叠加的多层通知公告弹窗（最多尝试 3 次）
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const modalWrappers = scope.locator('.mtd-modal-wrapper, .mtd-modal');
-        const count = await modalWrappers.count().catch(() => 0);
-
-        if (count === 0) break;
-
-        let dismissedInThisAttempt = false;
-
-        for (let i = 0; i < count; i++) {
-          const modal = modalWrappers.nth(i);
-
-          const isVisible = await isProbeVisible(modal, ACTION_TIMEOUT.FAST_PROBE);
-          if (!isVisible) continue;
-
-          const modalText = await modal.innerText().catch(() => '');
-
-          // 核心安全红线 1：严禁关闭接单确认号弹窗与业务输入弹窗
-          if (modalText.includes('酒店确认号') || modalText.includes('确认接受')) {
-            continue;
-          }
-
-          // 核心安全红线 2：严禁关闭安全风控/滑块弹窗（由专用风控嗅探器接管）
-          if (/安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|yoda|captcha|secsdk/i.test(modalText)) {
-            continue;
-          }
-
-          // 核心安全红线 3：严禁关闭危险业务决策弹窗（取消订单/拒绝接单/退款审核等）
-          if (/确认取消|确认拒绝|拒绝接单|退款审核/i.test(modalText)) {
-            continue;
-          }
-
-          // 寻找符合白名单的知晓/关闭按钮
-          const dismissBtn = modal.locator(
-            'button:has-text("我知道了"), ' +
-            'button:has-text("知道了"), ' +
-            'button:has-text("我已阅读"), ' +
-            'button:has-text("确定"), ' +
-            'button:has-text("确认"), ' +
-            'button:has-text("关闭"), ' +
-            '.mtd-btn:has-text("我知道了"), ' +
-            '.mtd-btn:has-text("知道了"), ' +
-            '.mtd-btn:has-text("确定"), ' +
-            '.mtd-btn:has-text("确认"), ' +
-            '.mtd-btn:has-text("关闭"), ' +
-            ':text-is("我知道了"), ' +
-            ':text-is("知道了"), ' +
-            '.mtd-modal-close, ' +
-            '[class*="modal-close"]'
-          ).first();
-
-          const btnVisible = await isProbeVisible(dismissBtn, ACTION_TIMEOUT.FAST_PROBE);
-          if (!btnVisible) {
-            continue;
-          }
-
-          const title = (await modal.locator('.mtd-modal-title').innerText().catch(() => '')) || '通知公告';
-          await updateVisualTrackerStatus(page, `🛡️ 检测到提示弹窗「${title.trim()}」，已自动关闭以恢复操作`, 'action');
-
-          await dismissBtn.click({ timeout: getScaledTimeout(ACTION_TIMEOUT.SENSITIVE_FIELD) }).catch(() => {});
-          await modal.waitFor({ state: 'hidden', timeout: getScaledTimeout(ACTION_TIMEOUT.ELEMENT) }).catch(() => {});
-          dismissedAny = true;
-          dismissedInThisAttempt = true;
-          // 一旦成功关闭一个可见弹窗，跳出内层遍历重新扫描，防止 DOM 列表索引变化
-          break;
-        }
-
-        if (!dismissedInThisAttempt) {
-          // 当前轮次未发现任何可关闭的可见通知弹窗，结束外层尝试
-          break;
-        }
-      } catch {
-        break;
-      }
-    }
-  }
-
-  return dismissedAny;
-}
-
-
-
-export class MeituanDutyRunner implements ChannelDutyRunner {
+export class MeituanDutyRunner extends BaseChannelDutyRunner {
   public readonly channelCode = 'MEITUAN';
   private session: BrowserSession | null = null;
-  private running = false;
   private explicitTargetUrl?: string;
   private lastListRefreshTime = 0;
-  public confirmImportEnabled = true;
 
   // 在途请求合并门禁 (In-flight Promise Coalescing)
   private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
@@ -234,13 +50,10 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   private taskMutex: Promise<void> = Promise.resolve();
 
   constructor(targetUrl?: string) {
+    super();
     if (targetUrl && targetUrl.trim()) {
       this.explicitTargetUrl = targetUrl.trim();
     }
-  }
-
-  public setConfirmImportEnabled(enabled: boolean): void {
-    this.confirmImportEnabled = Boolean(enabled);
   }
 
   public get targetUrl(): string {
@@ -259,10 +72,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
    */
   private async dismissNoticeModals(page: Page): Promise<boolean> {
     return dismissMeituanNoticeModals(page, this.getOrderScope(page));
-  }
-
-  public isRunning(): boolean {
-    return this.running;
   }
 
   /**
@@ -979,10 +788,24 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
   }
 
   /**
-   * 页面操作：在美团后台回填确认号（基于订单卡片/详情内联交互，防串单严格校验）
+   * 页面操作：在美团后台回填确认号（基于订单卡片/详情内联交互，防串单严格校验，支持安全演练 dryRun）
    */
-  public async confirmImport(confirmNo: string, otaOrderId: string): Promise<void> {
-    if (!this.confirmImportEnabled) {
+  public async confirmImport(
+    confirmNo: string,
+    otaOrderId: string,
+    options: DutyActionDryRunOptions & { dryRun: true }
+  ): Promise<DutyActionVerificationResult>;
+  public async confirmImport(
+    confirmNo: string,
+    otaOrderId: string,
+    options?: DutyActionDryRunOptions
+  ): Promise<DutyActionVerificationResult | void>;
+  public async confirmImport(
+    confirmNo: string,
+    otaOrderId: string,
+    options?: DutyActionDryRunOptions
+  ): Promise<DutyActionVerificationResult | void> {
+    if (!this.confirmImportEnabled && !options?.dryRun) {
       throw new DutyExecutionError(
         '已关闭订单确认号回填开关，禁止在渠道后台执行确认号回填（开发调试保护模式）',
         'CONFIRM_IMPORT_DISABLED',
@@ -990,7 +813,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       );
     }
 
-    const page = this.getActivePage('回填确认号');
+    const page = this.getActivePage(options?.dryRun ? '演练回填确认号' : '回填确认号');
 
     if (await checkMeituanPageRisk(page)) {
       await updateVisualTrackerStatus(page, '⚠️ 美团提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
@@ -1016,7 +839,13 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         );
       }
 
-      await updateVisualTrackerStatus(page, `📝 正在订单「${otaOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`, 'action');
+      await updateVisualTrackerStatus(
+        page,
+        options?.dryRun
+          ? `🛡️ 正在以【安全演练模式】验证订单「${otaOrderId}」卡片与确认号「${cleanConfirmNo}」输入框...`
+          : `📝 正在订单「${otaOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`,
+        'action'
+      );
 
       const scope = this.getOrderScope(page);
 
@@ -1054,18 +883,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       // 3. 定位详情头部「接受」接单操作按钮并点击，触发展开模态确认对话框
-      // 真实 DOM 结构:
-      // <div class="detail-container">
-      //   <div class="detail-header">
-      //     <div class="header-container">
-      //       <div class="btn-wrap">
-      //         <div class="btn-container">
-      //           <button type="button" class="mtd-btn op-btn mtd-btn-primary"><span> 接受 </span></button>
-      //         </div>
-      //       </div>
-      //     </div>
-      //   </div>
-      // </div>
       const acceptBtn = scope.locator(
         '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受"), ' +
         '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("接受"), ' +
@@ -1084,28 +901,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
       // 4. 等待并严格限定「确认号回填」模态弹窗（必须包含“酒店确认号”，杜绝匹配到页面其他业务弹窗）
-      // 真实 DOM 结构:
-      // <div class="mtd-modal-wrapper mtd-modal-center">
-      //   <div class="mtd-modal">
-      //     <div class="mtd-modal-content">
-      //       <div class="modal-container">
-      //         <div class="modal-container-content">
-      //           <div style="margin-left: 18px;">
-      //             <span>酒店确认号：</span>
-      //             <div data-v-3fd065c0="" class="mtd-input-wrapper"><input type="text" placeholder="非必填" class="mtd-input"></div>
-      //             <span class="text-accent">多确认号，用“,”隔开</span>
-      //           </div>
-      //         </div>
-      //         <div class="modal-container-footer">
-      //           <div class="btn-group">
-      //             <button type="button" class="mtd-btn btn-item"><span>取消</span></button>
-      //             <button data-v-3fd065c0="" type="button" class="mtd-btn btn-item mtd-btn-primary"><span> 确认接受 </span></button>
-      //           </div>
-      //         </div>
-      //       </div>
-      //     </div>
-      //   </div>
-      // </div>
       const dialog = scope.locator(
         '.mtd-modal-wrapper:not([style*="display: none"]) .modal-container:has-text("酒店确认号"), ' +
         '.modal-container:has-text("酒店确认号")'
@@ -1161,7 +956,7 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         }
       }
 
-      // 6. 严格限定在接单弹窗底部（.modal-container-footer）定位「确认接受」按钮并点击，杜绝误触其他弹窗
+      // 6. 严格限定在接单弹窗底部（.modal-container-footer）定位「确认接受」按钮
       const dialogConfirmBtn = dialog.locator(
         '.modal-container-footer button.mtd-btn.btn-item.mtd-btn-primary:has-text("确认接受")'
       ).first();
@@ -1174,23 +969,69 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
         );
       }
 
+      // 安全演练模式处理：安全关闭弹窗并返回验证结果，杜绝真实提交！
+      if (options?.dryRun) {
+        await updateVisualTrackerStatus(page, '🛑 【安全演练收尾】正在点击「取消」按钮关闭弹窗，确保不提交任何数据...', 'action');
+        const cancelBtn = dialog.locator('.modal-container-footer button:has-text("取消"), .mtd-modal-close').first();
+        if (await isElementVisible(cancelBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
+          await visualClickLocator(page, cancelBtn, '安全演练收尾：取消弹窗');
+        } else {
+          await page.keyboard.press('Escape');
+        }
+        await humanDelay(page, ...HUMAN_DELAY.SHORT);
+        await updateVisualTrackerStatus(page, '✅ 确认号回填流程演练验证完毕，已安全关闭弹窗', 'success');
+        return {
+          verified: true,
+          orderId: otaOrderId,
+          action: 'confirmImport',
+          dryRun: true,
+          verifiedSteps: [
+            'locate_order_card',
+            'open_detail',
+            'click_accept_btn',
+            'verify_modal_dialog',
+            'fill_confirm_no',
+            'verify_submit_btn',
+            'close_dialog_safely',
+          ],
+          fieldValues: { confirmNo: cleanConfirmNo },
+        };
+      }
+
       await visualClickLocator(page, dialogConfirmBtn, `点击弹窗「确认接受」按钮确认订单「${otaOrderId}」`);
       await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
     });
   }
 
   /**
-   * 页面操作：在美团后台确认取消（我已知晓）
+   * 页面操作：在美团后台确认取消（我已知晓，支持安全演练 dryRun）
    */
-  public async confirmCancel(otaOrderId: string): Promise<void> {
+  public async confirmCancel(
+    otaOrderId: string,
+    options: DutyActionDryRunOptions & { dryRun: true }
+  ): Promise<DutyActionVerificationResult>;
+  public async confirmCancel(
+    otaOrderId: string,
+    options?: DutyActionDryRunOptions
+  ): Promise<DutyActionVerificationResult | void>;
+  public async confirmCancel(
+    otaOrderId: string,
+    options?: DutyActionDryRunOptions
+  ): Promise<DutyActionVerificationResult | void> {
     if (!otaOrderId || !otaOrderId.trim()) {
       throw new DutyExecutionError('otaOrderId 不能为空', MeituanDutyErrorCode.ORDER_CARD_NOT_FOUND, false);
     }
     const cleanOrderId = otaOrderId.trim();
-    const page = this.getActivePage('确认取消');
+    const page = this.getActivePage(options?.dryRun ? '演练确认取消' : '确认取消');
 
     return this.runWithMutex(async () => {
-      await updateVisualTrackerStatus(page, `🛑 在美团后台确认取消订单「${cleanOrderId}」（我已知晓）...`, 'action');
+      await updateVisualTrackerStatus(
+        page,
+        options?.dryRun
+          ? `🛡️ 正在以【安全演练模式】定位美团订单「${cleanOrderId}」卡片与「我已知晓」按钮...`
+          : `🛑 在美团后台确认取消订单「${cleanOrderId}」（我已知晓）...`,
+        'action'
+      );
       const scope = this.getOrderScope(page);
 
       // 1. 定位订单卡片
@@ -1219,9 +1060,6 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
       }
 
       // 3. 定位详情头部操作按钮区域中的「我已知晓」按钮
-      // DOM 结构层级: .detail-container -> .detail-header -> .btn-wrap -> .btn-container -> button.mtd-btn.op-btn.mtd-btn-primary
-      // 样式类: mtd-btn op-btn mtd-btn-primary
-      // 文本: 我已知晓
       const ackBtn = scope.locator(
         '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
         '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
@@ -1230,25 +1068,33 @@ export class MeituanDutyRunner implements ChannelDutyRunner {
 
       if (!await isElementVisible(ackBtn)) {
         throw new DutyExecutionError(
-          `订单「${cleanOrderId}」详情头部未找到「我已知晓」确认取消操作按钮`,
+          `订单「${cleanOrderId}」详情头部未找到「我已知晓」确认取消操作按钮（请确认该订单是否为已取消订单）`,
           MeituanDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
           false
         );
+      }
+
+      // 安全演练模式处理：断言可见后安全退出，杜绝真实提交！
+      if (options?.dryRun) {
+        await updateVisualTrackerStatus(page, '✅ 取消确认按钮定位验证完毕，演练模式未执行点击', 'success');
+        return {
+          verified: true,
+          orderId: cleanOrderId,
+          action: 'confirmCancel',
+          dryRun: true,
+          verifiedSteps: [
+            'locate_order_card',
+            'open_detail',
+            'locate_ack_btn',
+            'assert_ack_btn_visible',
+          ],
+          message: `订单「${cleanOrderId}」详情「我已知晓」操作按钮定位验证完毕，演练模式未执行点击`,
+        };
       }
 
       // 4. 点击「我已知晓」执行取消确认
       await visualClickLocator(page, ackBtn, `点击「我已知晓」按钮确认取消订单「${cleanOrderId}」`);
       await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
     });
-  }
-
-  /**
-   * 统一任务执行入口：将任务委托给顶层通用任务编排调度器 dispatchDutyTask
-   */
-  public async executeTask(
-    task: DutyClaimedTask,
-    onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
-  ): Promise<DutyTaskExecutionResult> {
-    return dispatchDutyTask(task, this, onLog, { confirmImportEnabled: this.confirmImportEnabled });
   }
 }

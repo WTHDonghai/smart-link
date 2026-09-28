@@ -2,68 +2,11 @@ import type {
   DutyUnhandledOrderSummary,
   ExtractedOrderDetail,
   RawMeituanDutyOrder,
-} from './dutyContracts';
+} from '../../dutyContracts';
 
-/**
- * 高鲁棒性日期格式化函数（纯函数，支持各种日期字符串、短日期与时间戳毫秒数）
- */
-export function fmtDate(value: unknown): string {
-  if (value == null || value === '') return '';
+import { safeFormatDate as fmtDate } from '@/src/utils/template/filters';
 
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-
-    // 1. 标准年月日：2026-09-17, 2026/09/17, 2026.09.17, 2026年09月17日
-    const fullMatch = trimmed.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
-    if (fullMatch) {
-      const y = fullMatch[1];
-      const m = fullMatch[2].padStart(2, '0');
-      const d = fullMatch[3].padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-
-    // 2. 紧凑年月日：20260917
-    const compactMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
-    if (compactMatch) {
-      return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
-    }
-
-    // 3. 无年份短日期：09-17, 09/17, 09.17, 09月17日 -> 自动补充当前年份
-    const shortMatch = trimmed.match(/^(\d{1,2})[-/.月](\d{1,2})(?:日)?/);
-    if (shortMatch) {
-      const currentYear = new Date().getFullYear();
-      const m = shortMatch[1].padStart(2, '0');
-      const d = shortMatch[2].padStart(2, '0');
-      return `${currentYear}-${m}-${d}`;
-    }
-
-    // 4. 若为纯数字字符串，按时间戳解析
-    if (/^\d{10,13}$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      const date = new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
-      if (!Number.isNaN(date.getTime())) {
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-      }
-    }
-  }
-
-  // 5. 数值时间戳（秒或毫秒）
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    const date = new Date(value < 10000000000 ? value * 1000 : value);
-    if (!Number.isNaN(date.getTime())) {
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, '0');
-      const d = String(date.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-  }
-
-  return '';
-}
+export { fmtDate };
 
 // [TODO] 后续需要迁移到env 环境变量
 export const MEITUAN_ORDER_LIST_URL_PATH = '/api/v1/ebooking/orders/task/list';
@@ -327,12 +270,14 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
     let nights = Number(rec.nights || rec.nightCount || 0);
     if (!nights && checkInDate && checkOutDate) {
       const diff = Math.round((Date.parse(checkOutDate) - Date.parse(checkInDate)) / 86400000);
-      nights = diff > 0 ? diff : 1;
+      if (diff > 0) nights = diff;
     }
-    if (!nights) nights = 1;
 
-    const rawTotal = Number(rec.totalFee ?? rec.price ?? rec.totalPrice ?? 0);
-    const totalAmount = rec.totalFee != null || rawTotal > 1000 ? rawTotal / 100 : rawTotal;
+    // 严禁 rawTotal > 1000 无依据盲猜：美团接口 totalFee 规范单位为分 (cents)
+    const totalAmount =
+      rec.totalFee != null
+        ? Number(rec.totalFee) / 100
+        : Number(rec.totalPrice ?? rec.price ?? 0);
 
     const contacts: Array<{ name: string; phone: string }> = [];
     const rawContacts = Array.isArray(rec.contacts) ? rec.contacts : Array.isArray(rec.guests) ? rec.guests : [];
@@ -497,23 +442,15 @@ export function parseMeituanOrderDetailResponse(
   );
   if (!nights && checkInDate && checkOutDate) {
     const diff = Math.round((Date.parse(checkOutDate) - Date.parse(checkInDate)) / 86400000);
-    nights = diff > 0 ? diff : 1;
+    if (diff > 0) nights = diff;
   }
-  if (!nights) nights = 1;
 
-  const rawTotal = Number(
-    orderObj.totalFee ??
-      orderObj.price ??
-      orderObj.totalPrice ??
-      data.totalFee ??
-      data.price ??
-      data.totalPrice ??
-      0
-  );
+  // 严禁 rawTotal > 1000 无依据盲猜：美团接口 totalFee 规范单位为分 (cents)
+  const totalCents = orderObj.totalFee ?? data.totalFee;
   const totalPrice =
-    orderObj.totalFee != null || data.totalFee != null || rawTotal > 1000
-      ? rawTotal / 100
-      : rawTotal;
+    totalCents != null
+      ? Number(totalCents) / 100
+      : Number(orderObj.totalPrice ?? orderObj.price ?? data.totalPrice ?? data.price ?? 0);
 
   let guestName = '';
   let guestMobile = '';
@@ -589,24 +526,17 @@ export function parseMeituanOrderDetailResponse(
     String(orderObj.poiName || orderObj.hotelName || data.poiName || data.hotelName || '').trim() ||
     undefined;
 
-  const remark =
-    String(
-      orderObj.remark ||
-        orderObj.memo ||
-        orderObj.specialRequirement ||
-        orderObj.comment ||
-        orderObj.customerRemark ||
-        orderObj.userRemark ||
-        data.remark ||
-        data.memo ||
-        data.specialRequirement ||
-        data.comment ||
-        data.customerRemark ||
-        data.userRemark ||
-        root.remark ||
-        root.memo ||
-        ''
-    ).trim() || undefined;
+  const remarkCandidate =
+    orderObj.remark ??
+    orderObj.memo ??
+    orderObj.specialRequirement ??
+    data.remark ??
+    data.memo ??
+    data.specialRequirement ??
+    root.remark ??
+    root.memo ??
+    '';
+  const remark = String(remarkCandidate).trim() || undefined;
 
   return {
     otaOrderId: orderId || targetOrderId,

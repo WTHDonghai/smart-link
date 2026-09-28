@@ -8,15 +8,16 @@ import {
   REMARK_TEMPLATE_TTL_MS,
 } from '../../../src/crawler/duty/remarkTemplateManager';
 
-import type {
-  ChannelDutyRunner,
+import {
+  BaseChannelDutyRunner,
+  type ChannelDutyRunner,
 } from '../../../src/crawler/duty/dutyContracts';
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import * as channelApi from '../../../src/services/channelApi';
 import * as loggerModule from '../../../src/services/logger';
 
-class MockDutyRunner implements ChannelDutyRunner {
+class MockDutyRunner extends BaseChannelDutyRunner {
   public channelCode = 'MEITUAN';
   public running = true;
   public unhandledOrdersResult = [
@@ -26,6 +27,9 @@ class MockDutyRunner implements ChannelDutyRunner {
     orderId: 'ORD-1',
     guestName: '测试客人',
     roomName: '海景套房',
+    goodsId: 'GOODS-SEA-01',
+    ratePlanName: '海景套房特惠价',
+    paymentType: 0,
     checkInDateString: '2026-09-20',
     checkOutDateString: '2026-09-22',
     nights: 2,
@@ -183,10 +187,10 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
             booking: {
               roomType: '海景套房',
               originRoomType: '海景套房',
-              rateCode: 'OTA',
+              rateCode: '海景套房特惠价',
               arrival: '2026-09-20',
               departure: '2026-09-22',
-              roomTypeId: 'ROOM_DEFAULT',
+              roomTypeId: 'GOODS-SEA-01',
               nights: 2,
               quantity: 1,
               totalPrice: 500,

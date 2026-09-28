@@ -136,6 +136,17 @@ describe('platformAuth - 错误分类 (classifyAuthError) 与常量收敛', () =
     }
   });
 
+  it('当错误对象已明确标记 terminal: true 时直接采纳，不依赖任何特定文本匹配', () => {
+    const customErr = Object.assign(new Error('任意后端错误文案，无需关键字'), {
+      terminal: true,
+      retryable: false,
+      statusCode: 200,
+    });
+    const classified = classifyAuthError(customErr);
+    expect(classified.terminal).toBe(true);
+    expect(classified.retryable).toBe(false);
+  });
+
   it('正确识别 500 或网络波动为可重试错误 (retryable: true)', () => {
     const serverErr = Object.assign(new Error('Internal Server Error'), { statusCode: 502 });
     const classifiedServer = classifyAuthError(serverErr);
@@ -360,6 +371,46 @@ describe('platformAuth - PlatformAuthService 核心流程与并发单飞', () =>
 
     const stored = loadTokensFromStorage();
     expect(stored?.accessToken).toBe('new-refreshed-access-token');
+  });
+
+  it('refreshTokens 在服务端返回 HTTP 200 带业务错误 { success: false, code: 2004, msg: "认证信息错误或无效" } 时判定为终端致命失效并清空存储', async () => {
+    const existingTokens: PlatformAuthTokens = {
+      accessToken: 'old-access-token',
+      refreshToken: 'expired-refresh-token',
+      expiresAt: Date.now() - 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://test-pms.hotel.com',
+      tenantId: 'XR-TEST',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveTokensToStorage(existingTokens);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: false,
+        code: 2004,
+        msg: '认证信息错误或无效',
+      }),
+    } as unknown as Response);
+
+    let caughtError: unknown;
+    try {
+      await service.refreshTokens(existingTokens);
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeDefined();
+    const classified = caughtError as { terminal: boolean; retryable: boolean; businessCode?: number };
+    expect(classified.terminal).toBe(true);
+    expect(classified.retryable).toBe(false);
+    expect(classified.businessCode).toBe(2004);
+
+    // 本地凭证已被自动清除
+    expect(loadTokensFromStorage()).toBeNull();
   });
 
   it('单飞并发去重 (Single-Flight Deduplication)：多个并发请求只发出 1 次网络刷新', async () => {
@@ -694,6 +745,49 @@ describe('platformAuth - 调度器容错与即时唤醒续期', () => {
     const classified = callbackError as { terminal: boolean; statusCode: number };
     expect(classified.terminal).toBe(true);
     expect(classified.statusCode).toBe(400);
+
+    // 本地存储已清除
+    expect(loadTokensFromStorage()).toBeNull();
+  });
+
+  it('调度器在遭遇服务端以 HTTP 200 返回 code 2004 认证信息错误或无效时，清空存储并向回调传递致命终端错误', async () => {
+    const expiredTokens: PlatformAuthTokens = {
+      accessToken: 'stale-access-token',
+      refreshToken: 'expired-fox-refresh-token',
+      expiresAt: Date.now() - 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://test-pms.hotel.com',
+      tenantId: 'FOX',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveTokensToStorage(expiredTokens);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: false,
+        code: 2004,
+        msg: '认证信息错误或无效',
+      }),
+    } as unknown as Response);
+
+    let callbackError: unknown = null;
+    let callbackTokens: unknown = 'init';
+
+    service.startRefreshScheduler((tokens, error) => {
+      callbackTokens = tokens;
+      callbackError = error;
+    });
+
+    await service.checkAndRefreshImmediately();
+
+    expect(callbackTokens).toBeNull();
+    expect(callbackError).toBeDefined();
+    const classified = callbackError as { terminal: boolean; statusCode: number; businessCode?: number };
+    expect(classified.terminal).toBe(true);
+    expect(classified.businessCode).toBe(2004);
 
     // 本地存储已清除
     expect(loadTokensFromStorage()).toBeNull();

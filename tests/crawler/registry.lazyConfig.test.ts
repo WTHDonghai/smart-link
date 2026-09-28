@@ -21,7 +21,7 @@ describe('hotel collector registry lazy config', () => {
 
     expect(hotelCollectorRegistry.getSupportedChannelCodes()).toContain('MEITUAN');
     expect(() => hotelCollectorRegistry.get('MEITUAN')?.defaultTargetUrl).toThrow(
-      '未配置渠道「MEITUAN」的目标访问地址'
+      '未配置渠道「MEITUAN」的产品采集地址'
     );
   });
 });

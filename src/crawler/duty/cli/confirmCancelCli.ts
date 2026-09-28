@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { MeituanDutyRunner, humanDelay } from './meituanDutyRunner';
-import { PROCESS_ENV_KEYS } from '../../types/env';
-import { updateVisualTrackerStatus, visualClickLocator } from '../visualTracker';
+import { MeituanDutyRunner } from '../channels/meituan/meituanDutyRunner';
+import { PROCESS_ENV_KEYS } from '@/src/types/env';
 
 interface CliOptions {
   orderId?: string;
@@ -84,52 +83,13 @@ async function main() {
 
     if (options.isDryRun) {
       console.log('[DutyConfirmCancel:CLI] 🛡️ 正在以【安全演练模式 (Dry-Run)】执行定位验证...');
-      const page = (runner as unknown as { getActivePage: (op: string) => import('playwright').Page }).getActivePage('取消确认演练');
-      const scope = (runner as unknown as { getOrderScope: (p: import('playwright').Page) => import('playwright').Page | import('playwright').FrameLocator }).getOrderScope(page);
-
-      // 1. 定位订单卡片并激活详情
-      console.log('[DutyConfirmCancel:CLI] [1/3] 定位订单卡片...');
-      let orderCard = await (runner as unknown as { locateOrderCard: (p: unknown, s: unknown, id: string) => Promise<import('playwright').Locator | null> }).locateOrderCard(page, scope, targetOrderId);
-      if (!orderCard) {
-        console.log('[DutyConfirmCancel:CLI] 未直接找到卡片，尝试刷新列表...');
-        await runner.refreshOrderList(page);
-        await humanDelay(page, 1000, 2000);
-        orderCard = await (runner as unknown as { locateOrderCard: (p: unknown, s: unknown, id: string) => Promise<import('playwright').Locator | null> }).locateOrderCard(page, scope, targetOrderId);
-      }
-
-      if (!orderCard || !await orderCard.isVisible({ timeout: 2000 }).catch(() => false)) {
-        throw new Error(`未在页面上找到订单「${targetOrderId}」卡片`);
-      }
-
-      const isCurrentDetail = await scope.locator(`.detail-header:has-text("${targetOrderId}")`).first().isVisible({ timeout: 500 }).catch(() => false);
-      if (!isCurrentDetail) {
-        console.log('[DutyConfirmCancel:CLI] 点击订单卡片激活右侧详情展示...');
-        await visualClickLocator(page, orderCard, `点击订单「${targetOrderId}」卡片激活详情展示`);
-        await humanDelay(page, 1000, 2000);
-      }
-
-      // 2. 定位详情头部「我已知晓」取消确认操作按钮
-      console.log('[DutyConfirmCancel:CLI] [2/3] 定位详情头部「我已知晓」按钮...');
-      const ackBtn = scope.locator(
-        '.detail-container .detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-        '.detail-header .btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓"), ' +
-        '.btn-wrap .btn-container button.mtd-btn.op-btn.mtd-btn-primary:has-text("我已知晓")'
-      ).first();
-
-      if (!await ackBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-        throw new Error(`订单「${targetOrderId}」详情头部未找到「我已知晓」操作按钮（请确认该订单是否为已取消订单）`);
-      }
-      console.log('[DutyConfirmCancel:CLI] ✅ 成功精确定位到「我已知晓」操作按钮！');
-
-      // 3. 安全演练提示
-      console.log('[DutyConfirmCancel:CLI] [3/3] 安全演练收尾...');
-      await updateVisualTrackerStatus(page, '✅ 取消确认按钮定位验证完毕，演练模式未执行点击', 'success');
+      const verification = await runner.confirmCancel(targetOrderId, { dryRun: true });
       console.log('\n======================================================');
       console.log('🎉 演练全流程验证成功！卡片激活与「我已知晓」按钮定位完全匹配！');
+      console.log(`  验证步骤: ${verification.verifiedSteps.join(' -> ')}`);
       console.log('   （若需要在生产环境真实点击「我已知晓」，请加上 `--submit` 参数）');
       console.log('======================================================\n');
     } else {
-      // 真实提交模式：调用 runner.confirmCancel(targetOrderId)
       console.log('[DutyConfirmCancel:CLI] ⚠️ 【真实提交模式】正在执行真实的「我已知晓」点击提交...');
       await runner.confirmCancel(targetOrderId);
       console.log('\n======================================================');

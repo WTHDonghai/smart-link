@@ -85,14 +85,14 @@ export async function dispatchDutyTask(
 
   const taskLogger = createTaskLogger(
     task,
-    { channelCode: runner.channelCode, orderNo: context.orderNo },
+    { channelCode: runner.channelCode, orderId: context.orderId },
     recordLog
   );
 
   switch (task.msgType) {
     case 'OTA_COLLECT_ORDER': {
       try {
-        const unhandledOrders = await runner.collectUnhandledOrders();
+        const unhandledOrders = await runner.collectUnhandledOrders(context);
         return {
           status: 'SUCCEEDED',
           result: {
@@ -116,19 +116,19 @@ export async function dispatchDutyTask(
     }
 
     case 'OTA_IMPORT_ORDER': {
-      const otaOrderId = context.orderNo || '';
-      if (!otaOrderId) {
+      const orderId = context.orderId || '';
+      if (!orderId) {
         return {
           status: 'FAILED',
           errorCode: 'MISSING_ORDER_ID',
-          errorMessage: '任务载荷中缺少订单编号 otaOrderId / businessId',
+          errorMessage: '任务载荷中缺少订单编号 orderId / businessId',
         };
       }
 
       // 1. 路由至对应渠道专属页面操作：点击打开详情卡片并抓取原始数据（已回写明文敏感数据）
       let rawDetail: Record<string, unknown>;
       try {
-        rawDetail = await runner.inspectOrderDetail(otaOrderId);
+        rawDetail = await runner.inspectOrderDetail(orderId);
       } catch (inspectErr) {
         const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
         const isRisk = isRiskControlError(inspectErr);
@@ -145,13 +145,13 @@ export async function dispatchDutyTask(
       // 2. 渠道协议清洗：得到强类型 IChannelOrderProtocol 实体
       let channelOrder: IChannelOrderProtocol;
       try {
-        channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, otaOrderId);
+        channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, orderId);
       } catch (cleanErr) {
         const errMsg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_PARSE_FAILED',
-          errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情原始报文解析失败: ${errMsg}`,
+          errorMessage: `渠道「${runner.channelCode}」提取的订单「${orderId}」详情原始报文解析失败: ${errMsg}`,
           retryable: false,
         };
       }
@@ -187,7 +187,7 @@ export async function dispatchDutyTask(
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_INVALID',
-          errorMessage: `渠道「${runner.channelCode}」提取的订单「${otaOrderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
+          errorMessage: `渠道「${runner.channelCode}」提取的订单「${orderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
           retryable: false,
         };
       }
@@ -220,7 +220,7 @@ export async function dispatchDutyTask(
           apiResponse: importRes,
           durationMs: importDurationMs,
           httpStatus: 200,
-          message: `[入单提交 order-import-submit] 订单 ${otaOrderId} 成功提交中台导入 (ID: ${task.id})`,
+          message: `[入单提交 order-import-submit] 订单 ${orderId} 成功提交中台导入 (ID: ${task.id})`,
           details: `PMS单号: ${importRes.pmsOrderId || '-'} | 确认号: ${importRes.confirmationNo || '-'} | 批次: ${importRes.batchId || '-'} | 耗时: ${importDurationMs}ms`,
         });
 
@@ -228,7 +228,8 @@ export async function dispatchDutyTask(
           status: 'SUCCEEDED',
           result: {
             imported: true,
-            otaOrderId,
+            orderId,
+            otaOrderId: orderId,
             pmsOrderId: importRes.pmsOrderId,
             confirmationNo: importRes.confirmationNo,
             batchId: importRes.batchId,
@@ -249,7 +250,7 @@ export async function dispatchDutyTask(
           apiMethod: 'POST',
           apiParams: importPayload,
           apiResponse: { error: errMsg },
-          message: `[入单提交失败 order-import-submit] 订单 ${otaOrderId} 提交中台导入异常: ${errMsg} (ID: ${task.id})`,
+          message: `[入单提交失败 order-import-submit] 订单 ${orderId} 提交中台导入异常: ${errMsg} (ID: ${task.id})`,
           details: errMsg,
         });
 
@@ -276,7 +277,7 @@ export async function dispatchDutyTask(
       }
 
       const confirmNo = String(context.payload.confirmNo || '').trim();
-      const otaOrderId = context.orderNo || '';
+      const orderId = context.orderId || '';
 
       if (!confirmNo) {
         return {
@@ -286,11 +287,11 @@ export async function dispatchDutyTask(
           retryable: false,
         };
       }
-      if (!otaOrderId) {
+      if (!orderId) {
         return {
           status: 'FAILED',
           errorCode: 'ORDER_ID_MISSING',
-          errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的订单号 (otaOrderId)',
+          errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的订单号 (orderId)',
           retryable: false,
         };
       }
@@ -304,12 +305,14 @@ export async function dispatchDutyTask(
       }
 
       try {
-        await runner.confirmImport(confirmNo, otaOrderId);
+        await runner.confirmImport(confirmNo, orderId);
         return {
           status: 'SUCCEEDED',
           result: {
             confirmed: true,
             confirmNo,
+            orderId,
+            otaOrderId: orderId,
           },
         };
       } catch (err) {
@@ -327,12 +330,12 @@ export async function dispatchDutyTask(
     }
 
     case 'OTA_CONFIRM_CANCEL': {
-      const otaOrderId = context.orderNo || '';
-      if (!otaOrderId) {
+      const orderId = context.orderId || '';
+      if (!orderId) {
         return {
           status: 'FAILED',
           errorCode: 'ORDER_ID_MISSING',
-          errorMessage: 'OTA_CONFIRM_CANCEL 任务缺失有效的订单号 (otaOrderId)',
+          errorMessage: 'OTA_CONFIRM_CANCEL 任务缺失有效的订单号 (orderId)',
           retryable: false,
         };
       }
@@ -345,11 +348,13 @@ export async function dispatchDutyTask(
         };
       }
       try {
-        await runner.confirmCancel(otaOrderId);
+        await runner.confirmCancel(orderId);
         return {
           status: 'SUCCEEDED',
           result: {
             acknowledged: true,
+            orderId,
+            otaOrderId: orderId,
           },
         };
       } catch (err) {

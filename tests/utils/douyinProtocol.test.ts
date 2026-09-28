@@ -6,6 +6,7 @@ import {
 import {
   DOUYIN_RAW_SAMPLE_ORDER,
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
+  cleanDouyinOrder,
 } from '../../src/services/protocols/douyinProtocol';
 import { renderTemplate } from '../../src/utils/template/templateEngine';
 import { formatDate } from '../../src/utils/template/filters';
@@ -131,5 +132,47 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
 
     const rendered = renderTemplate(SAMPLE_DOUYIN_REMARK_TEMPLATE, cleanCtx);
     expect(rendered).toContain('客人:刘彩霞、王小明 (138****5090、139****8888)');
+  });
+
+  it('correctly derives nights and pricing breakdown from arrival and departure dates when nights is not in context', () => {
+    const rawOrder = {
+      ...DOUYIN_RAW_SAMPLE_ORDER,
+      book_detail_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        book_start_time: 1790812800, // 2026-10-01
+        book_end_time: 1791158400, // 2026-10-05 (4 nights)
+      },
+      amount_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.amount_info,
+        pay_amount: 80000, // 800 元
+      },
+    };
+
+    const protocol = cleanDouyinOrder(rawOrder);
+    const unified = protocol.toUnifiedOrder('测试备注');
+
+    expect(unified.booking.roomTypeId).toBe('1874664066064411');
+    expect(unified.booking.rateCode).toBe('预售券');
+    expect(unified.booking.paytype).toBe('预付');
+    expect(unified.booking.arrival).toBe('2026-10-01');
+    expect(unified.booking.departure).toBe('2026-10-05');
+    expect(unified.booking.nights).toBe(4);
+    expect(unified.booking.totalPrice).toBe(800);
+    expect(unified.booking.pricing).toHaveLength(4);
+    expect(unified.booking.pricing[0]).toEqual({ date: '2026-10-01', price: 200 });
+    expect(unified.booking.pricing[1]).toEqual({ date: '2026-10-02', price: 200 });
+    expect(unified.booking.pricing[2]).toEqual({ date: '2026-10-03', price: 200 });
+    expect(unified.booking.pricing[3]).toEqual({ date: '2026-10-04', price: 200 });
+  });
+
+  it('fails fast when toUnifiedOrder lacks required fields and does not use hardcoded fallbacks', () => {
+    const invalidProtocol = cleanDouyinOrder({
+      order_base_info: { order_id: '123' },
+      book_detail_info: { book_id: '456', book_start_time: 1788537600, book_end_time: 1788624000 },
+      sale_product_info: { physical_room_name: '大床房' },
+      amount_info: { pay_amount: 10000 },
+    });
+    // Missing roomTypeId / productId and rateCode
+    expect(() => invalidProtocol.toUnifiedOrder('测试')).toThrow(/缺少必要关键字段/);
   });
 });

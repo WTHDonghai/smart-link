@@ -36,6 +36,7 @@ import { logger } from '../../services/logger';
 import { showToast } from './appSlice';
 import { addLog, addLogs } from './systemLogSlice';
 import type { HotelState } from './hotelSlice';
+import { resolveChannelMeta } from '../../utils/channelMeta';
 
 export const CONFIRM_IMPORT_STORAGE_KEY = 'smart_link_duty_confirm_import_enabled';
 
@@ -407,11 +408,12 @@ export const syncDutyStatusThunk = createAsyncThunk(
         nextStatus === 'DEGRADED' &&
         nextInfo.manualVerificationRequired
       ) {
+        const channelLabel = resolveChannelMeta(code).name || code;
         dispatch(
           showToast({
             type: 'warning',
             title: '需要人工处理',
-            description: `${code === 'MEITUAN' ? '美团' : code}后台出现安全验证，请在浏览器窗口中完成验证后再继续`,
+            description: `${channelLabel}后台出现安全验证，请在浏览器窗口中完成验证后再继续`,
           })
         );
       }

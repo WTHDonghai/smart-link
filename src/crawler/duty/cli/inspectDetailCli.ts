@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { MeituanDutyRunner } from './meituanDutyRunner';
-import { PROCESS_ENV_KEYS } from '../../types/env';
-import { cleanChannelOrder } from '../../services/protocols';
-import { remarkTemplateManager } from './remarkTemplateManager';
-import { renderRemarkFromVariables } from '../../utils/template/orderPayloadTransformer';
+import { MeituanDutyRunner } from '../channels/meituan/meituanDutyRunner';
+import { PROCESS_ENV_KEYS } from '@/src/types/env';
+import { cleanChannelOrder } from '@/src/services/protocols';
+import { remarkTemplateManager } from '../remarkTemplateManager';
+import { renderRemarkFromVariables } from '@/src/utils/template/orderPayloadTransformer';
 
 function parseArgs(argv: string[]) {
   let orderId: string | undefined;

@@ -107,12 +107,39 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
             enabled: true,
             required: true,
           },
+          {
+            key: 'roomTypeId',
+            label: '房型商品ID',
+            path: 'data.goodsId',
+            category: 'hotel',
+            transform: 'string',
+            enabled: true,
+          },
+          {
+            key: 'rateCode',
+            label: '价格方案',
+            path: 'data.ratePlanName',
+            category: 'hotel',
+            transform: 'string',
+            enabled: true,
+          },
+          {
+            key: 'paytype',
+            label: '支付方式',
+            path: 'data.paymentType',
+            category: 'finance',
+            transform: 'string',
+            enabled: true,
+          },
         ],
       };
 
       const customPayload = {
         customId: 'CUSTOM-999',
         data: {
+          goodsId: 'GOODS-CUSTOM-1',
+          ratePlanName: '自定义特惠方案',
+          paymentType: 0,
           roomName: '自定义大床房',
           checkInDateString: '2026-10-01',
           checkOutDateString: '2026-10-02',
@@ -123,6 +150,9 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       const order = cleanMeituanOrder(customPayload, customSchema);
       expect(order.getTemplateVariables()['orderNo']).toBe('CUSTOM-999');
       expect(order.toUnifiedOrder('').otaOrderId).toBe('CUSTOM-999');
+      expect(order.toUnifiedOrder('').booking.roomTypeId).toBe('GOODS-CUSTOM-1');
+      expect(order.toUnifiedOrder('').booking.rateCode).toBe('自定义特惠方案');
+      expect(order.toUnifiedOrder('').booking.paytype).toBe('预付');
     });
 
     it('should derive UnifiedOrderProtocol strictly from context when raw is empty object', () => {
@@ -135,6 +165,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
         roomName: '豪华湖景房',
         roomTypeId: 'ROOM-888',
         rateCode: 'PROMO_BAR',
+        paytype: '预付',
         checkInDate: '2026-11-01',
         checkOutDate: '2026-11-03',
         nights: 2,
@@ -157,6 +188,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.booking.roomTypeName).toBe('豪华湖景房');
       expect(unified.booking.roomTypeId).toBe('ROOM-888');
       expect(unified.booking.rateCode).toBe('PROMO_BAR');
+      expect(unified.booking.paytype).toBe('预付');
       expect(unified.booking.arrival).toBe('2026-11-01');
       expect(unified.booking.departure).toBe('2026-11-03');
       expect(unified.booking.nights).toBe(2);
@@ -180,6 +212,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
         房型名称: '静谧大床房',
         房型商品ID: 'GOODS-CH-1',
         价格方案: 'BAR',
+        支付方式: '预付',
         入住日期: '2026-12-01',
         离店日期: '2026-12-02',
         结算底价: 180,
@@ -196,6 +229,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.booking.roomTypeName).toBe('静谧大床房');
       expect(unified.booking.roomTypeId).toBe('GOODS-CH-1');
       expect(unified.booking.rateCode).toBe('BAR');
+      expect(unified.booking.paytype).toBe('预付');
       expect(unified.booking.arrival).toBe('2026-12-01');
       expect(unified.booking.departure).toBe('2026-12-02');
       expect(unified.booking.nights).toBe(1);
@@ -209,6 +243,9 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       const realPayload = {
         data: {
           orderId: '5035036080553098350',
+          goodsId: '3803962976768182158',
+          ratePlanName: '美团会员特惠',
+          paymentType: 0,
           roomName: '安澜大床客房[错峰出游]',
           checkInDateString: '2026-09-29 00:00:00',
           checkOutDateString: '2026-09-30 00:00:00',
@@ -230,6 +267,10 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
 
       const channelOrder = cleanMeituanOrder(realPayload);
       const unified = channelOrder.toUnifiedOrder('');
+
+      expect(unified.booking.roomTypeId).toBe('3803962976768182158');
+      expect(unified.booking.rateCode).toBe('美团会员特惠');
+      expect(unified.booking.paytype).toBe('预付');
 
       expect(unified.booking.totalPrice).toBe(295.4);
       expect(unified.booking.floorPrice).toBe(295.4);

@@ -4,6 +4,7 @@ export type DutyTaskLogSink = (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 
 
 export interface DutyTaskLoggerContext {
   channelCode: string;
+  orderId?: string;
   orderNo?: string;
 }
 
@@ -25,7 +26,7 @@ export interface DutyTaskLogger {
 
 /**
  * 创建任务级上下文日志辅助器
- * 自动透传 taskId, msgType, orderNo, channelId, module: 'DUTY_TASK'，消除各流转阶段手动拼装冗余
+ * 自动透传 taskId, msgType, orderNo (由 orderId 映射), channelId, module: 'DUTY_TASK'，消除各流转阶段手动拼装冗余
  */
 export function createTaskLogger(
   task: DutyClaimedTask,
@@ -41,17 +42,23 @@ export function createTaskLogger(
     },
     set context(newCtx: DutyTaskLoggerContext) {
       currentContext.channelCode = newCtx.channelCode;
-      currentContext.orderNo = newCtx.orderNo;
+      currentContext.orderId = newCtx.orderId ?? newCtx.orderNo;
+      currentContext.orderNo = newCtx.orderNo ?? newCtx.orderId;
     },
     updateContext(partial: Partial<DutyTaskLoggerContext>): void {
       if (partial.channelCode !== undefined) {
         currentContext.channelCode = partial.channelCode;
       }
-      if (partial.orderNo !== undefined) {
+      if (partial.orderId !== undefined) {
+        currentContext.orderId = partial.orderId;
+        currentContext.orderNo = partial.orderId;
+      } else if (partial.orderNo !== undefined) {
         currentContext.orderNo = partial.orderNo;
+        currentContext.orderId = partial.orderNo;
       }
     },
     log(entry: DutyTaskLogPayload): void {
+      const resolvedOrderNo = entry.orderNo || currentContext.orderId || currentContext.orderNo;
       sink({
         level: entry.level,
         module: entry.module || 'DUTY_TASK',
@@ -59,7 +66,7 @@ export function createTaskLogger(
         message: entry.message,
         details: entry.details,
         channelId: entry.channelId || currentContext.channelCode,
-        orderNo: entry.orderNo || currentContext.orderNo,
+        orderNo: resolvedOrderNo,
         durationMs: entry.durationMs,
         meta: entry.meta,
         taskId: entry.taskId || task.id,

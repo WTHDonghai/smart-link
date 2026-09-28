@@ -1,4 +1,5 @@
 import type { DutyClaimedTask } from '../../types';
+import { normalizeOtaChannelCode } from '../../config/otaUrls';
 
 /**
  * 统一解析后的值守任务上下文数据模型
@@ -6,8 +7,8 @@ import type { DutyClaimedTask } from '../../types';
 export interface ParsedDutyTaskContext {
   task: DutyClaimedTask;
   payload: Record<string, unknown>;
-  channelCode: string;
-  orderNo?: string;
+  channelCode?: string;
+  orderId?: string;
   businessId: string;
 }
 
@@ -54,84 +55,123 @@ export function isRiskControlError(err: unknown): boolean {
   return false;
 }
 
-/**
- * 从任务载荷提取目标渠道代号（大写纯字符串，默认收敛为 MEITUAN）
- */
-export function extractTaskChannelCode(task: DutyClaimedTask, payload: Record<string, unknown>): string {
-  const sanitize = (val: unknown): string | undefined => {
-    if (val === null || val === undefined) return undefined;
-    const str = String(val).trim().toUpperCase();
-    return str.length > 0 ? str : undefined;
-  };
-
-  if (task.msgType === 'OTA_COLLECT_ORDER') {
-    const otaChan = sanitize(payload.otaChannelCode);
-    if (otaChan) return otaChan;
-  } else if (task.msgType === 'OTA_CONFIRM_IMPORT' || task.msgType === 'OTA_CONFIRM_CANCEL') {
-    const chan = sanitize(payload.channelCode);
-    if (chan) return chan;
-  } else if (task.msgType === 'OTA_IMPORT_ORDER') {
-    const chan = sanitize(payload.channel);
-    if (chan) return chan;
-    const otaChan = sanitize(payload.otaChannelCode);
-    if (otaChan) return otaChan;
-    if (
-      Array.isArray(payload.orders) &&
-      payload.orders[0] &&
-      typeof payload.orders[0] === 'object' &&
-      'otaChannel' in (payload.orders[0] as Record<string, unknown>)
-    ) {
-      const orderChan = sanitize((payload.orders[0] as Record<string, unknown>).otaChannel);
-      if (orderChan) return orderChan;
-    }
-  }
-
-  // 通用备选字段提取（防止 msgType 与载荷字段存在跨版本兼容冗余）
-  const chanCode = sanitize(payload.channelCode);
-  if (chanCode) return chanCode;
-  const otaChanCode = sanitize(payload.otaChannelCode);
-  if (otaChanCode) return otaChanCode;
-  const chan = sanitize(payload.channel);
-  if (chan) return chan;
-
-  return 'MEITUAN';
-}
-
-function sanitizeOrderNo(val: unknown): string | undefined {
-  if (val === null || val === undefined) return undefined;
+function sanitizeChannelCode(val: unknown): string | undefined {
   if (typeof val === 'string') {
-    const s = val.trim();
-    return s.length > 0 ? s : undefined;
-  }
-  if (typeof val === 'number' && !isNaN(val)) {
-    const s = String(val).trim();
-    return s.length > 0 ? s : undefined;
+    const trimmed = val.trim();
+    if (trimmed.length > 0) {
+      return normalizeOtaChannelCode(trimmed);
+    }
   }
   return undefined;
 }
 
 /**
- * 从任务载荷与任务元数据中提取关联的订单号
- * 优先级：orders[0].otaOrderId -> orders[0].orderId -> orders[0].orderNo -> payload.otaOrderId -> payload.orderId -> payload.orderNo -> (非采集任务的 businessId)
- * 具备对字符串与纯数字类型单号的强鲁棒兼容性
+ * 依据中台线缆契约与各任务消息类型的固定协议路径，精准提取渠道代号 (channelCode)
+ * 遵循 Fail-Fast 原则：严格按对应 msgType 的固定契约路径解析，杜绝跨字段模糊猜测与无谓兜底。
+ * 若契约规定的渠道字段缺失或为空，明确返回 undefined，交由上层阻断拒单。
  */
-export function extractTaskOrderNo(task: DutyClaimedTask, payload: Record<string, unknown>): string | undefined {
-  const firstOrder =
-    Array.isArray(payload.orders) && payload.orders[0] && typeof payload.orders[0] === 'object'
-      ? (payload.orders[0] as Record<string, unknown>)
-      : undefined;
+export function extractTaskChannelCode(
+  task: DutyClaimedTask,
+  payload: Record<string, unknown>
+): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
 
-  const orderNo =
-    (firstOrder ? sanitizeOrderNo(firstOrder.otaOrderId) : undefined) ||
-    (firstOrder ? sanitizeOrderNo(firstOrder.orderId) : undefined) ||
-    (firstOrder ? sanitizeOrderNo(firstOrder.orderNo) : undefined) ||
-    sanitizeOrderNo(payload.otaOrderId) ||
-    sanitizeOrderNo(payload.orderId) ||
-    sanitizeOrderNo(payload.orderNo) ||
-    (task.msgType !== 'OTA_COLLECT_ORDER' && task.businessId ? sanitizeOrderNo(task.businessId) : undefined);
+  switch (task.msgType) {
+    case 'OTA_COLLECT_ORDER':
+      // 采集任务线缆协议固定字段: otaChannelCode
+      return sanitizeChannelCode(payload.otaChannelCode);
 
-  return orderNo;
+    case 'OTA_CONFIRM_IMPORT':
+    case 'OTA_CONFIRM_CANCEL':
+      // 确认接单/取消确认任务线缆协议固定字段: channelCode
+      return sanitizeChannelCode(payload.channelCode);
+
+    case 'OTA_IMPORT_ORDER': {
+      // 订单导入任务线缆协议固定字段: payload.channel，或批量结构 orders[0].otaChannel，或中台派发的 otaChannelCode
+      const directChannel = sanitizeChannelCode(payload.channel);
+      if (directChannel) return directChannel;
+
+      const otaChannel = sanitizeChannelCode(payload.otaChannelCode);
+      if (otaChannel) return otaChannel;
+
+      if (Array.isArray(payload.orders) && payload.orders[0] && typeof payload.orders[0] === 'object') {
+        const fromFirstOrder = sanitizeChannelCode(
+          (payload.orders[0] as Record<string, unknown>).otaChannel
+        );
+        if (fromFirstOrder) return fromFirstOrder;
+      }
+
+      return undefined;
+    }
+
+    default:
+      return undefined;
+  }
 }
+
+function sanitizeOrderId(val: unknown): string | undefined {
+  if (typeof val === 'string' || (typeof val === 'number' && !Number.isNaN(val))) {
+    return String(val).trim() || undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 依据中台线缆契约与业务事实，精准提取任务关联的渠道订单号 (orderId)
+ *
+ * 刚性准则：
+ * 1. 采集巡检任务 (OTA_COLLECT_ORDER) 无单体关联订单号，严格返回 undefined。
+ * 2. Fail-Fast 约束：一个任务只能处理一个订单的详情。若 payload.orders 存在且长度 > 1，立即抛出异常拒绝隐式截断。
+ * 3. 订单类任务中，中台 businessId 即为权威的渠道订单号 (otaOrderId)。
+ * 4. 兼容容错：若 businessId 缺失但 payload 中显式提供了 otaOrderId/orderId/orderNo，回退提取。
+ */
+export function extractTaskOrderId(
+  task: DutyClaimedTask,
+  payload?: Record<string, unknown>
+): string | undefined {
+  if (task.msgType === 'OTA_COLLECT_ORDER') {
+    // 采集巡检任务无单体关联订单号
+    return undefined;
+  }
+
+  // Fail-Fast: 一个任务只能处理一个订单的详情，坚决杜绝静默吃掉后续订单
+  if (payload && Array.isArray(payload.orders) && payload.orders.length > 1) {
+    throw new Error(`单任务仅支持处理单笔订单，收到包含 ${payload.orders.length} 笔订单的非法载荷`);
+  }
+
+  // 1. 优先使用中台任务业务主键 businessId (即 OTA 渠道订单号)
+  const fromBusinessId = sanitizeOrderId(task.businessId);
+  if (fromBusinessId) {
+    return fromBusinessId;
+  }
+
+  // 2. 兼容容错：当 businessId 缺失时，从载荷显式声明中回退提取
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload.orders) && payload.orders[0] && typeof payload.orders[0] === 'object') {
+      const firstOrder = payload.orders[0] as Record<string, unknown>;
+      const idInBatch =
+        sanitizeOrderId(firstOrder.otaOrderId) ||
+        sanitizeOrderId(firstOrder.orderId) ||
+        sanitizeOrderId(firstOrder.orderNo);
+      if (idInBatch) return idInBatch;
+    }
+
+    return (
+      sanitizeOrderId(payload.otaOrderId) ||
+      sanitizeOrderId(payload.orderId) ||
+      sanitizeOrderId(payload.orderNo)
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * @deprecated 兼容历史调用，已统一为 extractTaskOrderId
+ */
+export const extractTaskOrderNo = extractTaskOrderId;
 
 /**
  * 统一解析与校验中台下发的 DutyClaimedTask 载荷与上下文元数据
@@ -150,14 +190,14 @@ export function parseDutyTaskContext(task: DutyClaimedTask): ParsedDutyTaskConte
   }
 
   const channelCode = extractTaskChannelCode(task, payload);
-  const orderNo = extractTaskOrderNo(task, payload);
+  const orderId = extractTaskOrderId(task, payload);
   const businessId = String(task.businessId || '').trim();
 
   return {
     task,
     payload,
     channelCode,
-    orderNo,
+    orderId,
     businessId,
   };
 }

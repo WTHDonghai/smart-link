@@ -250,6 +250,7 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
     payTime: 1789443465000,
     payTimeString: '2026-09-15 11:37:45',
     paymentType: 0,
+    ratePlanName: '美团会员特惠价',
     poiId: 1533758592,
     poiIdStr: '1533758592',
     poiName: '西软度假酒店',
@@ -518,6 +519,16 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       description: '账期预结算预计收入',
       enabled: true,
     },
+    {
+      key: 'paytype',
+      label: '支付方式',
+      path: 'data.paymentType',
+      category: 'finance',
+      transform: 'string',
+      sampleValue: '预付',
+      description: '美团支付方式 (预付/现付)',
+      enabled: true,
+    },
 
     // 6. 权益服务
     {
@@ -633,23 +644,46 @@ export class MeituanOrderProtocol implements IChannelOrderProtocol {
       this.context.roomTypeId ||
       this.context['房型商品ID'] ||
       this.context['房型ID'] ||
-      'ROOM_DEFAULT'
+      this.context.goodsId ||
+      this.context.roomId ||
+      this.context.roomName ||
+      this.context.roomTypeName ||
+      ''
     ).trim();
+    if (!roomTypeId) {
+      throw new Error(`[MeituanProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 房型商品ID (roomTypeId)`);
+    }
 
     const rateCode = String(
       this.context.rateCode ||
       this.context['价格方案'] ||
-      'OTA'
+      this.context.ratePlanName ||
+      this.context.roomName ||
+      this.context.roomTypeName ||
+      ''
     ).trim();
+    if (!rateCode) {
+      throw new Error(`[MeituanProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 价格方案 (rateCode)`);
+    }
+
+    const paytype = String(
+      this.context.paytype ||
+      this.context['支付方式'] ||
+      '预付'
+    ).trim();
+    if (!paytype) {
+      throw new Error(`[MeituanProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 支付方式 (paytype)`);
+    }
 
     const arrival = String(this.context.checkInDate || this.context['入住日期'] || '').slice(0, 10);
     const departure = String(this.context.checkOutDate || this.context['离店日期'] || '').slice(0, 10);
 
-    let nights = Math.max(1, Number(this.context.nights || this.context['间夜数'] || 0));
-    if ((!nights || Number.isNaN(nights)) && arrival && departure) {
+    let nights = Number(this.context.nights || this.context['间夜数'] || 0);
+    if ((!nights || Number.isNaN(nights) || nights <= 0) && arrival && departure) {
       const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
-      nights = diff > 0 ? diff : 1;
+      nights = diff > 0 ? diff : 0;
     }
+    nights = Math.max(1, nights || 1);
 
     const quantity = Math.max(1, Number(this.context.roomCount || this.context['房间间数'] || 1));
     const rawTotal = Number(this.context.floorPrice ?? this.context['结算底价'] ?? this.context.salePrice ?? 0);
@@ -666,8 +700,11 @@ export class MeituanOrderProtocol implements IChannelOrderProtocol {
       const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
       pricing = Array.from({ length: nights }, (_, i) => {
         const d = new Date(`${arrival}T00:00:00.000Z`);
-        d.setUTCDate(d.getUTCDate() + i);
-        return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+        if (!Number.isNaN(d.getTime())) {
+          d.setUTCDate(d.getUTCDate() + i);
+          return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+        }
+        return { date: arrival, price: nightlyPrice };
       });
     }
 
@@ -691,7 +728,7 @@ export class MeituanOrderProtocol implements IChannelOrderProtocol {
         quantity,
         totalPrice,
         floorPrice,
-        paytype: '预付',
+        paytype,
         pricing,
       },
       remark: renderedRemark,
@@ -732,8 +769,32 @@ export function cleanMeituanOrder(
   if (data.checkOutDateString == null && (data.checkOutDate != null || data.departure != null)) {
     data.checkOutDateString = String(data.checkOutDate ?? data.departure);
   }
+  if (data.goodsId == null && data.roomTypeId != null) {
+    data.goodsId = data.roomTypeId;
+  }
+  if (data.goodsId == null && data.roomId != null) {
+    data.goodsId = data.roomId;
+  }
   if (data.floorPrice == null) {
-    data.floorPrice = data.totalFee ?? data.price ?? data.totalPrice;
+    if (data.totalFee != null) {
+      data.floorPrice = data.totalFee;
+    } else if (data.price != null) {
+      data.floorPrice = data.price;
+    } else if (data.totalPrice != null) {
+      const numTotal = Number(data.totalPrice);
+      data.floorPrice = Number.isFinite(numTotal) ? Math.round(numTotal * 100) : 0;
+    }
+  }
+  if (data.ratePlanName == null) {
+    if (data.ratePlanCode != null) {
+      data.ratePlanName = data.ratePlanCode;
+    } else if (data.crsPromotionCode != null && String(data.crsPromotionCode).trim() !== '') {
+      data.ratePlanName = data.crsPromotionCode;
+    } else if (data.goodsName != null) {
+      data.ratePlanName = data.goodsName;
+    } else if (data.roomName != null) {
+      data.ratePlanName = data.roomName;
+    }
   }
   if (data.guestName && (!Array.isArray(data.guests) || data.guests.length === 0)) {
     data.guests = [{ name: data.guestName }];
@@ -767,6 +828,22 @@ export function cleanMeituanOrder(
   if (context.roomTypeId) context['房型ID'] = context.roomTypeId;
   if (context.roomTypeId) context['房型商品ID'] = context.roomTypeId;
   if (context.rateCode) context['价格方案'] = context.rateCode;
+
+  // 补齐并归一化支付方式 (0/PP -> 预付, 1/PS -> 现付)
+  const rawPaymentType = context.paytype ?? data.paymentType ?? data.payType ?? (rawRecord as Record<string, unknown>).paymentType;
+  if (rawPaymentType != null) {
+    const pStr = String(rawPaymentType).trim().toUpperCase();
+    if (pStr === '0' || pStr === 'PP' || pStr.includes('预付') || pStr === 'PREPAY') {
+      context.paytype = '预付';
+    } else if (pStr === '1' || pStr === 'PS' || pStr.includes('现付') || pStr.includes('到付') || pStr === 'POSTPAY') {
+      context.paytype = '现付';
+    } else {
+      context.paytype = pStr;
+    }
+  }
+  if (context.paytype) {
+    context['支付方式'] = context.paytype;
+  }
 
   // 计算间夜数
   if (!context.nights && context.checkInDate && context.checkOutDate) {

@@ -8,6 +8,12 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
     "types": ["node", "electron"]
   },
   "include": ["./**/*", "../src/crawler/types.ts"]

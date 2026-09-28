@@ -20,7 +20,7 @@ describe('Meituan catalog config lazy evaluation', () => {
     const module = await import('../../src/crawler/collectors/meituan/meituanStoreMapper');
 
     expect(() => module.getDefaultMeituanCatalogUrl()).toThrow(
-      '未配置渠道「MEITUAN」的目标访问地址'
+      '未配置渠道「MEITUAN」的产品采集地址'
     );
   });
 });

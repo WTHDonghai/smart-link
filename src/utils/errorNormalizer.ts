@@ -139,14 +139,19 @@ export function normalizeAppError(
     };
   }
 
-  // 凭据失效特征 (401 / invalid_grant / invalid_token / token 刷新失败)
+  // 凭据失效特征 (401 / invalid_grant / invalid_token / 认证信息错误或无效 / token 刷新失败)
   if (
     (statusCode === 401 && (fallbackDomain === 'AUTH' || lowerMsg.includes('token') || lowerMsg.includes('oauth') || lowerMsg.includes('auth'))) ||
     lowerMsg.includes('invalid_grant') ||
     lowerMsg.includes('invalid_token') ||
     lowerMsg.includes('unauthorized_client') ||
     lowerMsg.includes('token 已过期') ||
-    lowerMsg.includes('未找到 refresh_token')
+    lowerMsg.includes('token已过期') ||
+    lowerMsg.includes('token无效') ||
+    lowerMsg.includes('认证信息错误') ||
+    lowerMsg.includes('认证信息无效') ||
+    lowerMsg.includes('未找到 refresh_token') ||
+    lowerMsg.includes('2004')
   ) {
     return {
       ...ERROR_DICTIONARY.AUTH_CRED_INVALID,

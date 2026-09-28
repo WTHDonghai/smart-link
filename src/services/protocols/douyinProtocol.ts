@@ -3,7 +3,14 @@
  * 深度清洗并裁剪为 16 项高频核心业务指标
  */
 
-import type { ChannelProtocolSchema } from '../../types/template';
+import type {
+  ChannelProtocolSchema,
+  CleanOrderContext,
+  IChannelOrderProtocol,
+  OrderProtocolPricing,
+  UnifiedOrderProtocol,
+} from '../../types/template';
+import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
 
 /** 抖音真实订单协议样本数据 (源自生产采集报文) */
 export const DOUYIN_RAW_SAMPLE_ORDER = {
@@ -266,6 +273,26 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       description: '预订房间数量',
       enabled: true,
     },
+    {
+      key: 'roomTypeId',
+      label: '房型商品ID',
+      path: 'sale_product_info.product_id',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '1874664066064411',
+      description: '抖音房型商品或团购商品ID',
+      enabled: true,
+    },
+    {
+      key: 'rateCode',
+      label: '价格方案',
+      path: 'sale_product_info.product_type_name',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '预售券',
+      description: '抖音价格方案或产品类型',
+      enabled: true,
+    },
 
     // 3. 入离时间 (10位秒级时间戳)
     {
@@ -335,6 +362,16 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       description: '套餐售卖挂牌原价 (元)',
       enabled: true,
     },
+    {
+      key: 'paytype',
+      label: '支付方式',
+      path: 'order_base_info.pay_type',
+      category: 'finance',
+      transform: 'string',
+      sampleValue: '预付',
+      description: '抖音支付方式 (预付/现付)',
+      enabled: true,
+    },
 
     // 6. 权益礼遇
     {
@@ -380,3 +417,211 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     },
   ],
 };
+
+/**
+ * 抖音订单协议封装实体
+ */
+export class DouyinOrderProtocol implements IChannelOrderProtocol {
+  public readonly channelCode = 'DOUYIN';
+  public readonly context: CleanOrderContext;
+  public readonly raw: Record<string, unknown>;
+
+  constructor(context: CleanOrderContext, raw: Record<string, unknown>) {
+    this.context = context;
+    this.raw = raw;
+  }
+
+  public get(key: string): unknown {
+    return this.context[key];
+  }
+
+  public getTemplateVariables(): CleanOrderContext {
+    return this.context;
+  }
+
+  /**
+   * 将抖音专属订单数据投影为中台标准 UnifiedOrderProtocol
+   */
+  public toUnifiedOrder(renderedRemark: string): UnifiedOrderProtocol {
+    const otaOrderId = String(
+      this.context.orderNo ||
+      this.context.otaOrderId ||
+      this.context.bookOrderId ||
+      this.context['抖音单号'] ||
+      ''
+    ).trim();
+
+    const unitId = String(this.context.unitId || this.context.hotelId || this.context['门店ID'] || '').trim() || undefined;
+    const unitName = String(this.context.unitName || this.context.hotelName || this.context['门店名称'] || '').trim() || undefined;
+
+    const guestName = String(
+      this.context.guestName ||
+      this.context['入住人'] ||
+      ''
+    ).trim();
+
+    const guestMobile = String(
+      this.context.guestPhone ||
+      this.context['联系电话'] ||
+      ''
+    ).trim();
+
+    const roomTypeName = String(
+      this.context.roomName ||
+      this.context.productName ||
+      this.context['房型名称'] ||
+      ''
+    ).trim();
+
+    const arrival = String(this.context.checkInDate || this.context['入住日期'] || '').slice(0, 10);
+    const departure = String(this.context.checkOutDate || this.context['离店日期'] || '').slice(0, 10);
+
+    let nights = Number(this.context.nights || this.context['间夜数'] || 0);
+    if ((!nights || Number.isNaN(nights) || nights <= 0) && arrival && departure) {
+      const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
+      nights = diff > 0 ? diff : 0;
+    }
+    nights = Math.max(1, nights || 1);
+
+    const quantity = Math.max(1, Number(this.context.roomCount || this.context['房间间数'] || 1));
+    const totalPrice = Number(this.context.payAmount ?? this.context.totalAmount ?? 0);
+    const floorPrice = totalPrice;
+
+    // 按日价格计算：直接消费 context.pricing，若无则根据间夜平摊推导
+    let pricing: OrderProtocolPricing[] = [];
+    if (Array.isArray(this.context.pricing) && this.context.pricing.length > 0) {
+      pricing = this.context.pricing as OrderProtocolPricing[];
+    } else if (Array.isArray(this.context['每日价格']) && (this.context['每日价格'] as OrderProtocolPricing[]).length > 0) {
+      pricing = this.context['每日价格'] as OrderProtocolPricing[];
+    } else if (arrival && departure) {
+      const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
+      pricing = Array.from({ length: nights }, (_, i) => {
+        const d = new Date(`${arrival}T00:00:00.000Z`);
+        if (!Number.isNaN(d.getTime())) {
+          d.setUTCDate(d.getUTCDate() + i);
+          return { date: d.toISOString().slice(0, 10), price: nightlyPrice };
+        }
+        return { date: arrival, price: nightlyPrice };
+      });
+    }
+
+    const roomTypeId = String(
+      this.context.roomTypeId ||
+      this.context['房型商品ID'] ||
+      this.context['房型ID'] ||
+      this.context.productId ||
+      ''
+    ).trim();
+    if (!roomTypeId) {
+      throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 房型商品ID (roomTypeId)`);
+    }
+
+    const rateCode = String(
+      this.context.rateCode ||
+      this.context['价格方案'] ||
+      ''
+    ).trim();
+    if (!rateCode) {
+      throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 价格方案 (rateCode)`);
+    }
+
+    const paytype = String(
+      this.context.paytype ||
+      this.context['支付方式'] ||
+      '预付'
+    ).trim();
+    if (!paytype) {
+      throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 支付方式 (paytype)`);
+    }
+
+    return {
+      otaOrderId,
+      otaChannel: this.channelCode,
+      unitId,
+      unitName,
+      contact: {
+        name: guestName,
+        mobile: guestMobile,
+      },
+      booking: {
+        roomTypeName,
+        originRoomType: roomTypeName,
+        roomTypeId,
+        rateCode,
+        arrival,
+        departure,
+        nights,
+        quantity,
+        totalPrice,
+        floorPrice,
+        paytype,
+        pricing,
+      },
+      remark: renderedRemark,
+      rawPayload: this.raw,
+    };
+  }
+}
+
+/**
+ * 抖音订单原始报文清洗入口函数
+ */
+export function cleanDouyinOrder(
+  rawPayload: unknown,
+  customSchema?: ChannelProtocolSchema | null,
+  targetOrderId?: string
+): DouyinOrderProtocol {
+  if (!rawPayload || typeof rawPayload !== 'object') {
+    throw new Error('[DouyinProtocol] 抖音订单原始报文为空或非合法对象');
+  }
+
+  const rawRecord = rawPayload as Record<string, unknown>;
+  const schema = customSchema || DEFAULT_DOUYIN_PROTOCOL_SCHEMA;
+
+  // 定位抖音数据层
+  const data = (rawRecord.data && typeof rawRecord.data === 'object' ? rawRecord.data : rawRecord) as Record<string, unknown>;
+
+  const context = normalizeOrderPayload(data, schema);
+
+  if (!context.orderNo && targetOrderId) {
+    context.orderNo = targetOrderId;
+    context['抖音单号'] = targetOrderId;
+  }
+  if (context.orderNo) {
+    context['OTA订单号'] = context.orderNo;
+    context['抖音单号'] = context.orderNo;
+    context.otaOrderId = context.orderNo;
+  }
+
+  if (context.hotelId) context.unitId = context.hotelId;
+  if (context.hotelName) context.unitName = context.hotelName;
+
+  if (context.roomTypeId) {
+    context['房型ID'] = context.roomTypeId;
+    context['房型商品ID'] = context.roomTypeId;
+  } else if (data.book_product_info && typeof data.book_product_info === 'object' && (data.book_product_info as Record<string, unknown>).product_id) {
+    context.roomTypeId = String((data.book_product_info as Record<string, unknown>).product_id);
+    context['房型ID'] = context.roomTypeId;
+    context['房型商品ID'] = context.roomTypeId;
+  }
+  if (context.rateCode) {
+    context['价格方案'] = context.rateCode;
+  }
+
+  // 补齐并归一化支付方式 (预付/现付)
+  if (!context.paytype) {
+    const rawPay = (data.order_base_info as Record<string, unknown> | undefined)?.pay_type ?? data.pay_type;
+    if (rawPay != null) {
+      const pStr = String(rawPay).trim();
+      context.paytype = pStr === '1' || pStr.includes('现付') ? '现付' : '预付';
+    } else if (data.sale_product_info || data.amount_info) {
+      context.paytype = '预付';
+    }
+  }
+  if (context.paytype) {
+    context['支付方式'] = context.paytype;
+  }
+
+  return new DouyinOrderProtocol(context, rawRecord);
+}
+
