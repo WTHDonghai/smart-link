@@ -1,5 +1,6 @@
 import { SystemLogEntry, LogFilterParams } from '../types';
 import { compileLogQuery, evaluateLogQuery, LogDateBounds } from '../utils/logQuery';
+import { resolveTaskActionStage } from '../utils/taskStage';
 
 export const LOG_DB_NAME = 'SmartLink_LogDB';
 export const LOG_STORE_NAME = 'logs';
@@ -152,18 +153,122 @@ export function resolveQueryBounds(filter?: LogFilterParams): ParsedDateBounds {
   return { startMs: startBound, endMs: endBound, hasInvalidInput: false };
 }
 
+export function isAdvancedSearchSyntax(search: string): boolean {
+  if (!search) return false;
+  return (
+    search.includes(':') ||
+    search.includes('(') ||
+    search.includes(')') ||
+    search.includes('"') ||
+    search.includes("'") ||
+    /\b(AND|OR|NOT)\b/i.test(search)
+  );
+}
+
 /**
  * 统一多维日志过滤断言纯函数
- * 所有维度统一编译为 liqe 查询表达式，由单一 AST 引擎裁决
+ * 优先执行零内存分配快速路径（Fast-Path），仅在包含高级查询语法时调用 LiQE AST 引擎
  */
 export function matchesLogFilter(
   entry: SystemLogEntry,
   filter?: LogFilterParams,
-  bounds?: LogDateBounds & { hasInvalidInput?: boolean }
+  bounds?: LogDateBounds & { hasInvalidInput?: boolean },
+  precompiledQuery?: string
 ): boolean {
   if (bounds?.hasInvalidInput) return false;
   if (!filter) return true;
-  return evaluateLogQuery(entry, compileLogQuery(filter, bounds));
+
+  // 1. 日期边界保护 (时间戳快速比对)
+  if (bounds?.startMs !== null && bounds?.startMs !== undefined && entry.createdAt < bounds.startMs) {
+    return false;
+  }
+  if (bounds?.endMs !== null && bounds?.endMs !== undefined && entry.createdAt > bounds.endMs) {
+    return false;
+  }
+
+  // 2. 检查是否包含高级 LiQE 查询语法（如 "field:value", "(", ")", "AND", "OR"）
+  const searchTrimmed = filter.search?.trim();
+  const hasAdvancedSyntax = Boolean(searchTrimmed && isAdvancedSearchSyntax(searchTrimmed));
+
+  if (hasAdvancedSyntax) {
+    const compiled = precompiledQuery ?? compileLogQuery(filter, bounds);
+    return evaluateLogQuery(entry, compiled);
+  }
+
+  // 3. Fast-path 字段直接比对（零内存分配，微秒级执行）
+  if (filter.level && filter.level !== 'ALL') {
+    if (entry.level !== filter.level) return false;
+  }
+
+  if (filter.onlyErrors) {
+    if (entry.level !== 'ERROR' && entry.level !== 'WARN') return false;
+  }
+
+  if (filter.module && filter.module !== 'ALL') {
+    if (filter.module === 'API') {
+      const isApi = entry.module === 'API' || !!entry.apiUrl || entry.event?.startsWith('API_');
+      if (!isApi) return false;
+    } else if (entry.module !== filter.module) {
+      return false;
+    }
+  }
+
+  if (filter.channelId && filter.channelId !== 'ALL') {
+    if (entry.channelId?.toLowerCase() !== filter.channelId.toLowerCase()) return false;
+  }
+
+  if (filter.event && filter.event !== 'ALL') {
+    if (entry.event !== filter.event) return false;
+  }
+
+  if (filter.taskId?.trim()) {
+    const targetTaskId = filter.taskId.trim().toLowerCase();
+    if (!entry.taskId?.toLowerCase().includes(targetTaskId)) return false;
+  }
+
+  if (filter.orderNo?.trim()) {
+    const targetOrderNo = filter.orderNo.trim().toLowerCase();
+    const orderNo = entry.orderNo?.toLowerCase() ?? '';
+    const msg = entry.message?.toLowerCase() ?? '';
+    const details = entry.details?.toLowerCase() ?? '';
+    if (!orderNo.includes(targetOrderNo) && !msg.includes(targetOrderNo) && !details.includes(targetOrderNo)) {
+      return false;
+    }
+  }
+
+  if (filter.taskActionStage && filter.taskActionStage !== 'ALL') {
+    const expected = filter.taskActionStage.toLowerCase().replace(/_/g, '-');
+    const actual = (entry.taskActionStage || resolveTaskActionStage(entry)).toLowerCase().replace(/_/g, '-');
+    if (actual !== expected) return false;
+  }
+
+  // 4. 普通搜索关键字快速匹配（先检索文本标量字段，避免无意义的 API payload 反序列化与格式化）
+  if (searchTrimmed) {
+    const s = searchTrimmed.toLowerCase();
+    const matchesSearch =
+      Boolean(entry.message?.toLowerCase().includes(s)) ||
+      Boolean(entry.orderNo?.toLowerCase().includes(s)) ||
+      Boolean(entry.taskId?.toLowerCase().includes(s)) ||
+      Boolean(entry.details?.toLowerCase().includes(s)) ||
+      Boolean(entry.event?.toLowerCase().includes(s)) ||
+      Boolean(entry.apiUrl?.toLowerCase().includes(s)) ||
+      Boolean(entry.channelId?.toLowerCase().includes(s)) ||
+      Boolean(entry.msgType?.toLowerCase().includes(s)) ||
+      (entry.apiParams !== undefined &&
+        (typeof entry.apiParams === 'string'
+          ? entry.apiParams
+          : JSON.stringify(entry.apiParams)
+        ).toLowerCase().includes(s)) ||
+      (entry.apiResponse !== undefined &&
+        (typeof entry.apiResponse === 'string'
+          ? entry.apiResponse
+          : JSON.stringify(entry.apiResponse)
+        ).toLowerCase().includes(s));
+
+    if (!matchesSearch) return false;
+  }
+
+  return true;
 }
 
 /**
@@ -230,6 +335,7 @@ export class LogStorageService {
   private dbInstance: IDBDatabase | null = null;
   private memoryFallback: MemoryLogStorage = new MemoryLogStorage();
   private isIndexedDBAvailable: boolean;
+  private activeQueryId = 0;
 
   constructor() {
     this.isIndexedDBAvailable = typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
@@ -328,6 +434,8 @@ export class LogStorageService {
       return this.memoryFallback.queryLogs(filter, options);
     }
 
+    const queryId = ++this.activeQueryId;
+
     return new Promise((resolve, reject) => {
       try {
         const tx = db.transaction(LOG_STORE_NAME, 'readonly');
@@ -358,13 +466,25 @@ export class LogStorageService {
           : index.openCursor(null, 'prev');
 
         const activeBounds: LogDateBounds = { startMs: startBound, endMs: endBound };
+        const searchTrimmed = filter?.search?.trim();
+        const hasAdvanced = Boolean(searchTrimmed && isAdvancedSearchSyntax(searchTrimmed));
+        const precompiled = hasAdvanced ? compileLogQuery(filter!, activeBounds) : undefined;
+        let scannedCount = 0;
+        const maxScan = 10000;
 
         cursorRequest.onsuccess = (event) => {
+          // 若在此期间有更新的查询到达，即刻中止当前陈旧查询，释放游标与内存
+          if (queryId !== this.activeQueryId) {
+            resolve([]);
+            return;
+          }
+
           const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
-          if (cursor) {
+          if (cursor && scannedCount < maxScan) {
+            scannedCount++;
             const entry = cursor.value as SystemLogEntry;
 
-            if (matchesLogFilter(entry, filter, activeBounds)) {
+            if (matchesLogFilter(entry, filter, activeBounds, precompiled)) {
               results.push(entry);
             }
 
@@ -385,14 +505,20 @@ export class LogStorageService {
         };
 
         tx.onerror = (event) => {
-          reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
+          if (queryId === this.activeQueryId) {
+            reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
+          }
         };
 
         cursorRequest.onerror = (event) => {
-          reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
+          if (queryId === this.activeQueryId) {
+            reject(reportIndexedDBOperationError('queryLogs', readIndexedDBEventError(event)));
+          }
         };
       } catch (error: unknown) {
-        reject(reportIndexedDBOperationError('queryLogs', error));
+        if (queryId === this.activeQueryId) {
+          reject(reportIndexedDBOperationError('queryLogs', error));
+        }
       }
     });
   }

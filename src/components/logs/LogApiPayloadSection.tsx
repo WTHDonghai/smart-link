@@ -32,8 +32,8 @@ export const LogApiPayloadSection: React.FC<LogApiPayloadSectionProps> = ({
   if (!hasApiInfo) return null;
 
   const method = (log.apiMethod || 'API').toUpperCase();
-  const paramsText = formatJsonPayload(log.apiParams);
-  const responseText = formatJsonPayload(log.apiResponse);
+  const paramsText = expanded ? formatJsonPayload(log.apiParams) : '';
+  const responseText = expanded ? formatJsonPayload(log.apiResponse) : '';
   const paramsKey = `${log.id}-params`;
   const responseKey = `${log.id}-response`;
 

@@ -3,6 +3,7 @@ import {
   LogStorageService,
   SEVEN_DAYS_MS,
   formatLogTimestamp,
+  isAdvancedSearchSyntax,
   matchesLogFilter,
   parseDateBounds,
 } from '../../src/services/logStorage';
@@ -599,6 +600,61 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       await storage.clearAllStoredLogs();
       expect(await storage.countLogs()).toBe(0);
       expect(await storage.queryLogs()).toEqual([]);
+    });
+  });
+
+  describe('isAdvancedSearchSyntax & Fast-Path Query Engine', () => {
+    it('正确区分普通关键词与高级 LiQE 语法', () => {
+      // 普通关键词（走 Fast-Path，零 LiQE AST 与序列化开销）
+      expect(isAdvancedSearchSyntax('')).toBe(false);
+      expect(isAdvancedSearchSyntax('美团管家')).toBe(false);
+      expect(isAdvancedSearchSyntax('1116956085050906669')).toBe(false);
+      expect(isAdvancedSearchSyntax('normal search words')).toBe(false);
+
+      // 高级语法（冒号、引号、括号、布尔操作符）
+      expect(isAdvancedSearchSyntax('level:ERROR')).toBe(true);
+      expect(isAdvancedSearchSyntax('module:"API"')).toBe(true);
+      expect(isAdvancedSearchSyntax('(order AND error)')).toBe(true);
+      expect(isAdvancedSearchSyntax('foo OR bar')).toBe(true);
+      expect(isAdvancedSearchSyntax('NOT success')).toBe(true);
+      expect(isAdvancedSearchSyntax("status:'failed'")).toBe(true);
+    });
+
+    it('Fast-Path 模式下能够高效精准匹配常规标量字段与深度负载', () => {
+      const sampleEntry: SystemLogEntry = {
+        id: 'fast-log-1',
+        timestamp: '2026-09-29 10:00:00.000',
+        createdAt: 1727575200000,
+        level: 'INFO',
+        module: 'ORDER',
+        message: '用户成功完成订单处理',
+        orderNo: 'MT-888999',
+        taskId: 'task-fast-1',
+        details: '详细备注信息',
+        channelId: 'meituan',
+        msgType: 'OTA_IMPORT_ORDER',
+        apiParams: { guestName: '王五' },
+        apiResponse: { code: 0, orderStatus: 'CONFIRMED' },
+      };
+
+      // 文本搜索命中 message
+      expect(matchesLogFilter(sampleEntry, { search: '订单处理' })).toBe(true);
+      // 文本搜索命中 orderNo
+      expect(matchesLogFilter(sampleEntry, { search: '888999' })).toBe(true);
+      // 文本搜索命中 details
+      expect(matchesLogFilter(sampleEntry, { search: '详细备注' })).toBe(true);
+      // 文本搜索命中 msgType
+      expect(matchesLogFilter(sampleEntry, { search: 'OTA_IMPORT_ORDER' })).toBe(true);
+      // 文本搜索命中 apiParams 中的深层值
+      expect(matchesLogFilter(sampleEntry, { search: '王五' })).toBe(true);
+      // 文本搜索命中 apiResponse 中的深层值
+      expect(matchesLogFilter(sampleEntry, { search: 'CONFIRMED' })).toBe(true);
+      // 不匹配的搜索词返回 false
+      expect(matchesLogFilter(sampleEntry, { search: '不存在的内容' })).toBe(false);
+
+      // 组合条件：模块与级别匹配
+      expect(matchesLogFilter(sampleEntry, { module: 'ORDER', level: 'INFO', search: '王五' })).toBe(true);
+      expect(matchesLogFilter(sampleEntry, { module: 'AUTH', level: 'INFO' })).toBe(false);
     });
   });
 });

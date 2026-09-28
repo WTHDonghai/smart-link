@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parse } from 'liqe';
 import {
   compileLogQuery,
@@ -254,6 +254,42 @@ describe('logQuery (基于 liqe 的专业日志查询引擎)', () => {
     it('对空输入返回 null', () => {
       expect(getParsedAst('')).toBeNull();
       expect(getParsedAst('   ')).toBeNull();
+    });
+  });
+
+  describe('prepareLogForEvaluation 惰性求值与内存保护', () => {
+    it('对于仅按 level / module 过滤的查询，不应预先对 apiParams 或 apiResponse 执行 JSON 序列化', () => {
+      const stringifySpy = vi.spyOn(JSON, 'stringify');
+
+      const heavyLog = createMockLog({
+        level: 'INFO',
+        module: 'ORDER',
+        apiParams: { nested: { a: 1, b: 2 } },
+        apiResponse: { code: 0, items: [1, 2, 3] },
+      });
+
+      try {
+        // 仅匹配 level，不访问 fullText、apiParamsText 或 apiResponseText
+        const levelQuery = compileLogQuery({ level: 'INFO' });
+        const result = evaluateLogQuery(heavyLog, levelQuery);
+
+        expect(result).toBe(true);
+        // 断言：由于惰性 getter 机制，不需要序列化 apiParams / apiResponse
+        expect(stringifySpy).not.toHaveBeenCalled();
+      } finally {
+        stringifySpy.mockRestore();
+      }
+    });
+
+    it('当且仅当查询涉及 fullText 或对应属性时，按需惰性生成并缓存序列化文本', () => {
+      const heavyLog = createMockLog({
+        level: 'INFO',
+        apiParams: { orderToken: 'secret-token-xyz' },
+      });
+
+      // 搜索关键字命中 apiParams 中的内容
+      const searchCompiled = compileLogQuery({ search: 'secret-token-xyz' });
+      expect(evaluateLogQuery(heavyLog, searchCompiled)).toBe(true);
     });
   });
 });

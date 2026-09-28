@@ -179,7 +179,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
     const timer = setTimeout(() => {
       void dispatch(queryLogsFromStorage(filterParams));
-    }, filterSearch ? 250 : 0);
+    }, filterSearch ? 250 : 50);
 
     return () => clearTimeout(timer);
   }, [

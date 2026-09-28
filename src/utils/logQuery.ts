@@ -164,9 +164,10 @@ function prepareLogForEvaluation(entry: SystemLogEntry): PreparedLog {
   const level = (entry.level || '').toUpperCase();
   const message = entry.message || '';
   const details = entry.details || '';
-  const paramsText = entry.apiParams !== undefined ? JSON.stringify(entry.apiParams) : '';
-  const responseText = entry.apiResponse !== undefined ? JSON.stringify(entry.apiResponse) : '';
   const event = entry.event || '';
+  let paramsTextCache: string | null = null;
+  let responseTextCache: string | null = null;
+  let fullTextCache: string | null = null;
 
   const result: PreparedLog = {
     ...entry,
@@ -178,11 +179,43 @@ function prepareLogForEvaluation(entry: SystemLogEntry): PreparedLog {
     msgType,
     channelId,
     apiUrl,
-    apiParamsText: paramsText,
-    apiResponseText: responseText,
     event,
-    fullText: `${message} ${details} ${orderNo} ${taskId} ${msgType} ${channelId} ${apiUrl} ${event} ${paramsText} ${responseText}`,
   };
+
+  Object.defineProperties(result, {
+    apiParamsText: {
+      get() {
+        if (paramsTextCache === null) {
+          paramsTextCache = entry.apiParams !== undefined ? JSON.stringify(entry.apiParams) : '';
+        }
+        return paramsTextCache;
+      },
+      enumerable: true,
+      configurable: true,
+    },
+    apiResponseText: {
+      get() {
+        if (responseTextCache === null) {
+          responseTextCache = entry.apiResponse !== undefined ? JSON.stringify(entry.apiResponse) : '';
+        }
+        return responseTextCache;
+      },
+      enumerable: true,
+      configurable: true,
+    },
+    fullText: {
+      get() {
+        if (fullTextCache === null) {
+          const pt = paramsTextCache ?? (entry.apiParams !== undefined ? JSON.stringify(entry.apiParams) : '');
+          const rt = responseTextCache ?? (entry.apiResponse !== undefined ? JSON.stringify(entry.apiResponse) : '');
+          fullTextCache = `${message} ${details} ${orderNo} ${taskId} ${msgType} ${channelId} ${apiUrl} ${event} ${pt} ${rt}`;
+        }
+        return fullTextCache;
+      },
+      enumerable: true,
+      configurable: true,
+    },
+  });
 
   preparedCache.set(entry, result);
   return result;

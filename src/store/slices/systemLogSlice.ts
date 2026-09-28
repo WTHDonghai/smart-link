@@ -46,7 +46,7 @@ export const hydrateLogsFromStorage = createAsyncThunk(
 export const queryLogsFromStorage = createAsyncThunk(
   'systemLog/queryLogsFromStorage',
   async (filterParams: LogFilterParams | undefined) => {
-    return logger.queryLogs(filterParams, { limit: 2000 });
+    return logger.queryLogs(filterParams, { limit: 500 });
   }
 );
 
@@ -151,7 +151,7 @@ export const systemLogSlice = createSlice({
         if (state.historicalLogs !== null && matchesActiveFilter(entry, state)) {
           if (!state.historicalLogs.some((l) => l.id === entry.id)) {
             state.historicalLogs.unshift(entry);
-            if (state.historicalLogs.length > 2000) {
+            if (state.historicalLogs.length > 500) {
               state.historicalLogs.pop();
             }
           }
@@ -208,8 +208,8 @@ export const systemLogSlice = createSlice({
         );
         if (matching.length > 0) {
           state.historicalLogs.unshift(...matching);
-          if (state.historicalLogs.length > 2000) {
-            state.historicalLogs.splice(2000);
+          if (state.historicalLogs.length > 500) {
+            state.historicalLogs.splice(500);
           }
         }
       }
