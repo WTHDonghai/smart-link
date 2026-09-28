@@ -385,6 +385,12 @@ export async function ensureInitialConfirmImportSynced(): Promise<void> {
   await initialConfirmImportSyncPromise;
 }
 
+let lastSyncedDutyLogTime = 0;
+
+export function resetDutyLogSyncCursor(): void {
+  lastSyncedDutyLogTime = 0;
+}
+
 /**
  * 同步当前全盘值守状态与调度任务日志
  */
@@ -392,8 +398,13 @@ export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
   async (_, { getState, dispatch }) => {
     await ensureInitialConfirmImportSynced();
-    const res = await queryDutyStatus();
+    const res = await queryDutyStatus(lastSyncedDutyLogTime);
     if (res.logs && res.logs.length > 0) {
+      for (const log of res.logs) {
+        if (log.createdAt > lastSyncedDutyLogTime) {
+          lastSyncedDutyLogTime = log.createdAt;
+        }
+      }
       dispatch(addLogs(res.logs));
     }
 

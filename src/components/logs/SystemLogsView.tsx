@@ -13,6 +13,7 @@ import {
   toggleAutoScroll,
   clearLogs,
   clearAllLogs,
+  queryLogsFromStorage,
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
@@ -47,6 +48,8 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 }) => {
   const dispatch = useAppDispatch();
   const logs = useAppSelector((state) => state.systemLog.logs);
+  const historicalLogs = useAppSelector((state) => state.systemLog.historicalLogs);
+  const isQuerying = useAppSelector((state) => state.systemLog.isQuerying);
   const filterLevel = useAppSelector((state) => state.systemLog.filterLevel);
   const filterModule = useAppSelector((state) => state.systemLog.filterModule);
   const filterSearch = useAppSelector((state) => state.systemLog.filterSearch);
@@ -110,7 +113,31 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  const isFilterActive = useMemo(() => {
+    return (
+      filterLevel !== 'ALL' ||
+      filterModule !== 'ALL' ||
+      Boolean(filterSearch && filterSearch.trim()) ||
+      Boolean(filterStartDate && filterStartDate.trim()) ||
+      Boolean(filterEndDate && filterEndDate.trim()) ||
+      filterTaskStage !== 'ALL'
+    );
+  }, [
+    filterLevel,
+    filterModule,
+    filterSearch,
+    filterStartDate,
+    filterEndDate,
+    filterTaskStage,
+  ]);
+
   const filteredLogs = useMemo(() => {
+    // 1. 若当前存在活动筛选条件且已从 IndexedDB 持久化存储查询出完整历史结果，优先采用持久化历史结果
+    if (isFilterActive && historicalLogs !== null) {
+      return historicalLogs;
+    }
+
+    // 2. 实时流模式或内存/单测同步过滤模式
     const bounds = parseDateBounds(filterStartDate, filterEndDate);
     if (bounds.startMs !== null && bounds.endMs !== null && bounds.startMs > bounds.endMs) {
       return [];
@@ -127,12 +154,45 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
     return logs.filter((log) => matchesLogFilter(log, filterParams, bounds));
   }, [
+    isFilterActive,
+    historicalLogs,
     logs,
     filterLevel,
     filterModule,
     filterTaskStage,
     filterStartDate,
     filterEndDate,
+    filterSearch,
+  ]);
+
+  // 当存在活动筛选条件时，自动触发从 IndexedDB 持久化存储执行深层历史查询（搜索输入轻量防抖）
+  useEffect(() => {
+    if (!isFilterActive) {
+      return;
+    }
+
+    const filterParams: LogFilterParams = {
+      level: filterLevel,
+      module: filterModule,
+      startDate: filterStartDate,
+      endDate: filterEndDate,
+      taskActionStage: filterTaskStage,
+      search: filterSearch,
+    };
+
+    const timer = setTimeout(() => {
+      void dispatch(queryLogsFromStorage(filterParams));
+    }, filterSearch ? 250 : 0);
+
+    return () => clearTimeout(timer);
+  }, [
+    dispatch,
+    isFilterActive,
+    filterLevel,
+    filterModule,
+    filterStartDate,
+    filterEndDate,
+    filterTaskStage,
     filterSearch,
   ]);
 
@@ -213,7 +273,15 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
             系统日志
           </h1>
           <span className="text-xs text-[#737686] ml-2">
-            共 <span className="font-mono font-medium text-[#0b1c30]">{logs.length}</span> 条记录
+            {isFilterActive ? (
+              <>
+                筛选命中 <span className="font-mono font-medium text-[#0b1c30]">{filteredLogs.length}</span> 条历史记录
+              </>
+            ) : (
+              <>
+                共 <span className="font-mono font-medium text-[#0b1c30]">{logs.length}</span> 条实时记录
+              </>
+            )}
           </span>
         </div>
 
@@ -518,7 +586,13 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
           </div>
 
           <div className="flex items-center gap-3 text-[11px]">
-            <span className="text-emerald-400">● 实时捕获中</span>
+            {isQuerying ? (
+              <span className="text-amber-400 animate-pulse">● 正在检索历史存储...</span>
+            ) : isFilterActive ? (
+              <span className="text-cyan-400">● 历史持久化过滤中</span>
+            ) : (
+              <span className="text-emerald-400">● 实时捕获中</span>
+            )}
             <span>当前显示 {filteredLogs.length} 条</span>
           </div>
         </div>
@@ -530,21 +604,27 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
         >
           {filteredLogs.length === 0 ? (
             <div className="py-12 flex flex-col items-center justify-center gap-2.5 text-gray-400 select-none">
-              <p className="text-xs">暂无匹配的系统运行日志</p>
-              {(filterLevel !== 'ALL' ||
-                filterModule !== 'ALL' ||
-                !!filterSearch ||
-                !!filterStartDate ||
-                !!filterEndDate ||
-                filterTaskStage !== 'ALL') && (
-                <button
-                  type="button"
-                  onClick={() => dispatch(resetLogFilters())}
-                  className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-600 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>清空所有筛选条件</span>
-                </button>
+              {isQuerying ? (
+                <p className="text-xs text-amber-400 animate-pulse">正在检索历史持久化记录...</p>
+              ) : (
+                <>
+                  <p className="text-xs">暂无匹配的系统运行日志</p>
+                  {(filterLevel !== 'ALL' ||
+                    filterModule !== 'ALL' ||
+                    !!filterSearch ||
+                    !!filterStartDate ||
+                    !!filterEndDate ||
+                    filterTaskStage !== 'ALL') && (
+                    <button
+                      type="button"
+                      onClick={() => dispatch(resetLogFilters())}
+                      className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-600 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>清空所有筛选条件</span>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           ) : (

@@ -14,6 +14,7 @@ import {
 } from '../../src/services/platformAuth';
 import { APP_ENV_KEYS } from '../../src/types/env';
 import type { HostBridgeApi, PlatformAuthTokens } from '../../src/types';
+import { logger } from '../../src/services/logger';
 
 describe('platformAuth - 动态提前刷新计算 (calculateRefreshTiming)', () => {
   it('应当对 10 分钟生命周期的 Token 提前 60 秒刷新 (10% 规则)', () => {
@@ -706,6 +707,45 @@ describe('platformAuth - 调度器容错与即时唤醒续期', () => {
     // 本地 Storage 依然保留旧 Token，杜绝数据被清空
     const currentStored = loadTokensFromStorage();
     expect(currentStored?.accessToken).toBe('expiring-access-token');
+  });
+
+  it('调度器在遭遇连续可重试网络错误时，对日志输出进行平滑降噪与指数退避', async () => {
+    const nearExpiryTokens: PlatformAuthTokens = {
+      accessToken: 'expiring-access-token',
+      refreshToken: 'valid-refresh-token',
+      expiresAt: Date.now() + 60 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://test-pms.hotel.com',
+      tenantId: 'XR-RETRY-THROTTLE',
+      authenticatedAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+    };
+    saveTokensToStorage(nearExpiryTokens);
+
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Network is unreachable'));
+
+    const loggedEvents: string[] = [];
+    const unsubscribe = logger.subscribe((entry) => {
+      if (entry.event === 'AUTH_REFRESH_RETRYABLE_ERROR') {
+        loggedEvents.push(entry.event);
+      }
+    });
+
+    try {
+      service.startRefreshScheduler(() => {});
+
+      // 连续触发 5 次检查重试
+      await service.checkAndRefreshImmediately(); // 第 1 次：应记录日志
+      await service.checkAndRefreshImmediately(); // 第 2 次：应降噪跳过
+      await service.checkAndRefreshImmediately(); // 第 3 次：应降噪跳过
+      await service.checkAndRefreshImmediately(); // 第 4 次：应降噪跳过
+      await service.checkAndRefreshImmediately(); // 第 5 次：应记录日志
+
+      // 严密断言：5 次重试中，只输出了 2 条日志 (第 1 次和第 5 次)，避免了满屏高频刷屏
+      expect(loggedEvents).toHaveLength(2);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('调度器在遭遇服务端明确返回 invalid_grant 终端失效时，清空存储并向回调传递致命错误', async () => {

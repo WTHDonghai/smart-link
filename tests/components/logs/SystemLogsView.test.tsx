@@ -10,6 +10,7 @@ import {
   setFilterDateRange,
   setFilterTaskStage,
   resetLogFilters,
+  setHistoricalLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import type { SystemLogEntry } from '../../../src/types';
 
@@ -816,5 +817,99 @@ describe('SystemLogsView 系统运行日志与任务调度视图', () => {
     expect(html).toContain('认领任务成功');
     expect(html).toContain('执行任务失败超时');
     expect(html).not.toContain('订单同步完成');
+  });
+
+  it('当从 IndexedDB 持久化存储检索到历史日志时，正确呈现在视图中并更新筛选命中计数', () => {
+    const store = createAppStore();
+
+    // 内存流仅包含常规近况日志
+    store.dispatch(
+      addLogs([
+        {
+          id: 'log-live-recent',
+          timestamp: '16:50:00',
+          createdAt: 9999,
+          level: 'INFO',
+          message: '最近实时日志',
+        },
+      ])
+    );
+
+    // 模拟从 IndexedDB 检索出的更早历史日志
+    const historicalResults: SystemLogEntry[] = [
+      {
+        id: 'log-hist-storage-1',
+        timestamp: '2026-09-12 10:00:00',
+        createdAt: 1000,
+        level: 'ERROR',
+        module: 'ORDER',
+        orderNo: 'MT-HIST-888',
+        message: '来自 IndexedDB 持久化存储的历史异常订单',
+      },
+    ];
+
+    // 激活搜索过滤并灌入持久化查询结果
+    store.dispatch(setFilterSearch('order:MT-HIST-888'));
+    store.dispatch(setHistoricalLogs(historicalResults));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+
+    // 验证历史记录成功呈现
+    expect(html).toContain('来自 IndexedDB 持久化存储的历史异常订单');
+    expect(html).toContain('订单号: MT-HIST-888');
+    expect(html).toContain('筛选命中');
+    expect(html).toContain('1');
+    expect(html).toContain('条历史记录');
+    expect(html).toContain('历史持久化过滤中');
+  });
+
+  it('当内存中的早期日志因超出 500 条上限被淘汰时，从存储查询仍能完整展现历史单号', () => {
+    const store = createAppStore();
+
+    // 1. 产生一条早期的历史单号日志
+    const earlyLog: SystemLogEntry = {
+      id: 'log-early-evicted',
+      timestamp: '2026-09-10 09:00:00',
+      createdAt: 1000,
+      level: 'INFO',
+      module: 'ORDER',
+      orderNo: 'MT-OLD-99999',
+      message: '早期处理订单 MT-OLD-99999',
+    };
+    store.dispatch(addLogs([earlyLog]));
+
+    // 2. 灌入 500 条新日志，使 earlyLog 从内存 logs 数组中被淘汰
+    const overflowBatch: SystemLogEntry[] = Array.from({ length: 500 }, (_, i) => ({
+      id: `log-stream-${i}`,
+      timestamp: '2026-09-10 12:00:00',
+      createdAt: 2000 + i,
+      level: 'INFO',
+      message: `实时流日志 #${i}`,
+    }));
+    store.dispatch(addLogs(overflowBatch));
+
+    // 严密断言：内存中已确切淘汰该日志
+    const memoryLogs = store.getState().systemLog.logs;
+    expect(memoryLogs.length).toBe(500);
+    expect(memoryLogs.some((l) => l.id === 'log-early-evicted')).toBe(false);
+
+    // 3. 此时用户搜索此历史单号，持久化存储查询将该历史日志命中回填
+    store.dispatch(setFilterSearch('order:MT-OLD-99999'));
+    store.dispatch(setHistoricalLogs([earlyLog]));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+
+    // 严密断言：视图成功展现已被内存淘汰的历史单号日志，解决「历史记录有时会丢失」缺陷
+    expect(html).toContain('早期处理订单 MT-OLD-99999');
+    expect(html).toContain('订单号: MT-OLD-99999');
+    expect(html).toContain('筛选命中 <span class="font-mono font-medium text-[#0b1c30]">1</span> 条历史记录');
   });
 });

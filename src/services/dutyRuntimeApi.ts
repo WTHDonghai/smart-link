@@ -96,6 +96,7 @@ export async function reportDutyActualState(payload: ActualStateReportPayload): 
   const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.ACTUAL_STATE_REPORT, {
     method: 'POST',
     body: JSON.stringify(payload),
+    silentSuccess: true,
   });
   unwrapDutyEnvelope(res);
 }
@@ -111,6 +112,7 @@ export async function claimDutyTask(
   const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_CLAIMS, {
     method: 'POST',
     timeoutMs,
+    silentSuccess: true,
     body: JSON.stringify({
       stationId: payload.stationId,
       appId: payload.appId,

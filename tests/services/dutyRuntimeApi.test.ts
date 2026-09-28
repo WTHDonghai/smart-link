@@ -136,6 +136,7 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
         DUTY_ENDPOINTS.ACTUAL_STATE_REPORT,
         expect.objectContaining({
           method: 'POST',
+          silentSuccess: true,
         })
       );
     });
@@ -151,6 +152,13 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
 
       const task = await claimDutyTask({ stationId: 'st-1', appId: 'smart-link' });
       expect(task).toBeNull();
+      expect(mockRequest).toHaveBeenCalledWith(
+        DUTY_ENDPOINTS.TASK_CLAIMS,
+        expect.objectContaining({
+          method: 'POST',
+          silentSuccess: true,
+        })
+      );
     });
 
     it('当领取到任务时返回任务对象', async () => {
@@ -171,6 +179,13 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
 
       const task = await claimDutyTask({ stationId: 'st-1', appId: 'smart-link' });
       expect(task).toEqual(mockTask);
+      expect(mockRequest).toHaveBeenCalledWith(
+        DUTY_ENDPOINTS.TASK_CLAIMS,
+        expect.objectContaining({
+          method: 'POST',
+          silentSuccess: true,
+        })
+      );
     });
   });
 

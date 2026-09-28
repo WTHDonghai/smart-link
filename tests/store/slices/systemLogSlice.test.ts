@@ -15,6 +15,8 @@ import systemLogReducer, {
   clearLogs,
   clearAllLogs,
   hydrateLogsFromStorage,
+  queryLogsFromStorage,
+  setHistoricalLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import type { SystemLogEntry, TaskActionStage } from '../../../src/types';
 
@@ -125,6 +127,20 @@ describe('systemLogSlice', () => {
 
       const enabledState = systemLogReducer(disabledState, toggleAutoScroll());
       expect(enabledState.isAutoScroll).toBe(true);
+    });
+
+    it('updates historicalLogs via setHistoricalLogs', () => {
+      const initialState = createInitialState();
+      expect(initialState.historicalLogs).toBeNull();
+
+      const mockLogs: SystemLogEntry[] = [
+        { id: 'hist-1', level: 'INFO', message: 'Historical log 1', timestamp: '2026-09-28 10:00:00.000', createdAt: 1789400000000 },
+      ];
+      const withLogs = systemLogReducer(initialState, setHistoricalLogs(mockLogs));
+      expect(withLogs.historicalLogs).toEqual(mockLogs);
+
+      const cleared = systemLogReducer(withLogs, setHistoricalLogs(null));
+      expect(cleared.historicalLogs).toBeNull();
     });
   });
 
@@ -358,45 +374,140 @@ describe('systemLogSlice', () => {
     });
   });
 
-  describe('clearLogs and clearAllLogs', () => {
-    it('clears active logs from state', () => {
+  describe('queryLogsFromStorage and historicalLogs integration', () => {
+    it('updates isQuerying and historicalLogs across lifecycle', () => {
       const initialState = createInitialState();
-      const withLog = systemLogReducer(
-        initialState,
-        addLog({
-          level: 'INFO',
-          message: '临时日志',
-        })
-      );
-      expect(withLog.logs.length).toBe(1);
+      expect(initialState.historicalLogs).toBeNull();
+      expect(initialState.isQuerying).toBe(false);
 
-      const clearedState = systemLogReducer(withLog, clearLogs());
-      expect(clearedState.logs).toEqual([]);
+      const pending = systemLogReducer(initialState, {
+        type: queryLogsFromStorage.pending.type,
+      });
+      expect(pending.isQuerying).toBe(true);
+
+      const mockResults: SystemLogEntry[] = [
+        {
+          id: 'hist-stored-1',
+          timestamp: '2026-09-10 10:00:00.000',
+          createdAt: 1000,
+          level: 'INFO',
+          module: 'ORDER',
+          orderNo: 'MT-HIST-999',
+          message: '历史持久化订单日志',
+        },
+      ];
+
+      const fulfilled = systemLogReducer(pending, {
+        type: queryLogsFromStorage.fulfilled.type,
+        payload: mockResults,
+      });
+      expect(fulfilled.isQuerying).toBe(false);
+      expect(fulfilled.historicalLogs).toEqual(mockResults);
+
+      const rejected = systemLogReducer(pending, {
+        type: queryLogsFromStorage.rejected.type,
+      });
+      expect(rejected.isQuerying).toBe(false);
     });
 
-    it('resets logs when clearAllLogs is pending or fulfilled', () => {
-      const withLog = {
+    it('clears historicalLogs when resetLogFilters or resetDateFilter without other filters is dispatched', () => {
+      const stateWithHist = {
         ...createInitialState(),
-        logs: [
+        historicalLogs: [
           {
-            id: 'log-1',
-            timestamp: '2026-09-17 12:00:00.000',
+            id: 'hist-1',
+            timestamp: '2026-09-10 10:00:00.000',
             createdAt: 1000,
             level: 'INFO' as const,
-            message: '测试待清理日志',
+            message: '历史记录',
+          },
+        ],
+        filterStartDate: '2026-09-10',
+        filterEndDate: '2026-09-12',
+      };
+
+      const resetFilters = systemLogReducer(stateWithHist, resetLogFilters());
+      expect(resetFilters.historicalLogs).toBeNull();
+
+      const resetDate = systemLogReducer(stateWithHist, resetDateFilter());
+      expect(resetDate.historicalLogs).toBeNull();
+    });
+
+    it('synchronizes incoming live logs into historicalLogs when matching current filter', () => {
+      const stateWithFilter = {
+        ...createInitialState(),
+        filterLevel: 'ERROR' as const,
+        historicalLogs: [
+          {
+            id: 'hist-err-1',
+            timestamp: '2026-09-10 10:00:00.000',
+            createdAt: 1000,
+            level: 'ERROR' as const,
+            message: '历史错误日志 1',
           },
         ],
       };
 
-      const pendingState = systemLogReducer(withLog, {
-        type: clearAllLogs.pending.type,
-      });
-      expect(pendingState.logs).toEqual([]);
+      // 1. 匹配 ERROR 筛选条件的日志被同步注入 historicalLogs
+      const nextMatching = systemLogReducer(
+        stateWithFilter,
+        addLog({
+          id: 'live-err-2',
+          level: 'ERROR',
+          message: '新增实时错误日志',
+        })
+      );
+      expect(nextMatching.logs[0].id).toBe('live-err-2');
+      expect(nextMatching.historicalLogs?.[0].id).toBe('live-err-2');
+      expect(nextMatching.historicalLogs?.length).toBe(2);
 
-      const fulfilledState = systemLogReducer(withLog, {
+      // 2. 不匹配的 INFO 日志只进入 logs，不污染 historicalLogs
+      const nextUnmatched = systemLogReducer(
+        nextMatching,
+        addLog({
+          id: 'live-info-3',
+          level: 'INFO',
+          message: '新增常规信息日志',
+        })
+      );
+      expect(nextUnmatched.logs[0].id).toBe('live-info-3');
+      expect(nextUnmatched.historicalLogs?.some((l) => l.id === 'live-info-3')).toBe(false);
+      expect(nextUnmatched.historicalLogs?.length).toBe(2);
+    });
+
+    it('clears both logs and historicalLogs when clearLogs or clearAllLogs is executed', () => {
+      const stateWithData = {
+        ...createInitialState(),
+        logs: [
+          {
+            id: 'log-1',
+            timestamp: '2026-09-10 10:00:00.000',
+            createdAt: 1000,
+            level: 'INFO' as const,
+            message: '实时日志',
+          },
+        ],
+        historicalLogs: [
+          {
+            id: 'hist-1',
+            timestamp: '2026-09-10 09:00:00.000',
+            createdAt: 900,
+            level: 'INFO' as const,
+            message: '历史日志',
+          },
+        ],
+      };
+
+      const cleared = systemLogReducer(stateWithData, clearLogs());
+      expect(cleared.logs).toEqual([]);
+      expect(cleared.historicalLogs).toBeNull();
+
+      const allCleared = systemLogReducer(stateWithData, {
         type: clearAllLogs.fulfilled.type,
       });
-      expect(fulfilledState.logs).toEqual([]);
+      expect(allCleared.logs).toEqual([]);
+      expect(allCleared.historicalLogs).toBeNull();
     });
   });
 });
+

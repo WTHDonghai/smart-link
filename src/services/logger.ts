@@ -54,6 +54,7 @@ export class LoggerService {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private isInitialized = false;
   private queuedEntryIds: Set<string> = new Set();
+  private flushPromise: Promise<void> | null = null;
   private tsLogger: TsLogger<SystemLogEntry>;
 
   constructor() {
@@ -62,6 +63,12 @@ export class LoggerService {
       type: isTestEnv ? 'hidden' : 'pretty',
       minLevel: 0,
     });
+
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('beforeunload', () => {
+        void this.flushStorage();
+      });
+    }
   }
 
   /**
@@ -171,7 +178,35 @@ export class LoggerService {
   }
 
   /**
-   * 立即刷新持久化缓冲区
+   * 批量幂等持久化已构建的日志条目队列
+   */
+  persistBatch(entries: SystemLogEntry[]): void {
+    if (!this.ownsPersistentStorage || !entries || entries.length === 0) return;
+
+    let hasNew = false;
+    for (const entry of entries) {
+      if (this.markQueued(entry.id)) {
+        this.writeBuffer.push(entry);
+        hasNew = true;
+      }
+    }
+
+    if (!hasNew) return;
+
+    if (this.writeBuffer.length >= 20) {
+      void this.flushStorage();
+      return;
+    }
+
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        void this.flushStorage();
+      }, 300);
+    }
+  }
+
+  /**
+   * 立即刷新持久化缓冲区（串行化保障，避免并发事务竞争丢日志）
    */
   async flushStorage(): Promise<void> {
     if (!this.ownsPersistentStorage) return;
@@ -181,21 +216,31 @@ export class LoggerService {
       this.flushTimer = null;
     }
 
+    if (this.flushPromise) {
+      await this.flushPromise.catch(() => {});
+    }
+
     if (this.writeBuffer.length === 0) return;
 
     const entriesToSave = [...this.writeBuffer];
     this.writeBuffer = [];
 
-    try {
-      await logStorage.saveLogs(entriesToSave);
-    } catch (error) {
-      // 持久化失败时回填待写入条目，等待下一次刷新重试，避免日志静默丢失；设置容量上限防止内存膨胀
-      this.writeBuffer = [...entriesToSave, ...this.writeBuffer];
-      if (this.writeBuffer.length > MAX_RETRY_BUFFER_SIZE) {
-        this.writeBuffer = this.writeBuffer.slice(-MAX_RETRY_BUFFER_SIZE);
+    this.flushPromise = (async () => {
+      try {
+        await logStorage.saveLogs(entriesToSave);
+      } catch (error) {
+        // 持久化失败时回填待写入条目，等待下一次刷新重试，避免日志静默丢失；设置容量上限防止内存膨胀
+        this.writeBuffer = [...entriesToSave, ...this.writeBuffer];
+        if (this.writeBuffer.length > MAX_RETRY_BUFFER_SIZE) {
+          this.writeBuffer = this.writeBuffer.slice(-MAX_RETRY_BUFFER_SIZE);
+        }
+        console.error('[LoggerService] 日志持久化失败，已保留待重试:', error);
+      } finally {
+        this.flushPromise = null;
       }
-      console.error('[LoggerService] 日志持久化失败，已保留待重试:', error);
-    }
+    })();
+
+    await this.flushPromise;
   }
 
   /**

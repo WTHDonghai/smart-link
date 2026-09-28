@@ -91,18 +91,53 @@ describe('StationCoordinator', () => {
     expect(logs[0].message).toContain('Network timeout');
   });
 
-  it('should start and stop heartbeat timer', async () => {
+  it('should emit DUTY_ACTUAL_STATE_REPORT_RECOVERED when report succeeds after previous failure', async () => {
+    await coordinator.ensureIdentity();
+    const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');
+    reportSpy.mockRejectedValueOnce(new Error('Network timeout'));
+
+    const logs: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+    coordinator.setLogCallback((entry) => logs.push(entry));
+
+    // 第一次：失败
+    await coordinator.reportActualState(['MEITUAN']);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].event).toBe('DUTY_ACTUAL_STATE_REPORT_FAILED');
+
+    // 第二次：成功，触发边缘恢复日志
+    reportSpy.mockResolvedValueOnce(undefined);
+    await coordinator.reportActualState(['MEITUAN']);
+    expect(logs).toHaveLength(2);
+    expect(logs[1].event).toBe('DUTY_ACTUAL_STATE_REPORT_RECOVERED');
+    expect(logs[1].level).toBe('INFO');
+    expect(logs[1].message).toContain('网络恢复');
+
+    // 第三次：持续成功，正常静默，不再重复打印恢复日志
+    reportSpy.mockResolvedValueOnce(undefined);
+    await coordinator.reportActualState(['MEITUAN']);
+    expect(logs).toHaveLength(2);
+  });
+
+  it('should start and stop heartbeat timer and emit lifecycle logs when onLog provided', async () => {
     await coordinator.ensureIdentity();
     expect(coordinator.isHeartbeatActive()).toBe(false);
 
-    coordinator.startHeartbeat(() => ['MEITUAN']);
-    expect(coordinator.isHeartbeatActive()).toBe(true);
+    const logs: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+    coordinator.setLogCallback((entry) => logs.push(entry));
 
-    // Starting again is idempotent
     coordinator.startHeartbeat(() => ['MEITUAN']);
     expect(coordinator.isHeartbeatActive()).toBe(true);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].event).toBe('DUTY_HEARTBEAT_STARTED');
+
+    // 重复 start 幂等，不重复发日志
+    coordinator.startHeartbeat(() => ['MEITUAN']);
+    expect(coordinator.isHeartbeatActive()).toBe(true);
+    expect(logs).toHaveLength(1);
 
     coordinator.stopHeartbeat();
     expect(coordinator.isHeartbeatActive()).toBe(false);
+    expect(logs).toHaveLength(2);
+    expect(logs[1].event).toBe('DUTY_HEARTBEAT_STOPPED');
   });
 });

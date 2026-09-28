@@ -9,6 +9,8 @@ export interface PlatformApiOptions extends RequestInit {
   module?: LogModule;
   orderNo?: string;
   taskActionStage?: TaskActionStage;
+  /** 接口调用成功时是否静默跳过 API_REQUEST_SUCCESS 日志（用于高频探活、心跳上报或长轮询空转接口） */
+  silentSuccess?: boolean;
 }
 
 function inferModuleFromPath(path: string): LogModule {
@@ -245,19 +247,21 @@ export async function requestPlatformApi<T = unknown>(
       responseData = response.bodyText;
     }
 
-    logger.track('API_REQUEST_SUCCESS', {
-      level: 'INFO',
-      module: options.module || inferModuleFromPath(path),
-      message: `[接口调用] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
-      durationMs,
-      apiUrl: path,
-      apiMethod: method,
-      apiParams: requestParams,
-      apiResponse: responseData,
-      httpStatus: response.status,
-      taskActionStage: options.taskActionStage,
-      orderNo: options.orderNo,
-    });
+    if (!options.silentSuccess) {
+      logger.track('API_REQUEST_SUCCESS', {
+        level: 'INFO',
+        module: options.module || inferModuleFromPath(path),
+        message: `[接口调用] [${method}] ${path} (${response.status}) - ${durationMs}ms`,
+        durationMs,
+        apiUrl: path,
+        apiMethod: method,
+        apiParams: requestParams,
+        apiResponse: responseData,
+        httpStatus: response.status,
+        taskActionStage: options.taskActionStage,
+        orderNo: options.orderNo,
+      });
+    }
 
     return responseData as T;
   } catch (err) {

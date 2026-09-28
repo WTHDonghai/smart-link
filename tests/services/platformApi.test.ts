@@ -437,4 +437,85 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     expect(callOptions.headers['App-Auth']).toBe('bearer valid-ipc-token');
     expect(result.data[0].code).toBe('EXK');
   });
+
+  it('当 options.silentSuccess 为 true 时，成功时不触发 API_REQUEST_SUCCESS 日志', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ code: 0, data: { status: 'OK' } }),
+      } as unknown as Response);
+
+      const res = await requestPlatformApi<{ code: number; data: { status: string } }>(
+        '/toolkit/toolbox/actual-state/report',
+        {
+          baseUrl: 'https://pms.example.com',
+          method: 'POST',
+          silentSuccess: true,
+        }
+      );
+
+      expect(res.data.status).toBe('OK');
+      const successLogs = capturedLogs.filter((l) => l.event === 'API_REQUEST_SUCCESS');
+      expect(successLogs).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('Fail-Fast: 即使 options.silentSuccess 为 true，若接口报错依然完整触发 API_REQUEST_FAILED 日志', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const capturedLogs: SystemLogEntry[] = [];
+    const unsubscribe = logger.subscribe((log) => capturedLogs.push(log));
+
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        text: async () => JSON.stringify({ code: 500, msg: 'Internal Gateway Error' }),
+      } as unknown as Response);
+
+      await expect(
+        requestPlatformApi('/toolkit/toolbox/actual-state/report', {
+          baseUrl: 'https://pms.example.com',
+          method: 'POST',
+          silentSuccess: true,
+        })
+      ).rejects.toThrow('平台接口调用失败 (500)');
+
+      const failedLogs = capturedLogs.filter((l) => l.event === 'API_REQUEST_FAILED');
+      expect(failedLogs).toHaveLength(1);
+      expect(failedLogs[0].level).toBe('ERROR');
+      expect(failedLogs[0].httpStatus).toBe(500);
+      expect(failedLogs[0].details).toContain('Internal Gateway Error');
+    } finally {
+      unsubscribe();
+    }
+  });
 });

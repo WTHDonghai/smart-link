@@ -15,9 +15,7 @@ export const logPersistenceMiddleware: Middleware = () => (next) => (action) => 
   if (addLog.match(action)) {
     logger.persist(action.payload);
   } else if (addLogs.match(action)) {
-    for (const entry of action.payload) {
-      logger.persist(entry);
-    }
+    logger.persistBatch(action.payload);
   }
 
   return result;

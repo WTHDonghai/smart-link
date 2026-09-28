@@ -1,11 +1,13 @@
 import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
-import type { SystemLogEntry, LogLevel, LogModule, TaskActionStage } from '../../types';
-import { logStorage, formatLogTimestamp } from '../../services/logStorage';
+import type { SystemLogEntry, LogLevel, LogModule, TaskActionStage, LogFilterParams } from '../../types';
+import { formatLogTimestamp, parseDateBounds, matchesLogFilter } from '../../services/logStorage';
 import { logger } from '../../services/logger';
 import { generateLogId } from '../../utils/logId';
 
 export interface SystemLogState {
   logs: SystemLogEntry[];
+  historicalLogs: SystemLogEntry[] | null;
+  isQuerying: boolean;
   filterLevel: 'ALL' | LogLevel;
   filterModule: 'ALL' | LogModule;
   filterStartDate: string;
@@ -17,6 +19,8 @@ export interface SystemLogState {
 
 const initialState: SystemLogState = {
   logs: [],
+  historicalLogs: null,
+  isQuerying: false,
   filterLevel: 'ALL',
   filterModule: 'ALL',
   filterStartDate: '',
@@ -32,7 +36,17 @@ const initialState: SystemLogState = {
 export const hydrateLogsFromStorage = createAsyncThunk(
   'systemLog/hydrateLogsFromStorage',
   async () => {
-    return logStorage.queryLogs(undefined, { limit: 300 });
+    return logger.queryLogs(undefined, { limit: 300 });
+  }
+);
+
+/**
+ * 按多维过滤条件从浏览器 IndexedDB 持久化存储查询完整的历史日志
+ */
+export const queryLogsFromStorage = createAsyncThunk(
+  'systemLog/queryLogsFromStorage',
+  async (filterParams: LogFilterParams | undefined) => {
+    return logger.queryLogs(filterParams, { limit: 2000 });
   }
 );
 
@@ -45,6 +59,22 @@ export const clearAllLogs = createAsyncThunk(
     await logger.clearAll();
   }
 );
+
+function matchesActiveFilter(
+  entry: SystemLogEntry,
+  state: SystemLogState
+): boolean {
+  const filterParams: LogFilterParams = {
+    level: state.filterLevel,
+    module: state.filterModule,
+    startDate: state.filterStartDate,
+    endDate: state.filterEndDate,
+    taskActionStage: state.filterTaskStage,
+    search: state.filterSearch,
+  };
+  const bounds = parseDateBounds(state.filterStartDate, state.filterEndDate);
+  return matchesLogFilter(entry, filterParams, bounds);
+}
 
 export const systemLogSlice = createSlice({
   name: 'systemLog',
@@ -72,6 +102,14 @@ export const systemLogSlice = createSlice({
     resetDateFilter: (state) => {
       state.filterStartDate = '';
       state.filterEndDate = '';
+      const hasOtherFilters =
+        state.filterLevel !== 'ALL' ||
+        state.filterModule !== 'ALL' ||
+        Boolean(state.filterSearch && state.filterSearch.trim()) ||
+        state.filterTaskStage !== 'ALL';
+      if (!hasOtherFilters) {
+        state.historicalLogs = null;
+      }
     },
     setFilterTaskStage: (state, action: PayloadAction<'ALL' | TaskActionStage>) => {
       state.filterTaskStage = action.payload;
@@ -83,6 +121,10 @@ export const systemLogSlice = createSlice({
       state.filterEndDate = '';
       state.filterTaskStage = 'ALL';
       state.filterSearch = '';
+      state.historicalLogs = null;
+    },
+    setHistoricalLogs: (state, action: PayloadAction<SystemLogEntry[] | null>) => {
+      state.historicalLogs = action.payload;
     },
     setFilterSearch: (state, action: PayloadAction<string>) => {
       state.filterSearch = action.payload;
@@ -103,6 +145,16 @@ export const systemLogSlice = createSlice({
         // 实时流内存保留最多 500 条
         if (state.logs.length > 500) {
           state.logs.pop();
+        }
+
+        // 若当前处于历史持久化查询模式，且新到达日志匹配当前筛选条件，实时同步注入历史视图
+        if (state.historicalLogs !== null && matchesActiveFilter(entry, state)) {
+          if (!state.historicalLogs.some((l) => l.id === entry.id)) {
+            state.historicalLogs.unshift(entry);
+            if (state.historicalLogs.length > 2000) {
+              state.historicalLogs.pop();
+            }
+          }
         }
       },
       // id 在 action creator 阶段生成，保证 action.payload 始终是可直接持久化的完整条目
@@ -130,7 +182,13 @@ export const systemLogSlice = createSlice({
       if (!action.payload || action.payload.length === 0) return;
       const existingIds = new Set(state.logs.map((l) => l.id));
       const newEntries: SystemLogEntry[] = [];
-      for (const item of action.payload) {
+      for (const rawItem of action.payload) {
+        const item: SystemLogEntry = {
+          ...rawItem,
+          id: rawItem.id ?? generateLogId(rawItem.createdAt ?? Date.now()),
+          createdAt: rawItem.createdAt ?? Date.now(),
+          timestamp: rawItem.timestamp ?? formatLogTimestamp(new Date(rawItem.createdAt ?? Date.now())),
+        };
         if (!existingIds.has(item.id)) {
           existingIds.add(item.id);
           newEntries.push(item);
@@ -142,9 +200,23 @@ export const systemLogSlice = createSlice({
       if (state.logs.length > 500) {
         state.logs.splice(500);
       }
+
+      if (state.historicalLogs !== null) {
+        const histExisting = new Set(state.historicalLogs.map((l) => l.id));
+        const matching = newEntries.filter(
+          (entry) => !histExisting.has(entry.id) && matchesActiveFilter(entry, state)
+        );
+        if (matching.length > 0) {
+          state.historicalLogs.unshift(...matching);
+          if (state.historicalLogs.length > 2000) {
+            state.historicalLogs.splice(2000);
+          }
+        }
+      }
     },
     clearLogs: (state) => {
       state.logs = [];
+      state.historicalLogs = null;
     },
   },
   extraReducers: (builder) => {
@@ -152,11 +224,23 @@ export const systemLogSlice = createSlice({
       .addCase(hydrateLogsFromStorage.fulfilled, (state, action) => {
         state.logs = action.payload;
       })
+      .addCase(queryLogsFromStorage.pending, (state) => {
+        state.isQuerying = true;
+      })
+      .addCase(queryLogsFromStorage.fulfilled, (state, action) => {
+        state.historicalLogs = action.payload;
+        state.isQuerying = false;
+      })
+      .addCase(queryLogsFromStorage.rejected, (state) => {
+        state.isQuerying = false;
+      })
       .addCase(clearAllLogs.pending, (state) => {
         state.logs = [];
+        state.historicalLogs = null;
       })
       .addCase(clearAllLogs.fulfilled, (state) => {
         state.logs = [];
+        state.historicalLogs = null;
       });
   },
 });
@@ -170,6 +254,7 @@ export const {
   resetDateFilter,
   setFilterTaskStage,
   resetLogFilters,
+  setHistoricalLogs,
   setFilterSearch,
   toggleAutoScroll,
   addLog,

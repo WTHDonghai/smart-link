@@ -17,6 +17,7 @@ import orderGuardianReducer, {
   syncDutyStatusThunk,
   setConfirmImportEnabledThunk,
   selectGuardianStats,
+  resetDutyLogSyncCursor,
 } from '../../../src/store/slices/orderGuardianSlice';
 import type { ToolkitOrder, ToolkitOrderDraft } from '../../../src/types';
 import { showToast } from '../../../src/store/slices/appSlice';
@@ -455,6 +456,60 @@ describe('orderGuardianSlice reducer', () => {
       ]);
 
       expect(setConfirmImportEnabled).toHaveBeenCalledTimes(1);
+    });
+
+    it('syncDutyStatusThunk 维护增量游标并避免在无新日志时触发重复 dispatch(addLogs)', async () => {
+      const { queryDutyStatus } = await import('../../../src/services/dutyBridge');
+      resetDutyLogSyncCursor();
+
+      const mockQuery = vi.mocked(queryDutyStatus);
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: {
+          channelDuty: {},
+        },
+      });
+
+      // 第一次轮询：since = 0，返回 2 条日志
+      mockQuery.mockResolvedValueOnce({
+        channels: {},
+        coordinatorStatus: 'IDLE',
+        confirmImportEnabled: true,
+        logs: [
+          { id: 'log-1', createdAt: 100, timestamp: '100', level: 'INFO', module: 'DUTY_TASK', message: 'Task 1' },
+          { id: 'log-2', createdAt: 200, timestamp: '200', level: 'INFO', module: 'DUTY_TASK', message: 'Task 2' },
+        ],
+      });
+
+      await syncDutyStatusThunk()(dispatch, getState, undefined);
+
+      expect(mockQuery).toHaveBeenLastCalledWith(0);
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'systemLog/addLogs',
+          payload: expect.arrayContaining([
+            expect.objectContaining({ id: 'log-1' }),
+            expect.objectContaining({ id: 'log-2' }),
+          ]),
+        })
+      );
+
+      dispatch.mockClear();
+
+      // 第二次轮询：since 应为 200，且无新日志（空数组）
+      mockQuery.mockResolvedValueOnce({
+        channels: {},
+        coordinatorStatus: 'IDLE',
+        confirmImportEnabled: true,
+        logs: [],
+      });
+
+      await syncDutyStatusThunk()(dispatch, getState, undefined);
+
+      expect(mockQuery).toHaveBeenLastCalledWith(200);
+      // 严密断言：无新日志时，不应分发 addLogs
+      const addLogsDispatched = dispatch.mock.calls.some((call) => call[0]?.type === 'systemLog/addLogs');
+      expect(addLogsDispatched).toBe(false);
     });
   });
 });

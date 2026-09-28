@@ -21,6 +21,7 @@ export class StationCoordinator {
   private stationIdentity: StationIdentity | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private onLog?: StationLogCallback;
+  private lastReportFailed = false;
 
   constructor(options?: StationCoordinatorOptions) {
     this.onLog = options?.onLog;
@@ -72,7 +73,19 @@ export class StationCoordinator {
 
     try {
       await reportDutyActualState(payload);
+      if (this.lastReportFailed) {
+        this.lastReportFailed = false;
+        if (this.onLog) {
+          this.onLog({
+            level: 'INFO',
+            event: 'DUTY_ACTUAL_STATE_REPORT_RECOVERED',
+            taskActionStage: 'report',
+            message: '[值守心跳] 网络恢复，工位状态上报恢复正常',
+          });
+        }
+      }
     } catch (e) {
+      this.lastReportFailed = true;
       const errMsg = e instanceof Error ? e.message : String(e);
       if (this.onLog) {
         this.onLog({
@@ -90,6 +103,14 @@ export class StationCoordinator {
     if (this.heartbeatTimer) {
       return;
     }
+    if (this.onLog) {
+      this.onLog({
+        level: 'INFO',
+        event: 'DUTY_HEARTBEAT_STARTED',
+        taskActionStage: 'report',
+        message: `[值守心跳] 心跳服务已启动，维持 ${Math.round(SYSTEM_TIMING.HEARTBEAT_INTERVAL / 1000)}s 周期上报`,
+      });
+    }
     this.heartbeatTimer = setInterval(() => {
       void this.reportActualState(getActiveChannelCodes());
     }, SYSTEM_TIMING.HEARTBEAT_INTERVAL);
@@ -99,6 +120,14 @@ export class StationCoordinator {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+      if (this.onLog) {
+        this.onLog({
+          level: 'INFO',
+          event: 'DUTY_HEARTBEAT_STOPPED',
+          taskActionStage: 'report',
+          message: '[值守心跳] 心跳服务已停止',
+        });
+      }
     }
   }
 

@@ -655,6 +655,7 @@ export class PlatformAuthService {
 
   private schedulerCallback: ((tokens: PlatformAuthTokens | null, error?: ClassifiedAuthError) => void) | null = null;
   private isChecking = false;
+  private retryableRefreshErrorCount = 0;
 
   private async executeRefreshCheck(): Promise<void> {
     if (!this.isSchedulerRunning || this.isChecking) return;
@@ -683,6 +684,7 @@ export class PlatformAuthService {
       if (needsRefresh) {
         try {
           await this.getValidAccessToken({ forceRefresh: false });
+          this.retryableRefreshErrorCount = 0;
           const latestTokens = loadTokensFromStorage();
           this.schedulerCallback?.(latestTokens);
           const updatedState = inspectTokenState(latestTokens);
@@ -691,18 +693,23 @@ export class PlatformAuthService {
           const classified = classifyAuthError(rawError);
           if (classified.terminal) {
             // 终端致命凭据失效（如 invalid_grant），通知上层
+            this.retryableRefreshErrorCount = 0;
             clearTokensFromStorage();
             this.schedulerCallback?.(null, classified);
             return;
           } else {
-            // 网络抖动、超时等可重试异常：绝不通知踢出用户，设定较短退避时间重试
-            logger.track('AUTH_REFRESH_RETRYABLE_ERROR', {
-              module: 'AUTH',
-              level: 'WARN',
-              message: `[Auth] Token 后台静默续期遭遇可重试网络异常: ${classified.message}`,
-              details: `状态码: ${classified.statusCode ?? 'N/A'}, 5 秒后重试`,
-            });
-            nextDelayMs = 5000;
+            // 网络抖动、超时等可重试异常：绝不通知踢出用户，采用退避与降噪重试
+            this.retryableRefreshErrorCount++;
+            const backoffMs = Math.min(30000, 5000 * Math.pow(2, Math.min(3, this.retryableRefreshErrorCount - 1)));
+            if (this.retryableRefreshErrorCount === 1 || this.retryableRefreshErrorCount % 5 === 0) {
+              logger.track('AUTH_REFRESH_RETRYABLE_ERROR', {
+                module: 'AUTH',
+                level: 'WARN',
+                message: `[Auth] Token 后台静默续期遭遇可重试网络异常: ${classified.message} (第 ${this.retryableRefreshErrorCount} 次重试)`,
+                details: `状态码: ${classified.statusCode ?? 'N/A'}, ${Math.round(backoffMs / 1000)} 秒后退避重试`,
+              });
+            }
+            nextDelayMs = backoffMs;
           }
         }
       }
