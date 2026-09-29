@@ -242,7 +242,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       expect(customRefreshFn).toHaveBeenCalledTimes(1);
     });
 
-    it('should generate precise selectors with DOM structure, CSS styling, and text constraints', () => {
+    it('should generate precise single authoritative selector for Douyin tab', () => {
       const collector = new DouyinListCollector();
 
       let capturedSelector = '';
@@ -255,13 +255,10 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
 
       collector.getTabLocator(mockPage, '新订/变更');
 
-      // 验证 DOM 结构约束包含 .byted-tab-bar 与 .byted-tab-bar-item
-      expect(capturedSelector).toContain('.byted-tab-bar .byted-tab-bar-item');
-      // 验证 CSS 样式约束包含 .byted-tab-bar-item-label 并且不包含模糊通配 [class*="tab-bar-item"]
-      expect(capturedSelector).toContain('.byted-tab-bar-item-label');
-      expect(capturedSelector).not.toContain('[class*="tab-bar-item"]');
-      // 验证文本约束包含精确的新订/变更
-      expect(capturedSelector).toContain('新订/变更');
+      // 验证为唯一确定的权威选择器，彻底杜绝逗号备选与 Semi 臆测
+      expect(capturedSelector).toBe('.byted-tab-bar .byted-tab-bar-item:has(.byted-tab-bar-item-label:has-text("新订/变更"))');
+      expect(capturedSelector).not.toContain(',');
+      expect(capturedSelector).not.toContain('semi');
     });
 
     it('should prevent mis-clicking when tab element text does not match (e.g. 今日待入住)', async () => {

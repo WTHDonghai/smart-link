@@ -83,33 +83,11 @@ export class DouyinListCollector {
   private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
 
   /**
-   * 基于【DOM 结构 + CSS 样式 + 文本】三重精准约束定位抖音 Tab 元素
-   *
-   * 1. DOM 结构约束：
-   *    - 父级限定于 .byted-tab-bar / .semi-tabs 导航条内；
-   *    - 项级严格限定于 .byted-tab-bar-item / .semi-tabs-tab 单个 Tab 项容器，彻底杜绝误中包含全部 Tab 的父级导航容器；
-   *    - 标签级限定于内部 .byted-tab-bar-item-label / .semi-tabs-tab-title。
-   *
-   * 2. CSS 样式约束：
-   *    - 使用严格完整类名 .byted-tab-bar-item，坚决杜绝模糊通配 [class*="tab-bar-item"] 误中父级容器；
-   *    - 精准匹配样式变体 .byted-tab-bar-item-type-line。
-   *
-   * 3. 文本约束：
-   *    - 文本匹配必须限定在单个 Tab 内部的 label 元素上，杜绝父级多 Tab 聚合文本干扰。
+   * 定位抖音 Tab 元素：严格限定于 .byted-tab-bar 容器内且包含目标 label 的 TabItem
    */
   public getTabLocator(page: Page, label: string): Locator {
     return page
-      .locator(
-        // 1. 结构化严格组合：TabBar 容器 -> Tab 项 -> 包含目标文本的 Label 标签
-        `.byted-tab-bar .byted-tab-bar-item:has(.byted-tab-bar-item-label:has-text("${label}")), ` +
-        `.byted-tab-bar-item:has(.byted-tab-bar-item-label:has-text("${label}")), ` +
-        // 2. 文本叶子标签容器：点击中心绝对对准文字核心区域，杜绝外层坐标偏移
-        `.byted-tab-bar .byted-tab-bar-item .byted-tab-bar-item-label:has-text("${label}"), ` +
-        `.byted-tab-bar-item-label:has-text("${label}"), ` +
-        // 3. Semi Design 标准组件层级备选
-        `.semi-tabs-tab:has(.semi-tabs-tab-title:has-text("${label}")), ` +
-        `.semi-tabs-tab-title:has-text("${label}")`
-      )
+      .locator(`.byted-tab-bar .byted-tab-bar-item:has(.byted-tab-bar-item-label:has-text("${label}"))`)
       .first();
   }
 
