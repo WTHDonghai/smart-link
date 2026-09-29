@@ -21,8 +21,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
         first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
         last: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
       }),
-      on: vi.fn(),
-      off: vi.fn(),
+      waitForResponse: vi.fn().mockReturnValue(new Promise(() => {})),
     } as unknown as Page;
 
     await expect(
@@ -35,11 +34,11 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     });
 
     expect(mockRefreshList).toHaveBeenCalled();
+    expect(mockPage.waitForResponse).toHaveBeenCalled();
   });
 
   it('should return captured order detail when card is located and detail response is received', async () => {
     const inspector = new DouyinDetailInspector();
-    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
 
     const mockRawData = {
       order_base_info: { order_id: '1113572432327416823' },
@@ -47,20 +46,23 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     };
     const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
 
+    const mockResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416823',
+      text: async () => JSON.stringify(mockPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
+    let resolveResponse: (res: typeof mockResponse) => void;
+    const responsePromise = new Promise<typeof mockResponse>((resolve) => {
+      resolveResponse = resolve;
+    });
+
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockImplementation(async () => {
-        if (responseCallback) {
-          await responseCallback({
-            status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416823',
-            text: async () => JSON.stringify(mockPayload),
-          });
-        }
-      }),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+        resolveResponse(mockResponse);
       }),
     };
 
@@ -83,12 +85,11 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
-        if (event === 'response') {
-          responseCallback = handler;
-        }
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
+        const res = await responsePromise;
+        expect(predicate(res)).toBe(true);
+        return res;
       }),
-      off: vi.fn(),
     } as unknown as Page;
 
     const result = await inspector.inspectOrderDetail(mockPage, '1113572432327416823', {
@@ -97,6 +98,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
 
     expect(result).toEqual(mockPayload);
     expect(mockCard.click).toHaveBeenCalled();
+    expect(mockPage.waitForResponse).toHaveBeenCalled();
   });
 
   it('should throw ORDER_DETAIL_TIMEOUT when card is located but network response times out', async () => {
@@ -106,9 +108,6 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockResolvedValue(undefined),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
     };
 
     const mockPage = {
@@ -130,8 +129,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
-      off: vi.fn(),
+      waitForResponse: vi.fn().mockRejectedValue(new Error('Timeout 30000ms exceeded')),
     } as unknown as Page;
 
     await expect(
@@ -142,11 +140,13 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       errorCode: DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
       retryable: true,
     });
+
+    expect(mockCard.click).toHaveBeenCalled();
+    expect(mockPage.waitForResponse).toHaveBeenCalled();
   });
 
   it('should capture and return full raw network payload without premature domain parsing', async () => {
     const inspector = new DouyinDetailInspector();
-    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
     const fullListPayload = {
       status_code: 0,
       status_msg: '',
@@ -162,22 +162,17 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       },
     };
 
+    const mockResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
+      text: async () => JSON.stringify(fullListPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-      click: vi.fn().mockImplementation(async () => {
-        if (responseCallback) {
-          await responseCallback({
-            status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
-            text: async () => JSON.stringify(fullListPayload),
-            request: () => ({ method: () => 'POST' }),
-          });
-        }
-      }),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
+      click: vi.fn().mockResolvedValue(undefined),
     };
 
     const mockPage = {
@@ -199,26 +194,22 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
-        if (event === 'response') {
-          responseCallback = handler;
-        }
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
+        expect(predicate(mockResponse)).toBe(true);
+        return mockResponse;
       }),
-      off: vi.fn(),
     } as unknown as Page;
 
-    // 触发检查，并在卡片展开点击时触发模拟网络返回完整的列表响应
     const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
       refreshOrderList: vi.fn(),
     });
     expect(result).not.toBeNull();
-    // 关键断言：单一职责——拦截器忠实返回原始网络报文，解包与协议清洗归属于下游清洗层
     expect(result).toEqual(fullListPayload);
+    expect(mockCard.click).toHaveBeenCalled();
   });
 
   it('should decrypt guest phone when phone_ciphertext is present and phone is masked', async () => {
     const inspector = new DouyinDetailInspector();
-    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
 
     const mockRawWithCipher = {
       order_base_info: { order_id: '1112769276121338025' },
@@ -231,21 +222,17 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     };
     const mockPayload = { data: { data: JSON.stringify(mockRawWithCipher) } };
 
+    const mockResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
+      text: async () => JSON.stringify(mockPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-      click: vi.fn().mockImplementation(async () => {
-        if (responseCallback) {
-          await responseCallback({
-            status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
-            text: async () => JSON.stringify(mockPayload),
-          });
-        }
-      }),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
+      click: vi.fn().mockResolvedValue(undefined),
     };
 
     const mockEvaluate = vi.fn().mockImplementation(async (fn: unknown, _arg: unknown) => {
@@ -274,12 +261,10 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
-        if (event === 'response') {
-          responseCallback = handler;
-        }
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
+        expect(predicate(mockResponse)).toBe(true);
+        return mockResponse;
       }),
-      off: vi.fn(),
     } as unknown as Page;
 
     const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
@@ -299,13 +284,17 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     };
     const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
 
+    const mockResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+      text: async () => JSON.stringify(mockPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockResolvedValue(undefined),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
     };
 
     const mockPage = {
@@ -327,12 +316,10 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
-      off: vi.fn(),
-      waitForResponse: vi.fn().mockResolvedValue({
-        status: () => 200,
-        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
-        text: async () => JSON.stringify(mockPayload),
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(predicate(mockResponse)).toBe(true);
+        return mockResponse;
       }),
     } as unknown as Page;
 
@@ -352,9 +339,13 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockResolvedValue(undefined),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
+    };
+
+    const mockErrorRes = {
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+      status: () => 500,
+      request: () => ({ method: () => 'POST' }),
+      text: async () => 'Internal Server Error',
     };
 
     const mockPage = {
@@ -376,15 +367,9 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
-      off: vi.fn(),
-      waitForResponse: vi.fn(async (predicate: (res: { url: () => string; status: () => number }) => boolean) => {
-        const mockErrorRes = {
-          url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
-          status: () => 500,
-        };
-        predicate(mockErrorRes);
-        throw new Error('Timeout 8000ms');
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockErrorRes) => boolean) => {
+        expect(predicate(mockErrorRes)).toBe(true);
+        return mockErrorRes;
       }),
     } as unknown as Page;
 
@@ -402,9 +387,13 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockResolvedValue(undefined),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
+    };
+
+    const mockResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+      text: async () => JSON.stringify({ status_code: 10001, status_msg: '登录态失效，请重新登录' }),
+      request: () => ({ method: () => 'POST' }),
     };
 
     const mockPage = {
@@ -426,12 +415,9 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
-      off: vi.fn(),
-      waitForResponse: vi.fn().mockResolvedValue({
-        status: () => 200,
-        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
-        text: async () => JSON.stringify({ status_code: 10001, status_msg: '登录态失效，请重新登录' }),
+      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
+        expect(predicate(mockResponse)).toBe(true);
+        return mockResponse;
       }),
     } as unknown as Page;
 
@@ -444,7 +430,6 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
 
   it('should ignore OPTIONS preflight response and capture subsequent POST response', async () => {
     const inspector = new DouyinDetailInspector();
-    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
 
     const mockRawData = {
       order_base_info: { order_id: '1113572432327416888' },
@@ -455,28 +440,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-      click: vi.fn().mockImplementation(async () => {
-        if (responseCallback) {
-          // 1. 模拟浏览器首先触发了 OPTIONS 预检请求（状态 200，内容为空）
-          await responseCallback({
-            status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
-            text: async () => '',
-            request: () => ({ method: () => 'OPTIONS' }),
-          });
-
-          // 2. 紧接着触发了真实的 POST 业务请求（状态 200，内容完整）
-          await responseCallback({
-            status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
-            text: async () => JSON.stringify(mockPayload),
-            request: () => ({ method: () => 'POST' }),
-          });
-        }
-      }),
-      locator: vi.fn().mockReturnValue({
-        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
-      }),
+      click: vi.fn().mockResolvedValue(undefined),
     };
 
     const mockPage = {
@@ -498,13 +462,6 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
-        if (event === 'response') {
-          responseCallback = handler;
-        }
-      }),
-      off: vi.fn(),
-      // 测试 waitForResponse 过滤断言
       waitForResponse: vi.fn(async (predicate: (res: unknown) => boolean) => {
         const mockOptionsRes = {
           url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
@@ -532,5 +489,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     });
 
     expect(result).toEqual(mockPayload);
+    expect(mockCard.click).toHaveBeenCalled();
+    expect(mockPage.waitForResponse).toHaveBeenCalled();
   });
 });
