@@ -9,6 +9,7 @@ import {
   ACTION_TIMEOUT,
   HUMAN_DELAY,
   humanDelay,
+  getScaledKeystrokeDelay,
   isProbeVisible,
   isElementVisible,
   isModalVisible,
@@ -147,7 +148,7 @@ export class MeituanActionExecutor {
       if (typeof targetInput.pressSequentially === 'function') {
         await targetInput.click().catch(() => {});
         await targetInput.pressSequentially(cleanConfirmNo, {
-          delay: 35 + Math.floor(Math.random() * 40),
+          delay: getScaledKeystrokeDelay(),
         });
       } else {
         await targetInput.fill(cleanConfirmNo);

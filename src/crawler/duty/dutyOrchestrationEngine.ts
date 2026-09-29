@@ -812,11 +812,12 @@ export class DutyOrchestrationEngine {
     });
 
     if (isRiskIntercepted) {
+      const channelLabel = targetChannel === 'DOUYIN' ? '抖音' : targetChannel === 'MEITUAN' ? '美团' : targetChannel;
       taskLogger.log({
         level: 'WARN',
         event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
         taskActionStage: 'execute',
-        message: '[风控拦截熔断] 页面遭遇美团安全验证/滑块/人机拦截，已自动熔断阻断机器重试',
+        message: `[风控拦截熔断] 页面遭遇${channelLabel}安全验证/滑块/人机拦截，已自动熔断阻断机器重试`,
         details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
       });
     }

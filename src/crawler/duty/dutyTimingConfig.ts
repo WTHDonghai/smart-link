@@ -51,6 +51,9 @@ export const HUMAN_DELAY = {
 
   /** 页面冷启动沉淀缓冲 (Vue/React 状态机与事件绑定稳定): 3.0s ~ 8.0s */
   SETTLING: [3_000, 8_000] as const,
+
+  /** 键盘拟人键入间隙 (逐字输入延迟): 35ms ~ 75ms */
+  TYPING: [35, 75] as const,
 } as const;
 
 export { SYSTEM_TIMING };
@@ -101,6 +104,14 @@ export function getScaledDelayRange(minMs: number, maxMs: number): [number, numb
   const scaledMin = Math.max(0, Math.round(safeMin * scale));
   const scaledMax = Math.max(scaledMin, Math.round(safeMax * scale));
   return [scaledMin, scaledMax];
+}
+
+/**
+ * 计算按比例缩放后的拟人键盘逐字键入随机延迟 (毫秒)
+ */
+export function getScaledKeystrokeDelay(): number {
+  const [minMs, maxMs] = getScaledDelayRange(HUMAN_DELAY.TYPING[0], HUMAN_DELAY.TYPING[1]);
+  return Math.floor(Math.random() * Math.max(1, maxMs - minMs + 1)) + minMs;
 }
 
 /**

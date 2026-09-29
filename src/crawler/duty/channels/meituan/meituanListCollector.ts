@@ -202,7 +202,7 @@ export class MeituanListCollector {
       const debounceThreshold = DEFAULT_DUTY_TIMING.system.REFRESH_DEBOUNCE;
       if (elapsed < debounceThreshold) {
         const remainMs = Math.ceil(debounceThreshold - elapsed);
-        await humanDelay(page, remainMs, remainMs + 500);
+        await humanDelay(page, remainMs, remainMs + DEFAULT_DUTY_TIMING.system.CLAIM_IDLE_JITTER_SPREAD);
       }
 
       // 进入任务互斥锁，执行单页面交互与网络拦截
