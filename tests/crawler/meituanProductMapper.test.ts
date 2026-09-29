@@ -3,6 +3,7 @@ import {
   extractProductsFromRealRoomRelations,
   extractProductsFromFlatList,
   parseMeituanProductCandidates,
+  isMeituanProductListResponseUrl,
 } from '../../src/crawler/collectors/meituan/meituanProductMapper';
 
 describe('meituanProductMapper', () => {
@@ -327,6 +328,25 @@ describe('meituanProductMapper', () => {
         otaPayType: 'PP',
         source: 'meituan-catalog-tree',
       });
+    });
+  });
+
+  describe('isMeituanProductListResponseUrl', () => {
+    it('正确匹配标准 queryListAndTag 接口路径与带查询参数的 URL', () => {
+      expect(
+        isMeituanProductListResponseUrl('https://me.meituan.com/api/gw/v1/product/goods/queryListAndTag?yodaReady=h5')
+      ).toBe(true);
+      expect(
+        isMeituanProductListResponseUrl('https://eb.meituan.com/api/gw/v1/product/goods/queryListAndTag')
+      ).toBe(true);
+      expect(
+        isMeituanProductListResponseUrl('https://me.meituan.com/api/gw/v1/product/goods/queryListAndTag?poiId=123')
+      ).toBe(true);
+      expect(
+        isMeituanProductListResponseUrl('https://me.meituan.com/product/goods/queryListAndTag?poiId=123')
+      ).toBe(false);
+      expect(isMeituanProductListResponseUrl('https://me.meituan.com/api/v1/other/path')).toBe(false);
+      expect(isMeituanProductListResponseUrl('')).toBe(false);
     });
   });
 });

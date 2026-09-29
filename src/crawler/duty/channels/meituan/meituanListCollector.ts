@@ -34,11 +34,10 @@ export async function waitForMeituanListResponse(
   }
 
   const observedPaths = new Set<string>();
-  const isTargetListUrl = (url: string) =>
-    acceptAllOrdersList ? isMeituanOrderTabListUrl(url) : isMeituanListUrl(url);
+  const isListUrl = acceptAllOrdersList ? isMeituanOrderTabListUrl : isMeituanListUrl;
   const onRequest = (request: Request) => {
     try {
-      if (isTargetListUrl(request.url())) {
+      if (isListUrl(request.url())) {
         observedPaths.add(new URL(request.url()).pathname);
       }
     } catch {
@@ -52,7 +51,7 @@ export async function waitForMeituanListResponse(
 
   try {
     const response = await page.waitForResponse(
-      (res) => (acceptAllOrdersList ? isMeituanOrderTabListUrl(res.url()) : isMeituanListUrl(res.url())),
+      (res) => isListUrl(res.url()),
       { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
     );
     if (response.status() !== 200) {

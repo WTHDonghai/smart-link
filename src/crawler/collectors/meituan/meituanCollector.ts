@@ -12,6 +12,7 @@ import {
   extractMeituanStoresFromResponses,
   normalizeMeituanHotelCandidates,
   parseMeituanDropdownItem,
+  isMeituanStoreListResponseUrl,
   RawMeituanStoreItem,
 } from './meituanStoreMapper';
 import { updateVisualTrackerStatus, visualClickLocator } from '../../visualTracker';
@@ -43,13 +44,6 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
       message: `[Meituan:Collector] 开始准备导航至美团门店目标地址: ${targetUrl}`,
     });
 
-    const targetHost = (() => {
-      try {
-        return new URL(targetUrl).hostname;
-      } catch {
-        return '';
-      }
-    })();
 
     const capturedResponses: unknown[] = [];
 
@@ -57,17 +51,7 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
     const responseHandler = async (response: Response) => {
       try {
         const url = response.url();
-        const contentType = response.headers()['content-type'] || '';
-        const isJson = contentType.includes('application/json') || url.includes('/accountpoi/poiInfos');
-        const isStaticAsset = /\.(png|jpg|jpeg|gif|svg|ico|css|js|woff2?|map)($|\?)/i.test(url);
-
-        // 动态匹配：目标主机名（支持本地 Mock 如 127.0.0.1、localhost）、真实美团域名或核心 API 路径
-        const isTargetHostOrPath =
-          Boolean(targetHost && url.includes(targetHost)) ||
-          url.includes('/accountpoi/poiInfos') ||
-          url.includes('meituan.com');
-
-        if (isJson && isTargetHostOrPath && !isStaticAsset) {
+        if (isMeituanStoreListResponseUrl(url) && response.ok()) {
           const bodyText = await response.text();
           if (bodyText && bodyText.trim()) {
             try {

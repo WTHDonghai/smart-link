@@ -5,6 +5,7 @@ import {
   normalizeMeituanHotelCandidates,
   resolveMeituanTargetUrl,
   parseMeituanDropdownItem,
+  isMeituanStoreListResponseUrl,
 } from '../../src/crawler/collectors/meituan/meituanStoreMapper';
 
 describe('meituanStoreMapper', () => {
@@ -245,6 +246,23 @@ describe('meituanStoreMapper', () => {
 
       const result = parseMeituanDropdownItem(input);
       expect(result).toBeNull();
+    });
+  });
+
+  describe('isMeituanStoreListResponseUrl', () => {
+    it('正确匹配标准 /accountpoi/poiInfos 接口路径', () => {
+      expect(
+        isMeituanStoreListResponseUrl('https://eb.meituan.com/accountpoi/poiInfos?partnerId=123')
+      ).toBe(true);
+      expect(
+        isMeituanStoreListResponseUrl('https://me.meituan.com/api/accountpoi/poiInfos')
+      ).toBe(true);
+      expect(
+        isMeituanStoreListResponseUrl('http://127.0.0.1:8080/accountpoi/poiInfos')
+      ).toBe(true);
+      expect(isMeituanStoreListResponseUrl('https://eb.meituan.com/other/path')).toBe(false);
+      expect(isMeituanStoreListResponseUrl('invalid-url')).toBe(false);
+      expect(isMeituanStoreListResponseUrl('')).toBe(false);
     });
   });
 });

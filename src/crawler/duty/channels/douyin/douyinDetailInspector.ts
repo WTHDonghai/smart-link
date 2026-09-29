@@ -69,15 +69,6 @@ export class DouyinDetailInspector {
       observedResponsesCount: 0,
     };
 
-    const isTargetDetail = (url: string) => {
-      return (
-        isDouyinOrderDetailUrl(url) ||
-        url.includes(cleanOrderId) ||
-        url.includes('detail') ||
-        url.includes('query')
-      );
-    };
-
     const parseDetailResponse = async (
       res: { url: () => string; status: () => number; text: () => Promise<string> },
       source: 'waitForResponse' | 'onResponse'
@@ -216,9 +207,12 @@ export class DouyinDetailInspector {
       }
     };
 
-    const onResponse = async (res: { url: () => string; status: () => number; text: () => Promise<string> }) => {
+    const isPostResponse = (res: { request?: () => { method: () => string } }) =>
+      typeof res.request === 'function' ? res.request().method() === 'POST' : true;
+
+    const onResponse = async (res: { url: () => string; status: () => number; text: () => Promise<string>; request?: () => { method: () => string } }) => {
       try {
-        if (isTargetDetail(res.url())) {
+        if (isDouyinOrderDetailUrl(res.url()) && isPostResponse(res)) {
           const extracted = await parseDetailResponse(res, 'onResponse');
           if (extracted) {
             capturedDetail = extracted;
@@ -244,7 +238,7 @@ export class DouyinDetailInspector {
           .waitForResponse(
             (res) => {
               try {
-                if (isTargetDetail(res.url())) {
+                if (isDouyinOrderDetailUrl(res.url()) && isPostResponse(res)) {
                   const status = res.status();
                   if (status !== 200) {
                     diagnosis.lastObservedStatus = status;

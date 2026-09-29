@@ -7,7 +7,10 @@ import {
   resolveTimeoutMs,
 } from '../../types';
 import type { ChannelProductCollector, ProductCollectorOptions } from '../base';
-import { parseMeituanProductCandidates } from './meituanProductMapper';
+import {
+  isMeituanProductListResponseUrl,
+  parseMeituanProductCandidates,
+} from './meituanProductMapper';
 import { updateVisualTrackerStatus } from '../../visualTracker';
 import { getMeituanProductUrl } from '../../../config/otaUrls';
 
@@ -57,17 +60,7 @@ export class MeituanProductCollector implements ChannelProductCollector {
     const responseHandler = async (response: Response) => {
       try {
         const url = response.url();
-        const contentType = response.headers()['content-type'] || '';
-        const isJson =
-          contentType.includes('application/json') ||
-          url.includes('/goods/') ||
-          url.includes('/product/');
-        const isStaticAsset = /\.(png|jpg|jpeg|gif|svg|ico|css|js|woff2?|map)($|\?)/i.test(url);
-
-        // queryListAndTag 才是需要拦截的接口
-        const isTarget = url.includes('/queryListAndTag')
-
-        if (response.ok() && isJson && isTarget && !isStaticAsset) {
+        if (isMeituanProductListResponseUrl(url) && response.ok()) {
           const bodyText = await response.text();
           if (bodyText && bodyText.trim()) {
             try {

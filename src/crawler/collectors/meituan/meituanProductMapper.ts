@@ -25,6 +25,21 @@ function normalizePayType(value: unknown): string {
   return 'PP';
 }
 
+export const MEITUAN_PRODUCT_LIST_API_PATH = '/api/gw/v1/product/goods/queryListAndTag';
+
+/**
+ * 判断 URL 是否属于美团房型与商品管理列表接口 (queryListAndTag)
+ */
+export function isMeituanProductListResponseUrl(rawUrl: string): boolean {
+  if (!rawUrl) return false;
+  try {
+    const { pathname } = new URL(rawUrl);
+    return ( pathname === MEITUAN_PRODUCT_LIST_API_PATH);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 从美团真实房型关联树结构 (realRoomRelations) 解析商品与物理房型
  */

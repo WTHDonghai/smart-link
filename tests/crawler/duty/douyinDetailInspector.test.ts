@@ -169,8 +169,9 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
         if (responseCallback) {
           await responseCallback({
             status: () => 200,
-            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
             text: async () => JSON.stringify(fullListPayload),
+            request: () => ({ method: () => 'POST' }),
           });
         }
       }),
@@ -439,5 +440,97 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
         refreshOrderList: vi.fn(),
       })
     ).rejects.toThrow('详情接口返回业务错误 (code: 10001, msg: 登录态失效，请重新登录)');
+  });
+
+  it('should ignore OPTIONS preflight response and capture subsequent POST response', async () => {
+    const inspector = new DouyinDetailInspector();
+    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
+
+    const mockRawData = {
+      order_base_info: { order_id: '1113572432327416888' },
+      book_detail_info: { hotel_name: '测试度假酒店' },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockImplementation(async () => {
+        if (responseCallback) {
+          // 1. 模拟浏览器首先触发了 OPTIONS 预检请求（状态 200，内容为空）
+          await responseCallback({
+            status: () => 200,
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
+            text: async () => '',
+            request: () => ({ method: () => 'OPTIONS' }),
+          });
+
+          // 2. 紧接着触发了真实的 POST 业务请求（状态 200，内容完整）
+          await responseCallback({
+            status: () => 200,
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
+            text: async () => JSON.stringify(mockPayload),
+            request: () => ({ method: () => 'POST' }),
+          });
+        }
+      }),
+      locator: vi.fn().mockReturnValue({
+        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+      }),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1113572432327416888')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
+        if (event === 'response') {
+          responseCallback = handler;
+        }
+      }),
+      off: vi.fn(),
+      // 测试 waitForResponse 过滤断言
+      waitForResponse: vi.fn(async (predicate: (res: unknown) => boolean) => {
+        const mockOptionsRes = {
+          url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
+          status: () => 200,
+          text: async () => '',
+          request: () => ({ method: () => 'OPTIONS' }),
+        };
+        const mockPostRes = {
+          url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416888',
+          status: () => 200,
+          text: async () => JSON.stringify(mockPayload),
+          request: () => ({ method: () => 'POST' }),
+        };
+
+        // predicate 必须判定 OPTIONS 为 false，POST 为 true
+        expect(predicate(mockOptionsRes)).toBe(false);
+        expect(predicate(mockPostRes)).toBe(true);
+
+        return mockPostRes;
+      }),
+    } as unknown as Page;
+
+    const result = await inspector.inspectOrderDetail(mockPage, '1113572432327416888', {
+      refreshOrderList: vi.fn(),
+    });
+
+    expect(result).toEqual(mockPayload);
   });
 });

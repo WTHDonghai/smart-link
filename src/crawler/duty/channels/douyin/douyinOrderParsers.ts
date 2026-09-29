@@ -46,10 +46,10 @@ export function isDouyinOrderDetailUrl(url: string): boolean {
 }
 
 /**
- * 判断 URL 是否属于任一抖音订单列表或详情接口
+ * 判断 URL 是否属于任一抖音订单列表接口（新订/变更 或 取消/退款）
  */
 export function isDouyinOrderListUrl(url: string): boolean {
-  return isDouyinBookOrderListUrl(url) || isDouyinRefundOrderListUrl(url) || isDouyinOrderDetailUrl(url);
+  return isDouyinBookOrderListUrl(url) || isDouyinRefundOrderListUrl(url);
 }
 
 /**

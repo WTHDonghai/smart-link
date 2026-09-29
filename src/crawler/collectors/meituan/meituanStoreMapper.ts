@@ -6,6 +6,20 @@ export function getDefaultMeituanCatalogUrl(): string {
 }
 
 export const MEITUAN_CATALOG_PATH = '/ebooking/merchant/product/batch-price';
+export const MEITUAN_POI_INFOS_PATH = '/accountpoi/poiInfos';
+
+/**
+ * 判断 URL 是否属于美团门店/POI 列表接口
+ */
+export function isMeituanStoreListResponseUrl(rawUrl: string): boolean {
+  if (!rawUrl) return false;
+  try {
+    const url = new URL(rawUrl);
+    return url.pathname.includes(MEITUAN_POI_INFOS_PATH);
+  } catch {
+    return false;
+  }
+}
 
 export interface RawMeituanStoreItem {
   poiId: string;

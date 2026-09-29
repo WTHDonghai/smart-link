@@ -53,7 +53,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(isDouyinOrderDetailUrl('')).toBe(false);
     });
 
-    it('isDouyinOrderListUrl should match book list, refund list, or detail endpoint', () => {
+    it('isDouyinOrderListUrl should match book list or refund list, but not detail endpoint', () => {
       expect(
         isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/list')
       ).toBe(true);
@@ -62,7 +62,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       ).toBe(true);
       expect(
         isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?root_life_account_id=123')
-      ).toBe(true);
+      ).toBe(false);
       expect(isDouyinOrderListUrl('https://life.douyin.com/life/other/endpoint')).toBe(false);
     });
   });
