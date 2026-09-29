@@ -14,48 +14,9 @@ import { normalizeOrderPayload } from '../../utils/template/protocolNormalizer';
 
 /** 抖音真实订单协议样本数据 (源自生产采集报文) */
 export const DOUYIN_RAW_SAMPLE_ORDER = {
-  action_list: [
-    {
-      action: 'fill_confirm_number',
-      action_name: '填写确认号',
-      color_scheme: '',
-      disable: false,
-      disable_type: 0,
-      hover: '',
-    },
-    {
-      action: 'stuff_confirm_number',
-      action_name: '填写确认号',
-      color_scheme: '',
-      disable: false,
-      disable_type: 0,
-      hover: '',
-    },
-    {
-      action: 'send_cancel_book_sms',
-      action_name: '协助取消/退款',
-      color_scheme: '',
-      disable: false,
-      disable_type: 0,
-      hover: '',
-    },
-  ],
-  after_sale_info: {
-    can_partial_refund: true,
-    can_refund_amount: 49600,
-    can_refund_for_user: true,
-    cancel_audit_choice: 2,
-    early_checkout_after_sale_id: null,
-    early_checkout_book_after_sale_id: null,
-    is_hotel_early_checkout: null,
-    not_refund_reason: '',
-    refund_apply_phase: 1,
-    refund_audit_choice: 2,
-    send_sms_after_sale_type_list: [2, 1],
-  },
   amount_info: {
     currency: '￥',
-    exchange_rate: '',
+    exchange_rate: '123',
     makeup_amount: 0,
     origin_amount: 51490,
     oversea_currency_style: false,
@@ -76,18 +37,16 @@ export const DOUYIN_RAW_SAMPLE_ORDER = {
       can_edit: true,
       text: '2608280008',
     },
-    customer_service_msg: '',
-    hotel_name: '淮安日月洲度假村(西游乐园店)',
+    customer_service_msg: '客户服务消息',
+    hotel_name: '西软洲度假村',
     is_first_day_reserved_room: false,
     merchant_msg: {
-      can_edit: true,
-      text: '',
+      text: '这里是上架备注信息',
     },
     poi_life_account_id: '7130223634133092383',
-    privilege: '',
     remark_info: {
       question_and_answer_list: [],
-      remark_info_str: '',
+      remark_info_str: '这里是备注信息',
     },
   },
   book_product_info: {
@@ -95,18 +54,12 @@ export const DOUYIN_RAW_SAMPLE_ORDER = {
   },
   guest_info: {
     buyer: {
-      name: ' ',
-      phone: '',
+      name: '购买人名称',
+      phone: '是购买人手机号',
       phone_ciphertext: 'MDYEDFKQpuN6GNuDquzE5AQUx5HGBeSI27KB+nGyI8HSlW8kUogEEAuMN+fI6KLrG5om15OsQrw=',
     },
     user_list: [
       {
-        birthday: '',
-        gender: null,
-        id_card_no: '',
-        id_card_no_ciphertext: 'MDYEDNK1gGxLat9dwuE4VQQULr1lTOOft3TGGbXyWM0aqQ+gBTwEEDYeIeTM3bUBw1xy+0+PnJM=',
-        license_type: null,
-        license_validity: null,
         name: '刘彩霞',
         phone: '*******5090',
         phone_ciphertext: 'MEEEDG1lT1r6k855MuKJoAQfO5DaZT+ffaP6ty8M2/HlStDGOsZu0dTT/a3+IzIxwgQQkbRrT83ybN46Pble+HAnow==',
@@ -114,8 +67,6 @@ export const DOUYIN_RAW_SAMPLE_ORDER = {
     ],
   },
   order_base_info: {
-    multi_book_remain_room_nights: null,
-    multi_book_total_room_nights: null,
     order_id: '1116431119643540077',
     order_tag_list: [],
     pay_time: 1787871206,
@@ -248,7 +199,7 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       path: 'book_detail_info.hotel_name',
       category: 'hotel',
       transform: 'string',
-      sampleValue: '淮安日月洲度假村(西游乐园店)',
+      sampleValue: '西软洲度假村',
       description: '预订酒店门店名称',
       enabled: true,
     },

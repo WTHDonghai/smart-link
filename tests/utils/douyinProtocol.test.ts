@@ -57,8 +57,8 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     // 酒店与物理房型
     expect(cleanCtx.hotelId).toBe('7130223634133092383');
     expect(cleanCtx['门店ID']).toBe('7130223634133092383');
-    expect(cleanCtx.hotelName).toBe('淮安日月洲度假村(西游乐园店)');
-    expect(cleanCtx['酒店名称']).toBe('淮安日月洲度假村(西游乐园店)');
+    expect(cleanCtx.hotelName).toBe('西软洲度假村');
+    expect(cleanCtx['酒店名称']).toBe('西软洲度假村');
     expect(cleanCtx.roomName).toBe('豪华大床房');
     expect(cleanCtx.productName).toContain('错峰大促｜豪华房1晚含早');
     expect(cleanCtx.roomCount).toBe('1');

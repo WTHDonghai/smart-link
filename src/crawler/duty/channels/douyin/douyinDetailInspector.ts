@@ -48,7 +48,7 @@ export class DouyinDetailInspector {
       );
     }
 
-    await updateVisualTrackerStatus(page, `🔍 正在定位抖音订单「${cleanOrderId}」卡片并展示详情...`, 'action');
+    await updateVisualTrackerStatus(page, `正在定位抖音订单「${cleanOrderId}」卡片并展示详情...`, 'action');
     logger.info(`[抖音详情] 开始定位订单「${cleanOrderId}」卡片并准备抓取权威详情报文`, {
       module: 'DUTY_TASK',
       channelId: 'DOUYIN',
