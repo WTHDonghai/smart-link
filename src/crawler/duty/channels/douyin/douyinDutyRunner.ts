@@ -234,7 +234,7 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
   }
 
   /**
-   * 页面操作：在抖音后台确认取消（我知道了/同意退款，支持安全演练 dryRun）
+   * 页面操作：在抖音后台确认取消（我知道了，支持安全演练 dryRun）
    */
   public async confirmCancel(
     otaOrderId: string,

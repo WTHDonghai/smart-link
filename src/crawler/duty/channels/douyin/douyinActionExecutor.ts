@@ -11,7 +11,6 @@ import {
   humanDelay,
   getScaledKeystrokeDelay,
   isElementVisible,
-  isModalVisible,
 } from '../../dutyTimingConfig';
 import { assertNoDouyinPageRisk } from './douyinRiskGuard';
 import { getDouyinOrderScope, locateDouyinOrderCard } from './douyinCardLocator';
@@ -22,11 +21,16 @@ export interface DouyinActionExecutorOptions extends DutyActionDryRunOptions {
 }
 
 /**
- * 抖音订单动作执行器：负责确认号回填（接单）与确认取消（我知道了/同意退款）操作
+ * 抖音订单动作执行器：负责确认号回填（接单）与确认取消（我知道了）操作
+ *
+ * 遵循真实工作台 DOM 层次规范：
+ * 1. 列表卡片 (.hotel-book-list-order-card) 仅承载文本与点击激活，卡片上无操作按钮；
+ * 2. 必须点击卡片后，在详情区或触发的气泡框内执行操作；
+ * 3. 填写确认号采用行内气泡确认框 (Popover Confirm)，而非模态弹窗。
  */
 export class DouyinActionExecutor {
   /**
-   * 在抖音后台回填确认号（基于订单卡片交互，防串单严格校验，支持安全演练 dryRun）
+   * 在抖音后台回填确认号（基于订单卡片与详情气泡交互，防串单严格校验，支持安全演练 dryRun）
    */
   public async confirmImport(
     page: Page,
@@ -62,7 +66,7 @@ export class DouyinActionExecutor {
       page,
       options.dryRun
         ? `🛡️ 正在以【安全演练模式】验证抖音订单「${cleanOrderId}」卡片与确认号「${cleanConfirmNo}」输入框...`
-        : `📝 正在抖音订单「${cleanOrderId}」卡片内回填确认号「${cleanConfirmNo}」...`,
+        : `📝 正在抖音订单「${cleanOrderId}」详情区回填确认号「${cleanConfirmNo}」...`,
       'action'
     );
 
@@ -85,49 +89,49 @@ export class DouyinActionExecutor {
       );
     }
 
-    // 2. 定位「接单」或「填写确认号」操作按钮并点击，触发模态弹窗
-    const acceptBtn = orderCard.locator(
-      'button:has-text("接单"), ' +
-      'button:has-text("填写酒店确认号"), ' +
+    // 2. 必须先点击卡片展开详情展示
+    await visualClickLocator(page, orderCard, `点击订单「${cleanOrderId}」卡片激活详情展示`);
+    await humanDelay(page, ...HUMAN_DELAY.SHORT);
+
+    // 3. 定位并点击“填写确认号”触发按钮
+    const triggerBtn = scope.locator(
+      '.byted-popper-trigger.byted-confirm button, ' +
       'button:has-text("填写确认号"), ' +
-      'button.byted-btn-primary:has-text("接单"), ' +
-      'button.semi-button-primary:has-text("接单"), ' +
-      '[data-action="accept_book"], ' +
-      '[data-action="fill_confirm_number"]'
+      'button:has-text("接单")'
     ).first();
 
-    if (!await isElementVisible(acceptBtn)) {
+    if (!await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
-        `订单「${cleanOrderId}」未找到「接单/填写确认号」操作按钮`,
+        `订单「${cleanOrderId}」未找到「填写确认号/接单」触发按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
         false
       );
     }
 
-    await visualClickLocator(page, acceptBtn, `点击订单「${cleanOrderId}」接单按钮弹出确认回填框`);
+    await visualClickLocator(page, triggerBtn, `点击订单「${cleanOrderId}」填写确认号触发按钮`);
     await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-    // 3. 等待并严格限定确认号回填模态弹窗
-    const dialog = scope.locator(
-      '.byted-modal, .semi-modal, div[role="dialog"]'
-    ).filter({ hasText: /确认号|接单/ }).first();
+    // 4. 定位行内气泡确认框容器 (Popover Confirm)
+    const popover = scope.locator(
+      '.byted-popover-confirm-inner, .byted-popover-confirm-container'
+    ).first();
 
-    if (!await isModalVisible(dialog)) {
+    if (!await isElementVisible(popover, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
-        `订单「${cleanOrderId}」未弹出或未找到确认号回填弹窗`,
+        `订单「${cleanOrderId}」未弹出或未找到确认号回填气泡`,
         DouyinDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
         false
       );
     }
 
-    // 4. 在弹窗内定位确认号输入框，执行防串单校验与读回校验
-    const targetInput = dialog.locator(
-      'input.byted-input, input.semi-input, input[placeholder*="确认号"], input[placeholder*="填写"], input'
+    // 5. 在气泡容器内定位确认号输入框，执行防串单校验与读回校验
+    const targetInput = popover.locator(
+      'input.byted-input[placeholder*="确认号"], input.byted-input, input[placeholder*="确认号"]'
     ).first();
 
-    if (!await isElementVisible(targetInput)) {
+    if (!await isElementVisible(targetInput, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
-        `订单「${cleanOrderId}」接单弹窗内未找到确认号输入框`,
+        `订单「${cleanOrderId}」气泡内未找到确认号输入框`,
         DouyinDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
         false
       );
@@ -164,37 +168,28 @@ export class DouyinActionExecutor {
       }
     }
 
-    // 5. 定位弹窗中的提交操作按钮
-    const dialogConfirmBtn = dialog.locator(
-      '.byted-modal-footer button.byted-btn-primary, ' +
-      '.semi-modal-footer button.semi-button-primary, ' +
-      'button:has-text("确定"), ' +
-      'button:has-text("确认"), ' +
-      'button:has-text("接单"), ' +
-      'button:has-text("保存")'
-    ).first();
+    // 6. 定位确认与取消按钮
+    const confirmBtn = popover.locator('.byted-confirm-ok, button:has-text("确定")').first();
+    const cancelBtn = popover.locator('.byted-confirm-cancel, button:has-text("取消")').first();
 
-    if (!await isElementVisible(dialogConfirmBtn)) {
+    if (!await isElementVisible(confirmBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
-        `订单「${cleanOrderId}」接单弹窗内未找到提交确认按钮`,
+        `订单「${cleanOrderId}」气泡内未找到确定提交按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
         false
       );
     }
 
-    // 安全演练模式处理：安全关闭弹窗并返回验证结果，杜绝真实提交
+    // 安全演练模式处理：点击取消按钮关闭气泡并返回验证结果，杜绝真实提交
     if (options.dryRun) {
-      await updateVisualTrackerStatus(page, '🛑 【安全演练收尾】正在点击「取消」按钮关闭弹窗，确保不提交任何数据...', 'action');
-      const cancelBtn = dialog.locator(
-        'button:has-text("取消"), .byted-modal-close, .semi-modal-close, [aria-label="Close"]'
-      ).first();
+      await updateVisualTrackerStatus(page, '🛑 【安全演练收尾】正在关闭确认气泡，确保不提交任何数据...', 'action');
       if (await isElementVisible(cancelBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
-        await visualClickLocator(page, cancelBtn, '安全演练收尾：取消弹窗');
-      } else {
+        await visualClickLocator(page, cancelBtn, '安全演练收尾：取消气泡');
+      } else if (page.keyboard && typeof page.keyboard.press === 'function') {
         await page.keyboard.press('Escape');
       }
       await humanDelay(page, ...HUMAN_DELAY.SHORT);
-      await updateVisualTrackerStatus(page, '✅ 确认号回填流程演练验证完毕，已安全关闭弹窗', 'success');
+      await updateVisualTrackerStatus(page, '✅ 确认号回填流程演练验证完毕，已安全关闭气泡', 'success');
       return {
         verified: true,
         orderId: cleanOrderId,
@@ -202,22 +197,23 @@ export class DouyinActionExecutor {
         dryRun: true,
         verifiedSteps: [
           'locate_order_card',
-          'click_accept_btn',
-          'verify_modal_dialog',
+          'activate_order_detail',
+          'click_trigger_btn',
+          'verify_popover',
           'fill_confirm_no',
           'verify_submit_btn',
-          'close_dialog_safely',
+          'close_popover_safely',
         ],
         fieldValues: { confirmNo: cleanConfirmNo },
       };
     }
 
-    await visualClickLocator(page, dialogConfirmBtn, `点击弹窗确认提交按钮确认订单「${cleanOrderId}」`);
+    await visualClickLocator(page, confirmBtn, `点击气泡确定提交按钮确认订单「${cleanOrderId}」`);
     await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
   }
 
   /**
-   * 在抖音后台确认取消（我知道了 / 同意退款，支持安全演练 dryRun）
+   * 在抖音后台确认取消（我知道了，支持安全演练 dryRun）
    */
   public async confirmCancel(
     page: Page,
@@ -242,13 +238,13 @@ export class DouyinActionExecutor {
     await updateVisualTrackerStatus(
       page,
       options.dryRun
-        ? `🛡️ 正在以【安全演练模式】定位抖音订单「${cleanOrderId}」卡片与确认取消按钮...`
+        ? `🛡️ 正在以【安全演练模式】定位抖音已取消订单「${cleanOrderId}」卡片与确认取消按钮...`
         : `🛑 在抖音后台确认取消订单「${cleanOrderId}」...`,
       'action'
     );
     const scope = getDouyinOrderScope(page);
 
-    // 1. 定位订单卡片
+    // 1. 定位订单卡片，若未找到则以 DutyOrderStatus.CANCEL 刷新重试
     let orderCard = await locateDouyinOrderCard(page, scope, cleanOrderId);
     if (!orderCard) {
       await options.refreshOrderList(page, DutyOrderStatus.CANCEL);
@@ -264,18 +260,16 @@ export class DouyinActionExecutor {
       );
     }
 
-    // 2. 定位操作按钮（「我知道了」或「确认取消」或「同意退款」）
-    const ackBtn = orderCard.locator(
-      'button:has-text("我知道了"), ' +
-      'button:has-text("确认取消"), ' +
-      'button:has-text("同意退款"), ' +
-      'button:has-text("确认"), ' +
-      '[data-action="clear_wait_confirm"]'
-    ).first();
+    // 2. 必须先点击卡片展开详情
+    await visualClickLocator(page, orderCard, `点击已取消订单「${cleanOrderId}」卡片激活详情展示`);
+    await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-    if (!await isElementVisible(ackBtn)) {
+    // 3. 定位确认取消按钮（在详情中，真实 DOM 确定性文案为「我知道了」）
+    const ackBtn = scope.locator('button:has-text("我知道了")').first();
+
+    if (!await isElementVisible(ackBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
-        `订单「${cleanOrderId}」未找到「我知道了/确认取消」操作按钮`,
+        `订单「${cleanOrderId}」未找到「我知道了」操作按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
         false
       );
@@ -291,6 +285,7 @@ export class DouyinActionExecutor {
         dryRun: true,
         verifiedSteps: [
           'locate_order_card',
+          'activate_order_detail',
           'locate_ack_btn',
           'assert_ack_btn_visible',
         ],
@@ -298,7 +293,7 @@ export class DouyinActionExecutor {
       };
     }
 
-    // 3. 点击按钮执行取消确认
+    // 4. 点击按钮执行取消确认
     await visualClickLocator(page, ackBtn, `点击按钮确认取消订单「${cleanOrderId}」`);
     await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
   }
