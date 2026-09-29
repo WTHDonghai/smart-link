@@ -1,7 +1,9 @@
 import type { Page } from 'playwright';
 import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src/types';
 import type { BrowserSession } from '@/src/crawler/browserManager';
+import { resolveChannelMeta } from '@/src/utils/channelMeta';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
+import type { ParsedDutyTaskContext, DutyOrderStatus } from './dutyTaskContext';
 
 /**
  * 客户端自动化执行器支持的任务消息类型白名单
@@ -127,13 +129,14 @@ export interface DutyActionVerificationResult {
 
 export interface ChannelDutyRunner {
   readonly channelCode: string;
+  readonly channelName?: string;
   readonly supportedTaskTypes?: readonly SupportedDutyTaskType[];
   start(): Promise<void>;
   stop(): Promise<void>;
   isRunning(): boolean;
 
   /** 页面操作：刷新订单列表并获取当前待处理订单概要 */
-  collectUnhandledOrders(context?: unknown): Promise<DutyUnhandledOrderSummary[]>;
+  collectUnhandledOrders(context?: ParsedDutyTaskContext | DutyOrderStatus): Promise<DutyUnhandledOrderSummary[]>;
 
   /** 页面操作：在当前渠道后台点击打开订单详情并抓取原始数据（回写明文客人姓名） */
   inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
@@ -168,6 +171,13 @@ export interface ChannelDutyRunner {
  */
 export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
   public abstract readonly channelCode: string;
+
+  /**
+   * 渠道中文名称，统一由 channelMeta 根据 channelCode 解析
+   */
+  public get channelName(): string {
+    return resolveChannelMeta(this.channelCode).name || this.channelCode;
+  }
 
   /**
    * 渠道支持的任务类型白名单。
@@ -218,7 +228,7 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
    * 获取当前活动的 Playwright Page，若未启动或已关闭则抛出 Fail-Fast 异常
    */
   protected getActivePage(operation: string): Page {
-    const channelName = this.channelCode === 'MEITUAN' ? '美团' : this.channelCode === 'DOUYIN' ? '抖音' : this.channelCode;
+    const channelName = this.channelName;
     if (!this.running || !this.session) {
       throw new DutyExecutionError(
         `${channelName}值守执行器未运行，无法${operation}`,
@@ -270,7 +280,9 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
     });
   }
 
-  public abstract collectUnhandledOrders(context?: unknown): Promise<DutyUnhandledOrderSummary[]>;
+  public abstract collectUnhandledOrders(
+    context?: ParsedDutyTaskContext | DutyOrderStatus
+  ): Promise<DutyUnhandledOrderSummary[]>;
   public abstract inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 
   /**

@@ -124,7 +124,10 @@ export function resolveChannelDebugPort(channelCode: string): number {
 /**
  * 尝试通过 CDP 连接当前渠道已在本地运行的 Chrome 实例
  */
-async function tryConnectExistingBrowser(port: number): Promise<{
+async function tryConnectExistingBrowser(
+  port: number,
+  channelCode?: string
+): Promise<{
   browser: { close: () => Promise<void> };
   context: BrowserContext;
   page: Page;
@@ -141,7 +144,30 @@ async function tryConnectExistingBrowser(port: number): Promise<{
     const context = contexts[0];
     const pages = context.pages?.() || [];
     const alivePages = pages.filter((p) => isPageAlive(p));
-    const page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
+
+    // 优先匹配非空白页或属于该渠道域名的活跃 Tab
+    let page: Page | null = null;
+    if (channelCode) {
+      const code = channelCode.toUpperCase();
+      const channelPatterns: Record<string, RegExp> = {
+        DOUYIN: /douyin\.com/i,
+        MEITUAN: /meituan\.com/i,
+        MEITUAN_BIZ: /meituan\.com/i,
+        CTRIP: /ctrip\.com/i,
+      };
+      const pattern = channelPatterns[code];
+      if (pattern) {
+        page = alivePages.find((p) => typeof p.url === 'function' && pattern.test(p.url())) || null;
+      }
+    }
+    if (!page) {
+      // 其次优先非 about:blank 页面
+      page = alivePages.find((p) => typeof p.url === 'function' && p.url() && !p.url().startsWith('about:blank')) || null;
+    }
+    if (!page) {
+      page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
+    }
+
     return { browser, context, page };
   } catch {
     return null;
@@ -191,7 +217,7 @@ export async function createPersistentBrowserSession(
 
   // 2. 跨进程探测（如 CLI 重复执行、独立脚本接入）：尝试连接已在本地端口运行的同渠道 Chrome 实例
   const debugPort = resolveChannelDebugPort(options.channelCode);
-  const cdpSession = await tryConnectExistingBrowser(debugPort);
+  const cdpSession = await tryConnectExistingBrowser(debugPort, options.channelCode);
   if (cdpSession) {
     if (!isHeadless) {
       try {

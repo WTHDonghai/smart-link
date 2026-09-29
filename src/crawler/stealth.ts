@@ -9,6 +9,7 @@ import type { BrowserContext, Page } from 'playwright';
  * 4. 规避权限查询异常 (Permissions API)
  */
 export async function injectStealthScripts(target: BrowserContext | Page): Promise<void> {
+  if (!target || typeof target.addInitScript !== 'function') return;
   await target.addInitScript(() => {
     // 1. 消除 navigator.webdriver 实例自有属性（由启动参数原生置为 false，坚决不手写原型链 Getter 避免 Reflect.apply 探针检测）
     try {

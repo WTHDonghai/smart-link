@@ -142,9 +142,9 @@ export function parseDouyinProductResponse(
     }
     seenProductIds.add(otaRoomTypeId);
 
-    // 提取 boundSkuIds
+    // 提取 boundSkuIds (过滤非房型套餐，如纯餐饮自助、门票等非酒旅住宿团购)
     if (!Array.isArray(detail.sku_list) || detail.sku_list.length === 0) {
-      throw new Error(`抖音产品「${otaRoomTypeName}」(${otaRoomTypeId}) 缺少 sku_list。`);
+      continue;
     }
 
     const boundSkuIds: string[] = [];
@@ -152,7 +152,7 @@ export function parseDouyinProductResponse(
       if (!skuValue || typeof skuValue !== 'object') continue;
       const sku = skuValue as Record<string, unknown>;
       if (!Array.isArray(sku.bind_sku_list) || sku.bind_sku_list.length === 0) {
-        throw new Error(`抖音产品「${otaRoomTypeName}」(${otaRoomTypeId}) 缺少 bind_sku_list。`);
+        continue;
       }
       for (const bindingValue of sku.bind_sku_list) {
         if (!bindingValue || typeof bindingValue !== 'object') continue;
@@ -167,7 +167,8 @@ export function parseDouyinProductResponse(
 
     const uniqueBoundSkuIds = Array.from(new Set(boundSkuIds));
     if (uniqueBoundSkuIds.length === 0) {
-      throw new Error(`抖音产品「${otaRoomTypeName}」(${otaRoomTypeId}) 未能提取到任何已绑定销售 SKU。`);
+      // 该商品不包含预售房型绑定关系，属于非房型业务品类（如纯餐饮/门票团购），跳过
+      continue;
     }
 
     products.push({

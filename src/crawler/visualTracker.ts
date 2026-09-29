@@ -543,6 +543,7 @@ export const VISUAL_TRACKER_SCRIPT = `
  * 为浏览器上下文全局注册轨迹追踪注入器（在新标签页或页面刷新时自动保留）
  */
 export async function installVisualTracker(context: BrowserContext): Promise<void> {
+  if (!context || typeof context.addInitScript !== 'function') return;
   await context.addInitScript(VISUAL_TRACKER_SCRIPT);
 }
 

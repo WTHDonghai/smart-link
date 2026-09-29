@@ -15,12 +15,19 @@ import { updateVisualTrackerStatus } from '../../visualTracker';
 
 export const DOUYIN_SALE_PRODUCT_PAGE_URL = 'https://life.douyin.com/p/travel-goods/hotel/saleproduct/list';
 
+const ROUTE_CONTEXT_PARAMS = [
+  'groupid',
+  'life_biz_view_id',
+  'life_account_biz_ids',
+  'root_life_account_id',
+];
+
 export interface DouyinSaleProductCollectorOptions {
   onLog?: (log: CollectorLogPayload) => void;
 }
 
 export class DouyinSaleProductCollector {
-  public resolveTargetUrl(customUrl?: string): string {
+  public resolveTargetUrl(customUrl?: string, currentUrl?: string): string {
     if (!customUrl || !customUrl.trim()) {
       return DOUYIN_SALE_PRODUCT_PAGE_URL;
     }
@@ -28,7 +35,22 @@ export class DouyinSaleProductCollector {
       const parsed = new URL(customUrl.trim());
       parsed.pathname = '/p/travel-goods/hotel/saleproduct/list';
       parsed.hash = '';
-      parsed.search = '';
+
+      if (currentUrl) {
+        try {
+          const current = new URL(currentUrl);
+          for (const key of ROUTE_CONTEXT_PARAMS) {
+            if (!parsed.searchParams.has(key) && current.searchParams.has(key)) {
+              parsed.searchParams.set(key, current.searchParams.get(key) || '');
+            }
+          }
+        } catch {
+          // 安全忽略 currentUrl 解析异常
+        }
+      } else {
+        parsed.search = '';
+      }
+
       return parsed.toString();
     } catch {
       throw new Error(`非法的抖音预售房型目标地址: ${customUrl}`);
@@ -42,10 +64,10 @@ export class DouyinSaleProductCollector {
     options: DouyinSaleProductCollectorOptions = {}
   ): Promise<DouyinSaleProductRoomBinding[]> {
     const log = options.onLog || (() => {});
-    const targetUrl = this.resolveTargetUrl(request.targetUrl);
+    const targetUrl = this.resolveTargetUrl(request.targetUrl, typeof page.url === 'function' ? page.url() : undefined);
     const timeoutMs = resolveTimeoutMs(request, 30);
     const waitSeconds = resolveWaitSeconds(request, 3);
-    const waitMs = resolveWaitMs(request, 3000);
+    const waitMs = resolveWaitMs(request, 3);
 
     log({
       level: 'PLAYWRIGHT',
@@ -89,13 +111,18 @@ export class DouyinSaleProductCollector {
     try {
       await updateVisualTrackerStatus(page, '🤖 正在加载抖音预售房型管理页面...', 'action');
 
-      await page.goto(targetUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: timeoutMs,
-      });
+      const isAlreadyOnPage = typeof page.url === 'function' && page.url().includes('/p/travel-goods/hotel/saleproduct/list');
+      if (isAlreadyOnPage && typeof page.reload === 'function') {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: timeoutMs });
+      } else {
+        await page.goto(targetUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: timeoutMs,
+        });
+      }
 
       // 检查登录态
-      const currentUrl = page.url();
+      const currentUrl = typeof page.url === 'function' ? page.url() : '';
       if (
         currentUrl.includes('/login') ||
         currentUrl.includes('passport.douyin.com') ||
@@ -111,6 +138,13 @@ export class DouyinSaleProductCollector {
 
       await updateVisualTrackerStatus(page, '🔍 正在拦截抖音预售房型与销售SKU关系数据...', 'info');
       await page.waitForTimeout(waitMs);
+
+      // 若网络响应稍慢，额外提供最多 3 秒容错轮询缓冲
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && (!captureHolder.bindings || captureHolder.bindings.length === 0)) {
+        if (captureHolder.error) break;
+        await page.waitForTimeout(200);
+      }
 
       if (captureHolder.error) {
         throw captureHolder.error;

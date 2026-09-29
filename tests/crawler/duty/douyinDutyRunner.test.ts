@@ -9,6 +9,10 @@ import {
   DouyinDutyErrorCode,
   DutyExecutionError,
 } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
+import {
+  DutyOrderStatus,
+  type ParsedDutyTaskContext,
+} from '@/src/crawler/duty/dutyTaskContext';
 import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
 
 vi.mock('@/src/crawler/browserManager', () => ({
@@ -352,7 +356,7 @@ describe('douyinDutyRunner', () => {
 
       await runner.start();
 
-      const orders = await runner.collectUnhandledOrders('refund');
+      const orders = await runner.collectUnhandledOrders(DutyOrderStatus.CANCEL);
       expect(clickedTabs).toEqual(['取消/退款']);
       expect(orders).toHaveLength(1);
       expect(orders[0]).toEqual({
@@ -520,7 +524,7 @@ describe('douyinDutyRunner', () => {
       await runner.stop();
     });
 
-    it('should coalesce concurrent calls for the same tab into a single in-flight execution', async () => {
+    it('should refresh list and collect unhandled orders under mutex', async () => {
       const runner = new DouyinDutyRunner();
       let networkCallCount = 0;
 
@@ -577,17 +581,11 @@ describe('douyinDutyRunner', () => {
 
       await runner.start();
 
-      // 并发触发两次采集
-      const [res1, res2] = await Promise.all([
-        runner.collectUnhandledOrders('book'),
-        runner.collectUnhandledOrders('book'),
-      ]);
+      const res = await runner.collectUnhandledOrders(DutyOrderStatus.NEW);
 
       expect(networkCallCount).toBe(1);
-      expect(res1).toHaveLength(1);
-      expect(res2).toHaveLength(1);
-      expect(res1[0].orderId).toBe('DY-COALESCE-1');
-      expect(res2[0].orderId).toBe('DY-COALESCE-1');
+      expect(res).toHaveLength(1);
+      expect(res[0].orderId).toBe('DY-COALESCE-1');
 
       await runner.stop();
     });
@@ -668,14 +666,27 @@ describe('douyinDutyRunner', () => {
 
       await runner.start();
 
-      // Case 1: cancelOrder === true in payload
-      await runner.collectUnhandledOrders({ payload: { cancelOrder: true } });
-      // Case 2: action === 'cancel'
-      await runner.collectUnhandledOrders({ payload: { action: 'cancel' } });
-      // Case 3: task msgType === 'OTA_CONFIRM_CANCEL'
-      await runner.collectUnhandledOrders({ payload: {}, task: { msgType: 'OTA_CONFIRM_CANCEL' } as unknown as import('../../../src/types').DutyClaimedTask, channelCode: 'DOUYIN', businessId: 'b1' });
+      // Case 1: ParsedDutyTaskContext with orderStatus: DutyOrderStatus.CANCEL
+      await runner.collectUnhandledOrders({
+        task: {
+          id: 't1',
+          businessId: 'COLLECT:1',
+          businessType: 'OTA_MIGRATION',
+          msgType: 'OTA_COLLECT_ORDER',
+          stationId: 's1',
+          leaseToken: 'token1',
+          data: '',
+        },
+        payload: { cancelOrder: true },
+        channelCode: 'DOUYIN',
+        businessId: 'COLLECT:1',
+        orderStatus: DutyOrderStatus.CANCEL,
+      });
 
-      expect(clickedTabs).toEqual(['取消/退款', '取消/退款', '取消/退款']);
+      // Case 2: Direct DutyOrderStatus.CANCEL
+      await runner.collectUnhandledOrders(DutyOrderStatus.CANCEL);
+
+      expect(clickedTabs).toEqual(['取消/退款', '取消/退款']);
 
       await runner.stop();
     });
@@ -727,12 +738,12 @@ describe('douyinDutyRunner', () => {
       );
     });
 
-    it('should throw NOT_IMPLEMENTED for unimplemented operations', async () => {
+    it('should throw RUNNER_NOT_RUNNING when operations are called and runner is not running', async () => {
       const runner = new DouyinDutyRunner();
 
-      await expect(runner.inspectOrderDetail('DY-123')).rejects.toThrow('暂未实装');
-      await expect(runner.confirmImport?.('CN-123', 'DY-123')).rejects.toThrow('暂未实装');
-      await expect(runner.confirmCancel?.('DY-123')).rejects.toThrow('暂未实装');
+      await expect(runner.inspectOrderDetail('DY-123')).rejects.toThrow('抖音值守执行器未运行，无法查看订单详情');
+      await expect(runner.confirmImport?.('CN-123', 'DY-123')).rejects.toThrow('抖音值守执行器未运行，无法回填确认号');
+      await expect(runner.confirmCancel?.('DY-123')).rejects.toThrow('抖音值守执行器未运行，无法确认取消');
     });
   });
 });

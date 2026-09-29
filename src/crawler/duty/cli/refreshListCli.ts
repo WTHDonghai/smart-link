@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from '../channels/meituan/meituanDutyRunner';
 import { DouyinDutyRunner } from '../channels/douyin/douyinDutyRunner';
+import { DutyOrderStatus } from '../dutyTaskContext';
 import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
 
@@ -19,10 +20,10 @@ function parseArgs(argv: string[]) {
   }
 
   const tabArg = argv.find((a) => a.startsWith('--tab='));
-  let tab: 'book' | 'refund' | undefined;
+  let tab: DutyOrderStatus | undefined;
   if (tabArg) {
     const val = tabArg.split('=')[1].toLowerCase();
-    tab = val === 'refund' ? 'refund' : 'book';
+    tab = (val === 'refund' || val === 'cancel') ? DutyOrderStatus.CANCEL : DutyOrderStatus.NEW;
   }
 
   return {
@@ -41,7 +42,7 @@ async function main() {
   const channelLabel = resolveChannelMeta(channel).name || channel;
 
   const tabDesc = isDouyin
-    ? (tab === 'refund' ? '取消/退款 (refund)' : '新订/变更 (book，默认)')
+    ? (tab === DutyOrderStatus.CANCEL ? '取消/退款 (refund)' : '新订/变更 (book，默认)')
     : '待确认订单 (新订与取消同屏展示)';
 
   console.log(`[DutyRefreshList:CLI] 启动${channelLabel}列表刷新测试 (Channel: ${channel}, Tab: ${tabDesc}, Headless: ${headless})...`);
@@ -56,7 +57,7 @@ async function main() {
     await runner.start();
     try {
       const orders = isDouyin
-        ? await (runner as DouyinDutyRunner).collectUnhandledOrders(tab || 'book')
+        ? await (runner as DouyinDutyRunner).collectUnhandledOrders(tab || DutyOrderStatus.NEW)
         : await runner.collectUnhandledOrders();
       console.log(`[DutyRefreshList:CLI] ${channelLabel}订单列表接口已返回并通过业务解析。`);
       console.log(`[DutyRefreshList:CLI] 待处理订单数量: ${orders.length}`);

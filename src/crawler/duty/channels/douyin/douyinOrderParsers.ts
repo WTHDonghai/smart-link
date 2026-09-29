@@ -10,6 +10,7 @@ import { fmtDate } from '@/src/utils/template/filters';
 
 export const DOUYIN_BOOK_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/book/query/list';
 export const DOUYIN_REFUND_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/refund/query/hotel_after_sale_record_list';
+export const DOUYIN_BOOK_ORDER_DETAIL_PATH = '/life/trade_view/v1/workbench/book/query/detail';
 
 /**
  * 判断 URL 是否属于抖音新订/变更订单列表接口
@@ -34,10 +35,21 @@ export function isDouyinRefundOrderListUrl(url: string): boolean {
 }
 
 /**
- * 判断 URL 是否属于任一抖音订单列表接口
+ * 判断 URL 是否属于抖音订单详情接口
+ */
+export function isDouyinOrderDetailUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname === DOUYIN_BOOK_ORDER_DETAIL_PATH;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 判断 URL 是否属于任一抖音订单列表或详情接口
  */
 export function isDouyinOrderListUrl(url: string): boolean {
-  return isDouyinBookOrderListUrl(url) || isDouyinRefundOrderListUrl(url);
+  return isDouyinBookOrderListUrl(url) || isDouyinRefundOrderListUrl(url) || isDouyinOrderDetailUrl(url);
 }
 
 /**
@@ -59,7 +71,13 @@ export function extractDouyinOrdersFromPayload(
   payload: unknown,
   defaultIsCancel = false
 ): RawDouyinDutyOrder[] {
-  if (!payload || typeof payload !== 'object') return [];
+  if (!payload || typeof payload !== 'object') {
+    throw new DutyExecutionError(
+      '抖音订单列表接口返回非对象合法报文',
+      DouyinDutyErrorCode.LIST_BUSINESS_FAILED,
+      false
+    );
+  }
 
   const root = payload as Record<string, unknown>;
 
@@ -244,3 +262,6 @@ export function parseDouyinBookOrderListResponse(payload: unknown): DutyUnhandle
 export function parseDouyinRefundOrderListResponse(payload: unknown): DutyUnhandledOrderSummary[] {
   return parseDouyinOrderListResponse(payload, true);
 }
+
+export { extractDouyinOrderFromResponse } from '@/src/services/protocols/douyinProtocol';
+

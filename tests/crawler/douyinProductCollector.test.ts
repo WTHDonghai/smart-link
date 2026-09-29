@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page, BrowserContext, Response, Locator } from 'playwright';
 import {
   DouyinProductCollector,
+  DOUYIN_PRODUCT_SELECTORS,
 } from '../../src/crawler/collectors/douyin/douyinProductCollector';
 import { douyinSaleProductCollector } from '../../src/crawler/collectors/douyin/douyinSaleProductCollector';
 import type { ProductCrawlRequest, CollectorLogPayload } from '../../src/crawler/types';
@@ -264,6 +265,61 @@ describe('DouyinProductCollector (商品管理采集器)', () => {
 
       expect(mockPage.waitForTimeout).toHaveBeenCalledWith(4000);
       expect(logs.some((l) => l.message.includes('4 秒'))).toBe(true);
+    });
+  });
+
+  describe('DOUYIN_PRODUCT_SELECTORS 元素定位规范性验证 (DOM结构 + CSS样式/类名 + 元素文本)', () => {
+    it('门店维度筛选触发器应包含 DOM 结构(div/span) + CSS类名(byted-form-container/ps-dimension-filter__label) + 元素文本("按省市")', () => {
+      const labelSel = DOUYIN_PRODUCT_SELECTORS.STORE_FILTER_LABEL;
+      expect(labelSel).toContain('div.byted-form-container');
+      expect(labelSel).toContain('span.ps-dimension-filter__label');
+      expect(labelSel).toContain(':has-text("按省市")');
+
+      const containerSel = DOUYIN_PRODUCT_SELECTORS.STORE_FILTER_CONTAINER;
+      expect(containerSel).toContain('div.byted-form-container');
+      expect(containerSel).toContain(':has(span.ps-dimension-filter__label:has-text("按省市"))');
+
+      const triggerInputSel = DOUYIN_PRODUCT_SELECTORS.STORE_TRIGGER_INPUT;
+      expect(triggerInputSel).toContain('div.byted-form-container');
+      expect(triggerInputSel).toContain('span.ps-dimension-filter__label:has-text("按省市")');
+      expect(triggerInputSel).toContain('input.byted-input');
+    });
+
+    it('展开后的门店选择面板与搜索输入框应限定在面板内，并具备 input 结构、类名及 placeholder 文本', () => {
+      const sel = DOUYIN_PRODUCT_SELECTORS.STORE_SEARCH_INPUT;
+      expect(sel).toContain('div.ps-select-panel');
+      expect(sel).toContain('input');
+      expect(sel).toContain('placeholder');
+      expect(sel).toContain('门店名');
+    });
+
+    it('清除按钮必须限定在面板容器内，并包含 button.byted-btn 类名与 "清除" 文本', () => {
+      const sel = DOUYIN_PRODUCT_SELECTORS.STORE_CLEAR_BUTTON;
+      expect(sel).toContain('div.ps-select-panel');
+      expect(sel).toContain('button.byted-btn');
+      expect(sel).toContain(':has-text("清除")');
+    });
+
+    it('确认按钮必须限定在面板容器内，并包含主要按钮样式与 "确认" 文本，防止误触全局确认按钮', () => {
+      const sel = DOUYIN_PRODUCT_SELECTORS.STORE_CONFIRM_BUTTON;
+      expect(sel).toContain('div.ps-select-panel');
+      expect(sel).toContain('button.byted-btn-type-primary');
+      expect(sel).toContain(':has-text("确认")');
+    });
+
+    it('主界面查询按钮必须限定在表单结构内，具备主要操作类名，严禁裸写 button:has-text("查询")', () => {
+      const sel = DOUYIN_PRODUCT_SELECTORS.MAIN_QUERY_BUTTON;
+      expect(sel).toContain('form.byted-form');
+      expect(sel).toContain('button.byted-btn-type-primary');
+      expect(sel).toContain(':has-text("查询")');
+      expect(sel).not.toBe('button:has-text("查询")');
+    });
+
+    it('分页下一页按钮必须具备分页器容器结构、下一页/右箭头类名与非禁用伪类状态', () => {
+      const sel = DOUYIN_PRODUCT_SELECTORS.PAGER_NEXT_BUTTON;
+      expect(sel).toContain('ul.byted-pager');
+      expect(sel).toContain('li.byted-pager-next');
+      expect(sel).toContain(':not(.byted-pager-item-disabled)');
     });
   });
 });

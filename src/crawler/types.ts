@@ -92,7 +92,7 @@ export function resolveWaitMs(
   if (typeof req?.waitMs === 'number' && Number.isFinite(req.waitMs) && req.waitMs > 0) {
     return req.waitMs;
   }
-  return defaultSeconds * 1000;
+  return defaultSeconds >= 1000 ? defaultSeconds : defaultSeconds * 1000;
 }
 
 /**

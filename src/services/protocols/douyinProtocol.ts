@@ -233,6 +233,16 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
 
     // 2. 酒店房型
     {
+      key: 'hotelId',
+      label: '门店ID',
+      path: 'book_detail_info.poi_life_account_id',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '7130223634133092383',
+      description: '预订酒店门店ID',
+      enabled: true,
+    },
+    {
       key: 'hotelName',
       label: '酒店名称',
       path: 'book_detail_info.hotel_name',
@@ -564,6 +574,117 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
 }
 
 /**
+ * 校验特定订单条目实体是否匹配目标订单号（匹配 order_id / book_id / after_sale_id）
+ */
+function isDouyinOrderMatch(rec: Record<string, unknown>, cleanTargetId: string): boolean {
+  if (!cleanTargetId) return true;
+  const baseInfo = rec.order_base_info as Record<string, unknown> | undefined;
+  const bookInfo = rec.book_detail_info as Record<string, unknown> | undefined;
+  const afterSaleInfo = rec.after_sale_info as Record<string, unknown> | undefined;
+  const afterSaleV2 = rec.after_sale_info_v2 as Record<string, unknown> | undefined;
+  const afterSaleInner = (afterSaleV2?.after_sale_info || {}) as Record<string, unknown>;
+
+  const oId = String(baseInfo?.order_id || rec.order_id || rec.otaOrderId || '').trim();
+  const bId = String(bookInfo?.book_id || bookInfo?.book_order_id || rec.book_id || '').trim();
+  const aId = String(afterSaleInfo?.after_sale_order_id || afterSaleInner.after_sale_id || rec.after_sale_id || '').trim();
+
+  return oId === cleanTargetId || bId === cleanTargetId || aId === cleanTargetId;
+}
+
+/**
+ * 纯函数：从任何抖音响应报文（单条订单、列表包装根响应、或嵌套 data 结构）中精准提取匹配特定订单号的单条原始实体
+ * 遵循 Fail-Fast：返回纯净的单条订单 Record<string, unknown>，未找到则返回 null
+ * @param payload 待解包的任意报文
+ * @param targetOrderId 目标订单号（可为主单号 order_id 或预约单号 book_id / 售后单号 after_sale_id）
+ */
+export function extractDouyinOrderFromResponse(
+  payload: unknown,
+  targetOrderId?: string
+): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const cleanTargetId = String(targetOrderId || '').trim();
+  const root = payload as Record<string, unknown>;
+
+  // 1. 如果输入本身就是已解包的单条订单实体（包含 order_base_info、book_detail_info 或 sale_product_info）
+  if (
+    (root.order_base_info && typeof root.order_base_info === 'object') ||
+    (root.book_detail_info && typeof root.book_detail_info === 'object') ||
+    (root.sale_product_info && typeof root.sale_product_info === 'object')
+  ) {
+    if (isDouyinOrderMatch(root, cleanTargetId)) {
+      return root;
+    }
+  }
+
+  // 2. 检查外层是否包裹了 data: { order_base_info: ... } 单条结构
+  if (root.data && typeof root.data === 'object' && !Array.isArray(root.data)) {
+    const innerData = root.data as Record<string, unknown>;
+    if (
+      (innerData.order_base_info && typeof innerData.order_base_info === 'object') ||
+      (innerData.book_detail_info && typeof innerData.book_detail_info === 'object') ||
+      (innerData.sale_product_info && typeof innerData.sale_product_info === 'object')
+    ) {
+      if (isDouyinOrderMatch(innerData, cleanTargetId)) {
+        return innerData;
+      }
+    }
+  }
+
+  // 3. 检查是否为列表响应或详情接口响应（root.data.data 可能是 string、string[] 或 Record<string, unknown>）
+  const listCandidates: unknown[] = [];
+  if (root.data && typeof root.data === 'object') {
+    const d = root.data as Record<string, unknown>;
+    if (typeof d.data === 'string') {
+      listCandidates.push(d.data);
+    } else if (Array.isArray(d.data)) {
+      listCandidates.push(...d.data);
+    } else if (d.data && typeof d.data === 'object') {
+      listCandidates.push(d.data);
+    }
+
+    // 抖音详情接口备用容器 dito_data.meta_data
+    if (d.dito_data && typeof d.dito_data === 'object') {
+      const dito = d.dito_data as Record<string, unknown>;
+      if (typeof dito.meta_data === 'string') {
+        listCandidates.push(dito.meta_data);
+      } else if (dito.meta_data && typeof dito.meta_data === 'object') {
+        listCandidates.push(dito.meta_data);
+      }
+    }
+  }
+  if (Array.isArray(root.data)) {
+    listCandidates.push(...root.data);
+  }
+
+  for (const item of listCandidates) {
+    let rec: Record<string, unknown> | null = null;
+    if (typeof item === 'string') {
+      const trimmed = item.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          rec = parsed as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+    } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+      rec = item as Record<string, unknown>;
+    }
+
+    if (!rec) continue;
+
+    if (isDouyinOrderMatch(rec, cleanTargetId)) {
+      return rec;
+    }
+  }
+
+  return null;
+}
+
+/**
  * 抖音订单原始报文清洗入口函数
  */
 export function cleanDouyinOrder(
@@ -575,7 +696,9 @@ export function cleanDouyinOrder(
     throw new Error('[DouyinProtocol] 抖音订单原始报文为空或非合法对象');
   }
 
-  const rawRecord = rawPayload as Record<string, unknown>;
+  // 防御性解包：若传入的是外层包裹（如列表接口根响应包装、含 data.data 的集合报文等），自动解包提取目标订单的单条实体
+  const extracted = extractDouyinOrderFromResponse(rawPayload, targetOrderId);
+  const rawRecord = (extracted || rawPayload) as Record<string, unknown>;
   const schema = customSchema || DEFAULT_DOUYIN_PROTOCOL_SCHEMA;
 
   // 定位抖音数据层
@@ -593,8 +716,17 @@ export function cleanDouyinOrder(
     context.otaOrderId = context.orderNo;
   }
 
-  if (context.hotelId) context.unitId = context.hotelId;
-  if (context.hotelName) context.unitName = context.hotelName;
+  if (!context.hotelId && (data.book_detail_info as Record<string, unknown> | undefined)?.poi_life_account_id) {
+    context.hotelId = String((data.book_detail_info as Record<string, unknown>).poi_life_account_id);
+  }
+  if (context.hotelId) {
+    context.unitId = context.hotelId;
+    context['门店ID'] = context.hotelId;
+  }
+  if (context.hotelName) {
+    context.unitName = context.hotelName;
+    context['门店名称'] = context.hotelName;
+  }
 
   if (context.roomTypeId) {
     context['房型ID'] = context.roomTypeId;

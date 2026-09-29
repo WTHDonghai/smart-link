@@ -2,6 +2,18 @@ import type { DutyClaimedTask } from '../../types';
 import { normalizeOtaChannelCode } from '../../config/otaUrls';
 
 /**
+ * 统一解析后的值守任务关联订单状态枚举
+ * - ALL: 适用于美团等单 Tab 同屏展示所有订单的渠道
+ * - NEW: 新订
+ * - CANCEL: 取消
+ */
+export enum DutyOrderStatus {
+  ALL = 'ALL',
+  NEW = 'NEW',
+  CANCEL = 'CANCEL',
+}
+
+/**
  * 统一解析后的值守任务上下文数据模型
  */
 export interface ParsedDutyTaskContext {
@@ -10,6 +22,7 @@ export interface ParsedDutyTaskContext {
   channelCode?: string;
   orderId?: string;
   businessId: string;
+  orderStatus: DutyOrderStatus;
 }
 
 /**
@@ -169,6 +182,65 @@ export function extractTaskOrderId(
 }
 
 /**
+ * 依据中台任务与已解码的 payload 精准判定订单状态
+ * 直接复用外层已解析的 payload，零重复 Base64 解码与 JSON 解析
+ * - CANCEL: 取消订单
+ * - NEW: 新订订单
+ * - ALL: 美团等同屏单 Tab 聚合所有订单的渠道
+ */
+export function resolveTaskOrderStatus(
+  task: DutyClaimedTask,
+  payload: Record<string, unknown> = {}
+): DutyOrderStatus {
+  // 1. targetMsgTypes 数组优先级最高
+  if (Array.isArray(payload.targetMsgTypes)) {
+    const types = payload.targetMsgTypes as string[];
+    const hasCancel = types.includes('OTA_CANCEL_ORDER');
+    const hasImport = types.includes('OTA_IMPORT_ORDER');
+    if (hasCancel && !hasImport) return DutyOrderStatus.CANCEL;
+    if (hasImport && !hasCancel) return DutyOrderStatus.NEW;
+  }
+
+  // 2. 显式字段标记
+  if (payload.cancelOrder === true || payload.action === 'cancel') {
+    return DutyOrderStatus.CANCEL;
+  }
+
+  if (Array.isArray(payload.orders) && payload.orders[0] && typeof payload.orders[0] === 'object') {
+    const firstOrder = payload.orders[0] as Record<string, unknown>;
+    if (firstOrder.cancelOrder === true || firstOrder.action === 'cancel') {
+      return DutyOrderStatus.CANCEL;
+    }
+  }
+
+  // 3. 业务标识 businessId
+  const businessId = String(task.businessId || '').toUpperCase();
+  if (businessId.includes('CANCEL') || businessId.includes('REFUND')) {
+    return DutyOrderStatus.CANCEL;
+  }
+  if (businessId.includes('NEW') || businessId.includes('BOOK')) {
+    return DutyOrderStatus.NEW;
+  }
+
+  // 4. 任务消息类型 msgType
+  const msgType = String(task.msgType || '');
+  if (msgType === 'OTA_CONFIRM_CANCEL' || msgType === 'OTA_CANCEL_ORDER') {
+    return DutyOrderStatus.CANCEL;
+  }
+  if (msgType === 'OTA_CONFIRM_IMPORT' || msgType === 'OTA_IMPORT_ORDER') {
+    return DutyOrderStatus.NEW;
+  }
+
+  // 5. 默认 ALL（美团等多个订单都在同一 Tab 中的渠道）
+  return DutyOrderStatus.ALL;
+}
+
+/**
+ * @deprecated 兼容历史调用，已统一为 resolveTaskOrderStatus
+ */
+export const extractTaskOrderStatus = resolveTaskOrderStatus;
+
+/**
  * @deprecated 兼容历史调用，已统一为 extractTaskOrderId
  */
 export const extractTaskOrderNo = extractTaskOrderId;
@@ -192,6 +264,7 @@ export function parseDutyTaskContext(task: DutyClaimedTask): ParsedDutyTaskConte
   const channelCode = extractTaskChannelCode(task, payload);
   const orderId = extractTaskOrderId(task, payload);
   const businessId = String(task.businessId || '').trim();
+  const orderStatus = resolveTaskOrderStatus(task, payload);
 
   return {
     task,
@@ -199,5 +272,6 @@ export function parseDutyTaskContext(task: DutyClaimedTask): ParsedDutyTaskConte
     channelCode,
     orderId,
     businessId,
+    orderStatus,
   };
 }

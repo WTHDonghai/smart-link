@@ -4,6 +4,8 @@ import {
   extractTaskChannelCode,
   extractTaskOrderId,
   extractTaskOrderNo,
+  extractTaskOrderStatus,
+  DutyOrderStatus,
   isRiskControlError,
   RISK_CONTROL_PATTERN,
 } from '../../../src/crawler/duty/dutyTaskContext';
@@ -248,6 +250,108 @@ describe('dutyTaskContext', () => {
         data: Buffer.from('{ illegal_json: ', 'utf-8').toString('base64'),
       });
       expect(() => parseDutyTaskContext(task)).toThrow();
+    });
+
+    it('成功解析并设置 orderStatus 为 DutyOrderStatus.NEW、CANCEL 或 ALL', () => {
+      const cancelTask = createBaseTask({
+        msgType: 'OTA_COLLECT_ORDER',
+        businessId: 'COLLECT:station:smart-link:DOUYIN_CANCEL:DOUYIN:2026',
+      });
+      const cancelCtx = parseDutyTaskContext(cancelTask);
+      expect(cancelCtx.orderStatus).toBe(DutyOrderStatus.CANCEL);
+
+      const newTask = createBaseTask({
+        msgType: 'OTA_IMPORT_ORDER',
+        businessId: 'ORD-BOOK-001',
+      });
+      const newCtx = parseDutyTaskContext(newTask);
+      expect(newCtx.orderStatus).toBe(DutyOrderStatus.NEW);
+
+      const meituanTask = createBaseTask({
+        msgType: 'OTA_COLLECT_ORDER',
+        businessId: 'COLLECT:station:smart-link:MEITUAN:2026',
+      });
+      const meituanCtx = parseDutyTaskContext(meituanTask);
+      expect(meituanCtx.orderStatus).toBe(DutyOrderStatus.ALL);
+    });
+
+    it('成功解析真实中台下发的 DOUYIN_NEW 采集任务报文并置为 DutyOrderStatus.NEW', () => {
+      const userTask: DutyClaimedTask = {
+        msgType: 'OTA_COLLECT_ORDER',
+        msgId: '2104774248548966402',
+        businessType: 'OTA_MIGRATION',
+        businessId: 'COLLECT:station-5c9ba671f2fb:smart-link:DOUYIN_NEW:DOUYIN:2026-09-29T11:24',
+        direction: 'INBOUND',
+        createdTime: '2026-09-29 11:24:20',
+        delaySendTime: 0,
+        data: 'eyJvdGFDaGFubmVsQ29kZSI6IkRPVVlJTiIsInRhcmdldE1zZ1R5cGVzIjpbIk9UQV9JTVBPUlRfT1JERVIiXSwiaG90ZWxzIjpbeyJleHRVbml0Q29kZSI6IjcxMzAyMjM2MzQxMzMwOTIzODMifSx7ImV4dFVuaXRDb2RlIjoiRFktSE9URUwtMTAwMSJ9XSwid2luZG93U3RhcnQiOiIyMDI2LTA5LTI5IDExOjI0OjAwIn0=',
+        id: '2104774248527994881',
+        stationId: 'station-5c9ba671f2fb',
+        leaseToken: '8798f36df6d54332a6029019821c3f29',
+      };
+      const context = parseDutyTaskContext(userTask);
+      expect(context.orderStatus).toBe(DutyOrderStatus.NEW);
+      expect(context.channelCode).toBe('DOUYIN');
+    });
+
+    it('成功解析真实中台下发的 DOUYIN_CANCEL 采集任务报文并置为 DutyOrderStatus.CANCEL', () => {
+      const cancelDataPayload = {
+        otaChannelCode: 'DOUYIN',
+        targetMsgTypes: ['OTA_CANCEL_ORDER'],
+        hotels: [{ extUnitCode: '7130223634133092383' }, { extUnitCode: 'DY-HOTEL-1001' }],
+        windowStart: '2026-09-29 11:24:00',
+      };
+      const cancelTask: DutyClaimedTask = {
+        msgType: 'OTA_COLLECT_ORDER',
+        msgId: '2104774248548966403',
+        businessType: 'OTA_MIGRATION',
+        businessId: 'COLLECT:station-5c9ba671f2fb:smart-link:DOUYIN_CANCEL:DOUYIN:2026-09-29T11:24',
+        data: Buffer.from(JSON.stringify(cancelDataPayload)).toString('base64'),
+        id: '2104774248527994882',
+        stationId: 'station-5c9ba671f2fb',
+        leaseToken: '8798f36df6d54332a6029019821c3f29',
+      };
+      const context = parseDutyTaskContext(cancelTask);
+      expect(context.orderStatus).toBe(DutyOrderStatus.CANCEL);
+      expect(context.channelCode).toBe('DOUYIN');
+    });
+  });
+
+  describe('resolveTaskOrderStatus & DutyOrderStatus', () => {
+    it('DutyOrderStatus 枚举仅包含 ALL, NEW 与 CANCEL', () => {
+      expect(DutyOrderStatus.ALL).toBe('ALL');
+      expect(DutyOrderStatus.NEW).toBe('NEW');
+      expect(DutyOrderStatus.CANCEL).toBe('CANCEL');
+    });
+
+    it('依据 targetMsgTypes 精准判定订单状态', () => {
+      const task = createBaseTask();
+      expect(extractTaskOrderStatus(task, { targetMsgTypes: ['OTA_CANCEL_ORDER'] })).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(task, { targetMsgTypes: ['OTA_IMPORT_ORDER'] })).toBe(DutyOrderStatus.NEW);
+    });
+
+    it('依据 businessId 关键词精准判定订单状态', () => {
+      expect(extractTaskOrderStatus(createBaseTask({ businessId: 'COLLECT:s1:DOUYIN_CANCEL:2026' }), {})).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(createBaseTask({ businessId: 'COLLECT:s1:DOUYIN_REFUND:2026' }), {})).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(createBaseTask({ businessId: 'COLLECT:s1:DOUYIN_NEW:2026' }), {})).toBe(DutyOrderStatus.NEW);
+      expect(extractTaskOrderStatus(createBaseTask({ businessId: 'COLLECT:s1:DOUYIN_BOOK:2026' }), {})).toBe(DutyOrderStatus.NEW);
+    });
+
+    it('依据 msgType 精准判定订单状态', () => {
+      expect(extractTaskOrderStatus(createBaseTask({ msgType: 'OTA_CONFIRM_CANCEL' }), {})).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(createBaseTask({ msgType: 'OTA_CANCEL_ORDER' }), {})).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(createBaseTask({ msgType: 'OTA_CONFIRM_IMPORT' }), {})).toBe(DutyOrderStatus.NEW);
+      expect(extractTaskOrderStatus(createBaseTask({ msgType: 'OTA_IMPORT_ORDER' }), {})).toBe(DutyOrderStatus.NEW);
+    });
+
+    it('依据 payload 中的显式标记精准判定订单状态', () => {
+      const task = createBaseTask({ businessId: 'COLLECT:s1:DEFAULT:2026', msgType: 'OTA_COLLECT_ORDER' });
+      expect(extractTaskOrderStatus(task, { cancelOrder: true })).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(task, { action: 'cancel' })).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(task, { orders: [{ cancelOrder: true }] })).toBe(DutyOrderStatus.CANCEL);
+      expect(extractTaskOrderStatus(task, { orders: [{ action: 'cancel' }] })).toBe(DutyOrderStatus.CANCEL);
+      // 美团或全量单 Tab 渠道默认 ALL
+      expect(extractTaskOrderStatus(task, {})).toBe(DutyOrderStatus.ALL);
     });
   });
 });

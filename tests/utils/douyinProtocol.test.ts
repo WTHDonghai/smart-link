@@ -8,6 +8,8 @@ import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
   cleanDouyinOrder,
 } from '../../src/services/protocols/douyinProtocol';
+import fs from 'node:fs';
+import path from 'node:path';
 import { renderTemplate } from '../../src/utils/template/templateEngine';
 import { formatDate } from '../../src/utils/template/filters';
 
@@ -53,7 +55,10 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(cleanCtx.orderStatus).toBe('待入住');
 
     // 酒店与物理房型
+    expect(cleanCtx.hotelId).toBe('7130223634133092383');
+    expect(cleanCtx['门店ID']).toBe('7130223634133092383');
     expect(cleanCtx.hotelName).toBe('淮安日月洲度假村(西游乐园店)');
+    expect(cleanCtx['酒店名称']).toBe('淮安日月洲度假村(西游乐园店)');
     expect(cleanCtx.roomName).toBe('豪华大床房');
     expect(cleanCtx.productName).toContain('错峰大促｜豪华房1晚含早');
     expect(cleanCtx.roomCount).toBe('1');
@@ -174,5 +179,62 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     });
     // Missing roomTypeId / productId and rateCode
     expect(() => invalidProtocol.toUnifiedOrder('测试')).toThrow(/缺少必要关键字段/);
+  });
+
+  it('defensively unwraps and cleans order when passed a full list API response wrapper', () => {
+    const listResponseWrapper = {
+      status_code: 0,
+      status_msg: '',
+      data: {
+        count: 1,
+        data: [
+          JSON.stringify(DOUYIN_RAW_SAMPLE_ORDER),
+        ],
+      },
+    };
+
+    // 传入外层包装对象及目标单号，验证防御性解包生效，不会报字段缺失/协议漂移告警
+    const protocol = cleanDouyinOrder(listResponseWrapper, null, '1116431119643540077');
+    expect(protocol.get('orderNo')).toBe('1116431119643540077');
+    expect(protocol.get('bookId')).toBe('800014640948279296216700077');
+    expect(protocol.get('roomName')).toBe('豪华大床房');
+
+    const unified = protocol.toUnifiedOrder('自动化入单测试');
+    expect(unified.otaOrderId).toBe('1116431119643540077');
+    expect(unified.booking.roomTypeName).toBe('豪华大床房');
+    expect(unified.booking.totalPrice).toBe(496);
+  });
+
+  it('end-to-end cleans real production detail API fixture provided by merchant workbench', () => {
+    const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealOrderDetail.json');
+    const rawDetailPayload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+
+    // 针对用户真实报错的订单「1112769276121338025」执行清洗
+    const protocol = cleanDouyinOrder(rawDetailPayload, null, '1112769276121338025');
+
+    expect(protocol.get('orderNo')).toBe('1112769276121338025');
+    expect(protocol.get('bookId')).toBe('800000449770071274116238025');
+    expect(protocol.get('roomName')).toBe('海洋主题家庭房');
+    expect(protocol.get('checkInDate')).toBe('2026-10-01');
+    expect(protocol.get('checkOutDate')).toBe('2026-10-02');
+    expect(protocol.get('payAmount')).toBe('1272.98'); // 127298 分 -> 1272.98 元
+    expect(protocol.get('guestName')).toBe('谢佳安');
+    expect(protocol.get('guestPhone')).toBe('*******3150');
+
+    const unified = protocol.toUnifiedOrder('【中台自动导入】');
+    expect(unified.otaOrderId).toBe('1112769276121338025');
+    expect(unified.otaChannel).toBe('DOUYIN');
+    expect(unified.unitId).toBe('7130223634133092383');
+    expect(unified.unitName).toBe('淮安日月洲度假村(西游乐园店)');
+    expect(unified.contact.name).toBe('谢佳安');
+    expect(unified.contact.mobile).toBe('*******3150');
+    expect(unified.booking.roomTypeName).toBe('海洋主题家庭房');
+    expect(unified.booking.roomTypeId).toBe('1874909917667332');
+    expect(unified.booking.rateCode).toBe('预售券');
+    expect(unified.booking.arrival).toBe('2026-10-01');
+    expect(unified.booking.departure).toBe('2026-10-02');
+    expect(unified.booking.nights).toBe(1);
+    expect(unified.booking.totalPrice).toBe(1272.98);
+    expect(unified.booking.paytype).toBe('预付');
   });
 });

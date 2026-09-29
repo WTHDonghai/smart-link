@@ -5,11 +5,13 @@ import {
   isDouyinBookOrderListUrl,
   isDouyinRefundOrderListUrl,
   isDouyinOrderListUrl,
+  isDouyinOrderDetailUrl,
   isDouyinRiskControlText,
   extractDouyinOrdersFromPayload,
   parseDouyinOrderListResponse,
   parseDouyinBookOrderListResponse,
   parseDouyinRefundOrderListResponse,
+  extractDouyinOrderFromResponse,
 } from '@/src/crawler/duty/channels/douyin/douyinOrderParsers';
 import { DutyExecutionError } from '@/src/crawler/duty/dutyContracts';
 import { DouyinDutyErrorCode } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
@@ -41,12 +43,25 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(isDouyinRefundOrderListUrl('/life/trade_view/v1/workbench/refund/query/hotel_after_sale_record_list')).toBe(false);
     });
 
-    it('isDouyinOrderListUrl should match either book or refund endpoint', () => {
+    it('isDouyinOrderDetailUrl should match book order detail URL path', () => {
+      expect(
+        isDouyinOrderDetailUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?root_life_account_id=7063009395525584896&life_biz_view_id=22&life_account_biz_ids=')
+      ).toBe(true);
+      expect(
+        isDouyinOrderDetailUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/list')
+      ).toBe(false);
+      expect(isDouyinOrderDetailUrl('')).toBe(false);
+    });
+
+    it('isDouyinOrderListUrl should match book list, refund list, or detail endpoint', () => {
       expect(
         isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/list')
       ).toBe(true);
       expect(
         isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/refund/query/hotel_after_sale_record_list')
+      ).toBe(true);
+      expect(
+        isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?root_life_account_id=123')
       ).toBe(true);
       expect(isDouyinOrderListUrl('https://life.douyin.com/life/other/endpoint')).toBe(false);
     });
@@ -266,10 +281,99 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(orders).toEqual([]);
     });
 
-    it('should return empty array for non-object payload', () => {
-      expect(extractDouyinOrdersFromPayload(null)).toEqual([]);
-      expect(extractDouyinOrdersFromPayload(undefined)).toEqual([]);
-      expect(extractDouyinOrdersFromPayload('string')).toEqual([]);
+    it('should throw LIST_BUSINESS_FAILED for non-object or null payload (Fail-Fast)', () => {
+      expect(() => extractDouyinOrdersFromPayload(null)).toThrowError(DutyExecutionError);
+      expect(() => extractDouyinOrdersFromPayload(undefined)).toThrowError(DutyExecutionError);
+      expect(() => extractDouyinOrdersFromPayload('string')).toThrowError(DutyExecutionError);
+    });
+  });
+
+  describe('extractDouyinOrderFromResponse', () => {
+    it('should extract target order from real book order list fixture with serialized JSON string', () => {
+      const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealBookOrderList.json');
+      const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+
+      // 提取目标单号
+      const order = extractDouyinOrderFromResponse(payload, '1113572432327416823');
+      expect(order).not.toBeNull();
+      const baseInfo = order?.order_base_info as Record<string, unknown>;
+      expect(baseInfo.order_id).toBe('1113572432327416823');
+      const bookInfo = order?.book_detail_info as Record<string, unknown>;
+      expect(bookInfo.book_id).toBe('800000522465461174916676823');
+    });
+
+    it('should extract target order by book_id from real book order list fixture', () => {
+      const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealBookOrderList.json');
+      const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+
+      const order = extractDouyinOrderFromResponse(payload, '800000522465461174916676823');
+      expect(order).not.toBeNull();
+      const baseInfo = order?.order_base_info as Record<string, unknown>;
+      expect(baseInfo.order_id).toBe('1113572432327416823');
+    });
+
+    it('should return null when targetOrderId is not in the list', () => {
+      const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealBookOrderList.json');
+      const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+
+      const order = extractDouyinOrderFromResponse(payload, 'NON-EXISTENT-ID');
+      expect(order).toBeNull();
+    });
+
+    it('should return the object directly when input is already a single unboxed order record', () => {
+      const singleOrder = {
+        order_base_info: { order_id: '1112769276121338025' },
+        book_detail_info: { book_id: '800000449770071274116238025' },
+        sale_product_info: { physical_room_name: '海洋主题家庭房' },
+      };
+
+      const extracted = extractDouyinOrderFromResponse(singleOrder, '1112769276121338025');
+      expect(extracted).toBe(singleOrder);
+    });
+
+    it('should extract order when wrapped in data: { order_base_info: ... }', () => {
+      const wrapped = {
+        data: {
+          order_base_info: { order_id: '1112769276121338025' },
+          book_detail_info: { book_id: '800000449770071274116238025' },
+        },
+      };
+
+      const extracted = extractDouyinOrderFromResponse(wrapped, '1112769276121338025');
+      expect(extracted).toEqual(wrapped.data);
+    });
+
+    it('should extract order from real production detail API fixture with data.data as a serialized JSON string', () => {
+      const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealOrderDetail.json');
+      const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+
+      const extracted = extractDouyinOrderFromResponse(payload, '1112769276121338025');
+      expect(extracted).not.toBeNull();
+      const baseInfo = extracted?.order_base_info as Record<string, unknown>;
+      expect(baseInfo.order_id).toBe('1112769276121338025');
+      const bookInfo = extracted?.book_detail_info as Record<string, unknown>;
+      expect(bookInfo.book_id).toBe('800000449770071274116238025');
+      expect(bookInfo.hotel_name).toBe('淮安日月洲度假村(西游乐园店)');
+      expect(bookInfo.book_start_time).toBe(1790784000);
+      expect(bookInfo.book_end_time).toBe(1790870400);
+
+      const saleProduct = extracted?.sale_product_info as Record<string, unknown>;
+      expect(saleProduct.physical_room_name).toBe('海洋主题家庭房');
+      expect(saleProduct.product_id).toBe('1874909917667332');
+
+      const amountInfo = extracted?.amount_info as Record<string, unknown>;
+      expect(amountInfo.pay_amount).toBe(127298);
+
+      const guestInfo = extracted?.guest_info as Record<string, unknown>;
+      const userList = guestInfo.user_list as Array<{ name: string; phone: string }>;
+      expect(userList[0].name).toBe('谢佳安');
+      expect(userList[0].phone).toBe('*******3150');
+    });
+
+    it('should return null for null/undefined or non-object inputs', () => {
+      expect(extractDouyinOrderFromResponse(null, '123')).toBeNull();
+      expect(extractDouyinOrderFromResponse(undefined, '123')).toBeNull();
+      expect(extractDouyinOrderFromResponse('not-json', '123')).toBeNull();
     });
   });
 });

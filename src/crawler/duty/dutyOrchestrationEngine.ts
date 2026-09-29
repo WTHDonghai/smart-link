@@ -26,6 +26,7 @@ import { logger } from '../../services/logger';
 import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskContext';
 import { createTaskLogger, type DutyTaskLogger } from './dutyTaskLogger';
 import { hotelCollectionEngine } from '../engine';
+import { resolveChannelMeta } from '@/src/utils/channelMeta';
 
 export interface TaskResultPayloadOptions {
   status: DutyTaskWireStatus;
@@ -812,7 +813,7 @@ export class DutyOrchestrationEngine {
     });
 
     if (isRiskIntercepted) {
-      const channelLabel = targetChannel === 'DOUYIN' ? '抖音' : targetChannel === 'MEITUAN' ? '美团' : targetChannel;
+      const channelLabel = resolveChannelMeta(targetChannel).name || targetChannel;
       taskLogger.log({
         level: 'WARN',
         event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
