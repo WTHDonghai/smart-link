@@ -754,6 +754,15 @@ export function cleanDouyinOrder(
     context['支付方式'] = context.paytype;
   }
 
+  // 融合由探测器在浏览器会话中解密出的明文手机号
+  const decryptedPhone =
+    (rawPayload as Record<string, unknown> | undefined)?.decryptedPhone ||
+    (rawRecord as Record<string, unknown> | undefined)?.decryptedPhone;
+  if (decryptedPhone && (!context.guestPhone || String(context.guestPhone).includes('*'))) {
+    context.guestPhone = String(decryptedPhone);
+    context['联系电话'] = context.guestPhone;
+  }
+
   return new DouyinOrderProtocol(context, rawRecord);
 }
 

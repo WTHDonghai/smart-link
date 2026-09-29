@@ -37,13 +37,28 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     expect(mockRefreshList).toHaveBeenCalled();
   });
 
-  it('should return cached raw detail when card is located and cached detail is available', async () => {
+  it('should return captured order detail when card is located and detail response is received', async () => {
     const inspector = new DouyinDetailInspector();
+    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
+
+    const mockRawData = {
+      order_base_info: { order_id: '1113572432327416823' },
+      book_detail_info: { hotel_name: '淮安日月洲度假村' },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
 
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-      click: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockImplementation(async () => {
+        if (responseCallback) {
+          await responseCallback({
+            status: () => 200,
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1113572432327416823',
+            text: async () => JSON.stringify(mockPayload),
+          });
+        }
+      }),
       locator: vi.fn().mockReturnValue({
         first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
       }),
@@ -68,25 +83,23 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
+      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
+        if (event === 'response') {
+          responseCallback = handler;
+        }
+      }),
       off: vi.fn(),
     } as unknown as Page;
 
-    const mockRawData = {
-      order_base_info: { order_id: '1113572432327416823' },
-      book_detail_info: { hotel_name: '淮安日月洲度假村' },
-    };
-
     const result = await inspector.inspectOrderDetail(mockPage, '1113572432327416823', {
       refreshOrderList: vi.fn(),
-      getCachedOrderRaw: () => mockRawData,
     });
 
-    expect(result).toBe(mockRawData);
+    expect(result).toEqual(mockPayload);
     expect(mockCard.click).toHaveBeenCalled();
   });
 
-  it('should throw ORDER_DETAIL_TIMEOUT when card is located but network response times out and no cached raw exists', async () => {
+  it('should throw ORDER_DETAIL_TIMEOUT when card is located but network response times out', async () => {
     const inspector = new DouyinDetailInspector();
 
     const mockCard = {
@@ -124,7 +137,6 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     await expect(
       inspector.inspectOrderDetail(mockPage, 'DY-TIMEOUT-999', {
         refreshOrderList: vi.fn(),
-        getCachedOrderRaw: () => null,
       })
     ).rejects.toMatchObject({
       errorCode: DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
@@ -132,7 +144,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     });
   });
 
-  it('should unwrap and return single order entity when network response emits full list payload', async () => {
+  it('should capture and return full raw network payload without premature domain parsing', async () => {
     const inspector = new DouyinDetailInspector();
     let responseCallback: ((res: unknown) => Promise<void>) | null = null;
     const fullListPayload = {
@@ -197,22 +209,39 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     // 触发检查，并在卡片展开点击时触发模拟网络返回完整的列表响应
     const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
       refreshOrderList: vi.fn(),
-      getCachedOrderRaw: () => null,
     });
     expect(result).not.toBeNull();
-    // 关键断言：结果必须是单条订单实体，绝不能是外层包装对象！
-    expect(result.data).toBeUndefined();
-    expect((result.order_base_info as Record<string, unknown>).order_id).toBe('1112769276121338025');
-    expect((result.book_detail_info as Record<string, unknown>).book_id).toBe('800000449770071274116238025');
+    // 关键断言：单一职责——拦截器忠实返回原始网络报文，解包与协议清洗归属于下游清洗层
+    expect(result).toEqual(fullListPayload);
   });
 
   it('should decrypt guest phone when phone_ciphertext is present and phone is masked', async () => {
     const inspector = new DouyinDetailInspector();
+    let responseCallback: ((res: unknown) => Promise<void>) | null = null;
+
+    const mockRawWithCipher = {
+      order_base_info: { order_id: '1112769276121338025' },
+      book_detail_info: { hotel_name: '测试酒店' },
+      guest_info: {
+        user_list: [
+          { name: '张三', phone: '*******5678', phone_ciphertext: 'CIPHERTEXT_123' },
+        ],
+      },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawWithCipher) } };
 
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
-      click: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockImplementation(async () => {
+        if (responseCallback) {
+          await responseCallback({
+            status: () => 200,
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
+            text: async () => JSON.stringify(mockPayload),
+          });
+        }
+      }),
       locator: vi.fn().mockReturnValue({
         first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
       }),
@@ -244,27 +273,171 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      on: vi.fn(),
+      on: vi.fn((event: string, handler: (res: unknown) => Promise<void>) => {
+        if (event === 'response') {
+          responseCallback = handler;
+        }
+      }),
       off: vi.fn(),
     } as unknown as Page;
 
-    const mockRawWithCipher = {
-      order_base_info: { order_id: '1112769276121338025' },
-      book_detail_info: { hotel_name: '测试酒店' },
-      guest_info: {
-        user_list: [
-          { name: '张三', phone: '*******5678', phone_ciphertext: 'CIPHERTEXT_123' },
-        ],
-      },
-    };
-
     const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
       refreshOrderList: vi.fn(),
-      getCachedOrderRaw: () => mockRawWithCipher,
     });
 
     expect(mockEvaluate).toHaveBeenCalled();
-    const guest = (result.guest_info as { user_list: Array<{ phone: string }> }).user_list[0];
-    expect(guest.phone).toBe('13812345678');
+    expect(result.decryptedPhone).toBe('13812345678');
+  });
+
+  it('should capture order detail via waitForResponse when network latency is simulated', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const mockRawData = {
+      order_base_info: { order_id: '1113572432327416999' },
+      book_detail_info: { hotel_name: '常州嬉戏谷度假酒店' },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn().mockReturnValue({
+        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+      }),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1113572432327416999')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+      waitForResponse: vi.fn().mockResolvedValue({
+        status: () => 200,
+        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+        text: async () => JSON.stringify(mockPayload),
+      }),
+    } as unknown as Page;
+
+    const result = await inspector.inspectOrderDetail(mockPage, '1113572432327416999', {
+      refreshOrderList: vi.fn(),
+    });
+
+    expect(result).toEqual(mockPayload);
+    expect(mockCard.click).toHaveBeenCalled();
+    expect(mockPage.waitForResponse).toHaveBeenCalled();
+  });
+
+  it('should include HTTP status in error diagnosis when detail response returns non-200', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn().mockReturnValue({
+        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+      }),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1113572432327416500')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+      waitForResponse: vi.fn(async (predicate: (res: { url: () => string; status: () => number }) => boolean) => {
+        const mockErrorRes = {
+          url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+          status: () => 500,
+        };
+        predicate(mockErrorRes);
+        throw new Error('Timeout 8000ms');
+      }),
+    } as unknown as Page;
+
+    await expect(
+      inspector.inspectOrderDetail(mockPage, '1113572432327416500', {
+        refreshOrderList: vi.fn(),
+      })
+    ).rejects.toThrow('详情接口返回异常 HTTP 状态码: 500');
+  });
+
+  it('should include business error in error diagnosis when detail response returns non-zero status_code', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn().mockReturnValue({
+        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+      }),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1113572432327416403')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+      waitForResponse: vi.fn().mockResolvedValue({
+        status: () => 200,
+        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail',
+        text: async () => JSON.stringify({ status_code: 10001, status_msg: '登录态失效，请重新登录' }),
+      }),
+    } as unknown as Page;
+
+    await expect(
+      inspector.inspectOrderDetail(mockPage, '1113572432327416403', {
+        refreshOrderList: vi.fn(),
+      })
+    ).rejects.toThrow('详情接口返回业务错误 (code: 10001, msg: 登录态失效，请重新登录)');
   });
 });

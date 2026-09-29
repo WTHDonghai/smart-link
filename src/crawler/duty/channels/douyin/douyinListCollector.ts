@@ -1,4 +1,4 @@
-import type { Page, Request, Response, Locator } from 'playwright';
+import type { Page, Response, Locator } from 'playwright';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import type { DutyUnhandledOrderSummary } from '../../dutyContracts';
 import {
@@ -13,7 +13,6 @@ import {
   isDouyinRefundOrderListUrl,
   parseDouyinBookOrderListResponse,
   parseDouyinRefundOrderListResponse,
-  extractDouyinOrdersFromPayload,
 } from './douyinOrderParsers';
 import {
   ACTION_TIMEOUT,
@@ -23,6 +22,9 @@ import {
 } from '../../dutyTimingConfig';
 import { assertNoDouyinPageRisk } from './douyinRiskGuard';
 import { dismissDouyinNoticeModals, clickWithModalBypass } from './douyinModalGuard';
+
+export const TAB_TEXT_NEW = '新订/变更';
+export const TAB_TEXT_CANCEL = '取消/退款';
 
 /**
  * 等待抖音特定列表网络响应
@@ -36,29 +38,22 @@ export async function waitForDouyinListResponse(
     throw new DutyExecutionError('当前页面环境不支持 waitForResponse', 'METHOD_NOT_SUPPORTED', false);
   }
 
-  const observedPaths = new Set<string>();
-  const onRequest = (request: Request) => {
-    try {
-      if (isTargetUrl(request.url())) {
-        observedPaths.add(new URL(request.url()).pathname);
-      }
-    } catch {
-      // 无效 URL 不参与诊断
-    }
-  };
-  const canObserveRequests = typeof page.on === 'function' && typeof page.off === 'function';
-  if (canObserveRequests) {
-    page.on('request', onRequest);
-  }
+  let lastObservedStatus: number | undefined;
 
   try {
     const response = await page.waitForResponse(
-      (res) => isTargetUrl(res.url()) && res.request().method() === 'POST',
+      (res) => {
+        if (isTargetUrl(res.url())) {
+          lastObservedStatus = res.status();
+          return res.request().method() === 'POST';
+        }
+        return false;
+      },
       { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
     );
     if (response.status() !== 200) {
       throw new DutyExecutionError(
-        `抖音${phase}列表接口返回 HTTP ${response.status()}: ${response.url()}`,
+        `抖音「${phase}」列表接口返回 HTTP ${response.status()}: ${response.url()}`,
         DouyinDutyErrorCode.LIST_HTTP_ERROR,
         false
       );
@@ -67,27 +62,17 @@ export async function waitForDouyinListResponse(
   } catch (error) {
     if (error instanceof DutyExecutionError) throw error;
     await assertNoDouyinPageRisk(page);
-    const evidence = observedPaths.size
-      ? `已观察到请求路径: ${Array.from(observedPaths).join(', ')}`
-      : '未观察到目标列表请求';
+
+    const statusDetail = typeof lastObservedStatus === 'number'
+      ? `（接口曾返回 HTTP ${lastObservedStatus}）`
+      : '（未收到任何 HTTP 响应包，请求未发起或网络挂起）';
+
     throw new DutyExecutionError(
-      `抖音${phase}列表响应超时或异常: ${error instanceof Error ? error.message : String(error)}；${evidence}`,
+      `抖音「${phase}」列表响应超时或异常: ${error instanceof Error ? error.message : String(error)} ${statusDetail}`,
       DouyinDutyErrorCode.LIST_RESPONSE_TIMEOUT,
       true
     );
-  } finally {
-    if (canObserveRequests) {
-      page.off('request', onRequest);
-    }
   }
-}
-
-/**
- * 将值守订单状态映射为抖音列表的目标 Tab ('book' | 'refund')
- * 直接复用外层统一解析的 DutyOrderStatus，内部零重复解析
- */
-export function resolveDouyinTargetTab(orderStatus: DutyOrderStatus = DutyOrderStatus.NEW): 'book' | 'refund' {
-  return orderStatus === DutyOrderStatus.CANCEL ? 'refund' : 'book';
 }
 
 /**
@@ -95,7 +80,6 @@ export function resolveDouyinTargetTab(orderStatus: DutyOrderStatus = DutyOrderS
  */
 export class DouyinListCollector {
   private lastListRefreshTime = 0;
-  private readonly recentOrdersMap = new Map<string, Record<string, unknown>>();
 
   /**
    * 基于【DOM 结构 + CSS 样式 + 文本】三重精准约束定位抖音 Tab 元素
@@ -129,39 +113,19 @@ export class DouyinListCollector {
   }
 
   /**
-   * 获取缓存的最近提取到的原始订单报文（若存在）
-   */
-  public getCachedOrderRaw(orderId: string): Record<string, unknown> | null {
-    return this.recentOrdersMap.get(orderId) || null;
-  }
-
-  /**
-   * 存储最近提取到的订单原始报文（带上限 FIFO 淘汰，防止长时间值守导致内存泄露）
-   */
-  private cacheRecentOrder(orderId: string, raw: Record<string, unknown>): void {
-    if (this.recentOrdersMap.size >= 200) {
-      const oldestKey = this.recentOrdersMap.keys().next().value;
-      if (oldestKey) {
-        this.recentOrdersMap.delete(oldestKey);
-      }
-    }
-    this.recentOrdersMap.set(orderId, raw);
-  }
-
-  /**
    * 刷新「新订/变更」列表并返回解析后的新订单概要
    */
   public async refreshBookOrderList(page: Page): Promise<DutyUnhandledOrderSummary[]> {
     await assertNoDouyinPageRisk(page);
     await dismissDouyinNoticeModals(page);
 
-    const tabLocator = this.getTabLocator(page, '新订/变更');
+    const tabLocator = this.getTabLocator(page, TAB_TEXT_NEW);
     try {
       await tabLocator.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
     } catch (error) {
       await assertNoDouyinPageRisk(page);
       throw new DutyExecutionError(
-        `未找到可用的「新订/变更」Tab: ${error instanceof Error ? error.message : String(error)}`,
+        `未找到可用的「${TAB_TEXT_NEW}」Tab: ${error instanceof Error ? error.message : String(error)}`,
         DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
         false
       );
@@ -173,17 +137,17 @@ export class DouyinListCollector {
       : '';
     if (actualText && !actualText.includes('新订') && !actualText.includes('变更')) {
       throw new DutyExecutionError(
-        `Tab 元素文本校验失败：预期为「新订/变更」，实际定位到「${actualText}」，已阻断误触`,
+        `Tab 元素文本校验失败：预期为「${TAB_TEXT_NEW}」，实际定位到「${actualText}」，已阻断误触`,
         DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
         false
       );
     }
 
-    await updateVisualTrackerStatus(page, '📥 正在点击「新订/变更」Tab 并等待接口响应...', 'action');
+    await updateVisualTrackerStatus(page, `📥 正在点击「${TAB_TEXT_NEW}」Tab 并等待接口响应...`, 'action');
     const responsePromise = waitForDouyinListResponse(
       page,
       isDouyinBookOrderListUrl,
-      '新订/变更'
+      TAB_TEXT_NEW
     );
 
     // 优先点击内层文字 label 容器，确保点击坐标 100% 精确落在文字中心，杜绝边缘拉伸偏离
@@ -206,22 +170,10 @@ export class DouyinListCollector {
       parsedPayload = JSON.parse(text);
     } catch {
       throw new DutyExecutionError(
-        '抖音「新订/变更」列表响应非合法 JSON',
+        `抖音「${TAB_TEXT_NEW}」列表响应非合法 JSON`,
         DouyinDutyErrorCode.LIST_BUSINESS_FAILED,
         false
       );
-    }
-
-    // 缓存解析得到的完整订单条目供详情检查使用
-    try {
-      const rawOrders = extractDouyinOrdersFromPayload(parsedPayload, false);
-      for (const order of rawOrders) {
-        if (order.orderId && order.raw) {
-          this.cacheRecentOrder(order.orderId, order.raw);
-        }
-      }
-    } catch {
-      // 容错缓存更新
     }
 
     return parseDouyinBookOrderListResponse(parsedPayload);
@@ -234,13 +186,13 @@ export class DouyinListCollector {
     await assertNoDouyinPageRisk(page);
     await dismissDouyinNoticeModals(page);
 
-    const tabLocator = this.getTabLocator(page, '取消/退款');
+    const tabLocator = this.getTabLocator(page, TAB_TEXT_CANCEL);
     try {
       await tabLocator.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
     } catch (error) {
       await assertNoDouyinPageRisk(page);
       throw new DutyExecutionError(
-        `未找到可用的「取消/退款」Tab: ${error instanceof Error ? error.message : String(error)}`,
+        `未找到可用的「${TAB_TEXT_CANCEL}」Tab: ${error instanceof Error ? error.message : String(error)}`,
         DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
         false
       );
@@ -252,17 +204,17 @@ export class DouyinListCollector {
       : '';
     if (actualText && !actualText.includes('取消') && !actualText.includes('退款')) {
       throw new DutyExecutionError(
-        `Tab 元素文本校验失败：预期为「取消/退款」，实际定位到「${actualText}」，已阻断误触`,
+        `Tab 元素文本校验失败：预期为「${TAB_TEXT_CANCEL}」，实际定位到「${actualText}」，已阻断误触`,
         DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
         false
       );
     }
 
-    await updateVisualTrackerStatus(page, '📥 正在点击「取消/退款」Tab 并等待接口响应...', 'action');
+    await updateVisualTrackerStatus(page, `📥 正在点击「${TAB_TEXT_CANCEL}」Tab 并等待接口响应...`, 'action');
     const responsePromise = waitForDouyinListResponse(
       page,
       isDouyinRefundOrderListUrl,
-      '取消/退款'
+      TAB_TEXT_CANCEL
     );
 
     // 优先点击内层文字 label 容器，确保点击坐标 100% 精确落在文字中心，杜绝边缘拉伸偏离
@@ -285,22 +237,10 @@ export class DouyinListCollector {
       parsedPayload = JSON.parse(text);
     } catch {
       throw new DutyExecutionError(
-        '抖音「取消/退款」列表响应非合法 JSON',
+        `抖音「${TAB_TEXT_CANCEL}」列表响应非合法 JSON`,
         DouyinDutyErrorCode.LIST_BUSINESS_FAILED,
         false
       );
-    }
-
-    // 缓存解析得到的完整订单条目供详情检查使用
-    try {
-      const rawOrders = extractDouyinOrdersFromPayload(parsedPayload, true);
-      for (const order of rawOrders) {
-        if (order.orderId && order.raw) {
-          this.cacheRecentOrder(order.orderId, order.raw);
-        }
-      }
-    } catch {
-      // 容错缓存更新
     }
 
     return parseDouyinRefundOrderListResponse(parsedPayload);
@@ -313,7 +253,7 @@ export class DouyinListCollector {
     page: Page,
     orderStatus: DutyOrderStatus = DutyOrderStatus.NEW
   ): Promise<DutyUnhandledOrderSummary[]> {
-    if (resolveDouyinTargetTab(orderStatus) === 'refund') {
+    if (orderStatus === DutyOrderStatus.CANCEL) {
       return await this.refreshRefundOrderList(page);
     }
     return await this.refreshBookOrderList(page);
@@ -331,8 +271,7 @@ export class DouyinListCollector {
   ): Promise<DutyUnhandledOrderSummary[]> {
     await assertNoDouyinPageRisk(page);
 
-    const targetTab = resolveDouyinTargetTab(orderStatus);
-    const tabLabel = targetTab === 'refund' ? '取消/退款' : '新订/变更';
+    const tabLabel = orderStatus === DutyOrderStatus.CANCEL ? TAB_TEXT_CANCEL : TAB_TEXT_NEW;
 
     // 1. 频控防抖补偿：若距离上次刷新不足 REFRESH_DEBOUNCE (3s)，补齐等待时间防止触发抖音风控
     const now = performance.now();
@@ -349,9 +288,7 @@ export class DouyinListCollector {
 
       await updateVisualTrackerStatus(page, `📥 正在执行订单采集并刷新抖音「${tabLabel}」列表...`, 'action');
 
-      const orders = targetTab === 'refund'
-        ? await this.refreshRefundOrderList(page)
-        : await this.refreshBookOrderList(page);
+      const orders = await this.refreshOrderList(page, orderStatus);
 
       await updateVisualTrackerStatus(
         page,

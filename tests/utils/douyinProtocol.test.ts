@@ -237,4 +237,18 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(unified.booking.totalPrice).toBe(1272.98);
     expect(unified.booking.paytype).toBe('预付');
   });
+
+  it('seamlessly overrides masked phone when decryptedPhone is attached to raw detail payload', () => {
+    const rawWithDecryptedPhone = {
+      ...DOUYIN_RAW_SAMPLE_ORDER,
+      decryptedPhone: '13812345678',
+    };
+
+    const protocol = cleanDouyinOrder(rawWithDecryptedPhone);
+    expect(protocol.get('guestPhone')).toBe('13812345678');
+    expect(protocol.get('联系电话')).toBe('13812345678');
+
+    const unified = protocol.toUnifiedOrder('解密测试');
+    expect(unified.contact.mobile).toBe('13812345678');
+  });
 });

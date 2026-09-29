@@ -193,7 +193,6 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
     return this.runWithMutex(async () => {
       return this.detailInspector.inspectOrderDetail(page, otaOrderId, {
         refreshOrderList: (p) => this.refreshOrderList(p),
-        getCachedOrderRaw: (id) => this.listCollector.getCachedOrderRaw(id),
       });
     });
   }

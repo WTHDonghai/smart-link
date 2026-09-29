@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Page, Response, Request } from 'playwright';
+import type { Page, Response } from 'playwright';
 import {
   DouyinListCollector,
   waitForDouyinListResponse,
-  resolveDouyinTargetTab,
+  TAB_TEXT_NEW,
+  TAB_TEXT_CANCEL,
 } from '@/src/crawler/duty/channels/douyin/douyinListCollector';
 import {
   DouyinDutyErrorCode,
@@ -32,7 +33,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
         off: vi.fn(),
       } as unknown as Page;
 
-      const res = await waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, '新订/变更');
+      const res = await waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW);
       expect(res).toBe(mockResponse);
     });
 
@@ -50,7 +51,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       } as unknown as Page;
 
       await expect(
-        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, '新订/变更')
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
       ).rejects.toMatchObject({
         errorCode: DouyinDutyErrorCode.LIST_HTTP_ERROR,
         retryable: false,
@@ -58,30 +59,41 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
     });
 
     it('should throw LIST_RESPONSE_TIMEOUT when network times out', async () => {
-      let requestListener: ((req: Request) => void) | undefined;
       const mockPage = {
         waitForResponse: vi.fn().mockRejectedValue(new Error('Timeout 15000ms')),
-        on: vi.fn((event, handler) => {
-          if (event === 'request') requestListener = handler;
-        }),
-        off: vi.fn(),
         url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
         frames: () => [],
         evaluate: vi.fn().mockResolvedValue(false),
       } as unknown as Page;
 
-      const promise = waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, '新订/变更');
-
-      if (requestListener) {
-        requestListener({
-          url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
-        } as unknown as Request);
-      }
-
-      await expect(promise).rejects.toMatchObject({
+      await expect(
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
+      ).rejects.toMatchObject({
         errorCode: DouyinDutyErrorCode.LIST_RESPONSE_TIMEOUT,
         retryable: true,
       });
+    });
+
+    it('should include observed HTTP status code in timeout error message when response arrived but timed out', async () => {
+      const mockPage = {
+        waitForResponse: vi.fn(async (predicate: (res: Response) => boolean) => {
+          // 模拟收到目标 URL 响应但由于非预期方式未匹配成功（如 302）
+          const nonPostRes = {
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+            status: () => 302,
+            request: () => ({ method: () => 'GET' }),
+          } as unknown as Response;
+          predicate(nonPostRes);
+          throw new Error('Timeout 8000ms');
+        }),
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+      } as unknown as Page;
+
+      await expect(
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
+      ).rejects.toThrow('接口曾返回 HTTP 302');
     });
   });
 
@@ -139,7 +151,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       });
     });
 
-    it('should collect unhandled orders and cache raw payloads under mutex', async () => {
+    it('should collect unhandled orders under mutex', async () => {
       const collector = new DouyinListCollector();
 
       const mockTab = {
@@ -188,11 +200,6 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       expect(res).toHaveLength(1);
       expect(res[0].orderId).toBe('1113572432327416823');
       expect(mockTab.click).toHaveBeenCalledTimes(1);
-
-      // 验证缓存原始报文
-      const cached = collector.getCachedOrderRaw('1113572432327416823');
-      expect(cached).not.toBeNull();
-      expect((cached as { order_base_info?: { order_id: string } })?.order_base_info?.order_id).toBe('1113572432327416823');
     });
 
     it('should generate precise selectors with DOM structure, CSS styling, and text constraints', () => {
@@ -246,35 +253,27 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
     });
   });
 
-  describe('resolveDouyinTargetTab', () => {
-    it('should map DutyOrderStatus to target tab correctly', () => {
-      expect(resolveDouyinTargetTab(DutyOrderStatus.CANCEL)).toBe('refund');
-      expect(resolveDouyinTargetTab(DutyOrderStatus.NEW)).toBe('book');
-      expect(resolveDouyinTargetTab(DutyOrderStatus.ALL)).toBe('book');
-      expect(resolveDouyinTargetTab()).toBe('book');
+  describe('TAB_TEXT constants & refreshOrderList routing', () => {
+    it('should define accurate tab text constants', () => {
+      expect(TAB_TEXT_NEW).toBe('新订/变更');
+      expect(TAB_TEXT_CANCEL).toBe('取消/退款');
     });
-  });
 
-
-  describe('Bounded Cache Eviction', () => {
-    it('should evict oldest cached orders when capacity exceeds 200', async () => {
+    it('should route to refreshRefundOrderList when orderStatus is CANCEL, and refreshBookOrderList otherwise', async () => {
       const collector = new DouyinListCollector();
+      const mockPage = {} as Page;
+      const refundSpy = vi.spyOn(collector, 'refreshRefundOrderList').mockResolvedValue([]);
+      const bookSpy = vi.spyOn(collector, 'refreshBookOrderList').mockResolvedValue([]);
 
-      // 依次注入 206 个订单 (通过内部调用 cacheRecentOrder)
-      for (let i = 0; i <= 205; i++) {
-        const currentOrderId = `ORDER-${i}`;
-        // 使用私有方法测试边界淘汰机制
-        (collector as unknown as { cacheRecentOrder: (id: string, raw: Record<string, unknown>) => void }).cacheRecentOrder(
-          currentOrderId,
-          { order_id: currentOrderId }
-        );
-      }
+      await collector.refreshOrderList(mockPage, DutyOrderStatus.CANCEL);
+      expect(refundSpy).toHaveBeenCalledTimes(1);
+      expect(bookSpy).not.toHaveBeenCalled();
 
-      // ORDER-0 至 ORDER-5 应该被 FIFO 淘汰
-      expect(collector.getCachedOrderRaw('ORDER-0')).toBeNull();
-      expect(collector.getCachedOrderRaw('ORDER-5')).toBeNull();
-      // 最新的 ORDER-205 应该存在
-      expect(collector.getCachedOrderRaw('ORDER-205')).not.toBeNull();
+      await collector.refreshOrderList(mockPage, DutyOrderStatus.NEW);
+      expect(bookSpy).toHaveBeenCalledTimes(1);
+
+      await collector.refreshOrderList(mockPage);
+      expect(bookSpy).toHaveBeenCalledTimes(2);
     });
   });
 });
