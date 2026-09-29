@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Response } from 'playwright';
 import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import {
@@ -130,26 +130,26 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
   }
 
   /**
-   * 刷新「新订/变更」列表并返回解析后的新订单概要
+   * 刷新「新订/变更」列表并返回权威网络响应 (Page Action)
    */
-  public async refreshBookOrderList(page: Page): Promise<DutyUnhandledOrderSummary[]> {
+  public async refreshBookOrderList(page: Page): Promise<Response> {
     return this.listCollector.refreshBookOrderList(page);
   }
 
   /**
-   * 刷新「取消/退款」列表并返回解析后的取消/退款订单概要
+   * 刷新「取消/退款」列表并返回权威网络响应 (Page Action)
    */
-  public async refreshRefundOrderList(page: Page): Promise<DutyUnhandledOrderSummary[]> {
+  public async refreshRefundOrderList(page: Page): Promise<Response> {
     return this.listCollector.refreshRefundOrderList(page);
   }
 
   /**
-   * 刷新抖音指定 Tab 的订单列表（按中台指令严格单 Tab 采集，绝不同时刷新两类 Tab）
+   * 刷新抖音指定 Tab 的订单列表并返回权威网络响应 (对标美团: 纯 Page Action)
    */
   public async refreshOrderList(
     page: Page,
     orderStatus: DutyOrderStatus = DutyOrderStatus.NEW
-  ): Promise<DutyUnhandledOrderSummary[]> {
+  ): Promise<Response> {
     return this.listCollector.refreshOrderList(page, orderStatus);
   }
 
@@ -180,7 +180,8 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
     return this.listCollector.collectUnhandledOrders(
       page,
       orderStatus,
-      (fn) => this.runWithMutex(fn)
+      (fn) => this.runWithMutex(fn),
+      (p, s) => this.refreshOrderList(p, s)
     );
   }
 

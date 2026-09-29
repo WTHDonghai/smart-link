@@ -118,7 +118,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       });
     });
 
-    it('should throw LIST_BUSINESS_FAILED when API response is not valid JSON', async () => {
+    it('should throw LIST_BUSINESS_FAILED when API response is not valid JSON in collectUnhandledOrders', async () => {
       const collector = new DouyinListCollector();
 
       const mockTab = {
@@ -146,12 +146,16 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
         off: vi.fn(),
       } as unknown as Page;
 
-      await expect(collector.refreshBookOrderList(mockPage)).rejects.toMatchObject({
+      const runWithMutex = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+
+      await expect(
+        collector.collectUnhandledOrders(mockPage, DutyOrderStatus.NEW, runWithMutex)
+      ).rejects.toMatchObject({
         errorCode: DouyinDutyErrorCode.LIST_BUSINESS_FAILED,
       });
     });
 
-    it('should collect unhandled orders under mutex', async () => {
+    it('should collect unhandled orders under mutex and parse orders', async () => {
       const collector = new DouyinListCollector();
 
       const mockTab = {
@@ -200,6 +204,42 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       expect(res).toHaveLength(1);
       expect(res[0].orderId).toBe('1113572432327416823');
       expect(mockTab.click).toHaveBeenCalledTimes(1);
+    });
+
+    it('should coalesce concurrent calls into a single in-flight promise', async () => {
+      const collector = new DouyinListCollector();
+      const mockPage = {
+        evaluate: vi.fn().mockResolvedValue(false),
+        frames: () => [],
+      } as unknown as Page;
+
+      const customRefreshFn = vi.fn().mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+          text: async () => JSON.stringify({
+            status_code: 0,
+            data: {
+              data: [
+                JSON.stringify({
+                  order_base_info: { order_id: 'DY-COALESCED-001' },
+                  book_detail_info: { hotel_name: '测试酒店' },
+                }),
+              ],
+            },
+          }),
+        } as unknown as Response;
+      });
+
+      const runWithMutex = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+
+      const [res1, res2] = await Promise.all([
+        collector.collectUnhandledOrders(mockPage, DutyOrderStatus.NEW, runWithMutex, customRefreshFn),
+        collector.collectUnhandledOrders(mockPage, DutyOrderStatus.NEW, runWithMutex, customRefreshFn),
+      ]);
+
+      expect(res1).toEqual(res2);
+      expect(res1[0].orderId).toBe('DY-COALESCED-001');
+      expect(customRefreshFn).toHaveBeenCalledTimes(1);
     });
 
     it('should generate precise selectors with DOM structure, CSS styling, and text constraints', () => {
@@ -262,18 +302,22 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
     it('should route to refreshRefundOrderList when orderStatus is CANCEL, and refreshBookOrderList otherwise', async () => {
       const collector = new DouyinListCollector();
       const mockPage = {} as Page;
-      const refundSpy = vi.spyOn(collector, 'refreshRefundOrderList').mockResolvedValue([]);
-      const bookSpy = vi.spyOn(collector, 'refreshBookOrderList').mockResolvedValue([]);
+      const mockResponse = {} as Response;
+      const refundSpy = vi.spyOn(collector, 'refreshRefundOrderList').mockResolvedValue(mockResponse);
+      const bookSpy = vi.spyOn(collector, 'refreshBookOrderList').mockResolvedValue(mockResponse);
 
-      await collector.refreshOrderList(mockPage, DutyOrderStatus.CANCEL);
+      const resRefund = await collector.refreshOrderList(mockPage, DutyOrderStatus.CANCEL);
       expect(refundSpy).toHaveBeenCalledTimes(1);
       expect(bookSpy).not.toHaveBeenCalled();
+      expect(resRefund).toBe(mockResponse);
 
-      await collector.refreshOrderList(mockPage, DutyOrderStatus.NEW);
+      const resNew = await collector.refreshOrderList(mockPage, DutyOrderStatus.NEW);
       expect(bookSpy).toHaveBeenCalledTimes(1);
+      expect(resNew).toBe(mockResponse);
 
-      await collector.refreshOrderList(mockPage);
+      const resDefault = await collector.refreshOrderList(mockPage);
       expect(bookSpy).toHaveBeenCalledTimes(2);
+      expect(resDefault).toBe(mockResponse);
     });
   });
 });

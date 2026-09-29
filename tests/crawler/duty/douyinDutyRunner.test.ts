@@ -11,7 +11,6 @@ import {
 } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
 import {
   DutyOrderStatus,
-  type ParsedDutyTaskContext,
 } from '@/src/crawler/duty/dutyTaskContext';
 import { createPersistentBrowserSession } from '@/src/crawler/browserManager';
 
@@ -517,7 +516,7 @@ describe('douyinDutyRunner', () => {
 
       await runner.start();
 
-      await expect(runner.refreshBookOrderList(mockPage as unknown as import('playwright').Page)).rejects.toThrow(
+      await expect(runner.collectUnhandledOrders()).rejects.toThrow(
         '响应非合法 JSON'
       );
 
