@@ -41,6 +41,7 @@ export const OrderGuardianView: React.FC = () => {
 
   const activeEditOrder = useAppSelector((state) => state.orderGuardian.activeEditOrder);
   const productOptions = useAppSelector((state) => state.orderGuardian.productOptions);
+  const channels = useAppSelector((state) => state.channel.channels);
   const drawerLoading = useAppSelector((state) => state.orderGuardian.drawerLoading);
   const drawerSaving = useAppSelector((state) => state.orderGuardian.drawerSaving);
   const drawerError = useAppSelector((state) => state.orderGuardian.drawerError);
@@ -225,6 +226,7 @@ export const OrderGuardianView: React.FC = () => {
       {/* 模块 4: 高密订单表格 */}
       <OrderTable
         orders={orders}
+        channels={channels}
         actionLoadingId={actionLoadingId}
         onViewDetail={handleViewDetail}
         onEdit={handleEdit}
@@ -256,6 +258,7 @@ export const OrderGuardianView: React.FC = () => {
       {/* 模块 6: 订单详情 / 编辑抽屉 */}
       <EditOrderDrawer
         order={activeEditOrder}
+        channels={channels}
         productOptions={productOptions}
         isOpen={!!activeEditOrder}
         isLoading={drawerLoading}

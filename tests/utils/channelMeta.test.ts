@@ -120,6 +120,66 @@ describe('resolveChannelMeta 统一渠道图徽与元数据解析纯函数', () 
     expect(resolveChannelMeta({ otaChannelCode: 'XIAOHONGSHU' }).short).toBe('红');
   });
 
+  it('主流 OTA 渠道的 PMS 代码（如抖音 6131180、美团 6016008、携程 6002760）即使无 channels 也能精准解析', () => {
+    // 抖音 PMS 映射代码 6131180
+    const douyinMeta = resolveChannelMeta('6131180');
+    expect(douyinMeta.short).toBe('抖');
+    expect(douyinMeta.name).toBe('抖音');
+    expect(douyinMeta.bgColor).toBe('bg-[#0f172a]');
+    expect(douyinMeta.textColor).toBe('text-white');
+
+    const douyinObjMeta = resolveChannelMeta({ channelCode: '6131180' });
+    expect(douyinObjMeta.short).toBe('抖');
+    expect(douyinObjMeta.name).toBe('抖音');
+
+    // 美团 PMS 映射代码 6016008
+    const meituanMeta = resolveChannelMeta('6016008');
+    expect(meituanMeta.short).toBe('美');
+    expect(meituanMeta.name).toBe('美团');
+
+    // 携程 PMS 映射代码 6002760
+    const ctripMeta = resolveChannelMeta('6002760');
+    expect(ctripMeta.short).toBe('携');
+    expect(ctripMeta.name).toBe('携程旅行');
+  });
+
+  it('通过 channels 列表动态匹配 channelCode 与 targetSystem 中的 PMS 代码', () => {
+    const channelsWithMapping: ChannelCandidate[] = [
+      {
+        id: 'douyin',
+        name: '抖音民宿',
+        code: 'DOUYIN',
+        short: '抖',
+        channelCode: '6131180',
+        targetSystem: '6131180',
+        bgColor: 'bg-[#0f172a]',
+        textColor: 'text-white',
+      },
+      {
+        id: 'custom_pms_channel',
+        name: '小猪短租',
+        code: 'XIAOZHU',
+        short: '猪',
+        channelCode: '7788990',
+        targetSystem: '7788990',
+        bgColor: 'bg-amber-100',
+        textColor: 'text-amber-800',
+      },
+    ];
+
+    // 匹配抖音已映射 channelCode
+    const dyResult = resolveChannelMeta('6131180', channelsWithMapping);
+    expect(dyResult.short).toBe('抖');
+    expect(dyResult.name).toBe('抖音民宿');
+
+    // 匹配自定义渠道已映射 channelCode
+    const customResult = resolveChannelMeta('7788990', channelsWithMapping);
+    expect(customResult.short).toBe('猪');
+    expect(customResult.name).toBe('小猪短租');
+    expect(customResult.bgColor).toBe('bg-amber-100');
+    expect(customResult.textColor).toBe('text-amber-800');
+  });
+
   it('完全未知的渠道回退为截取代码前两位，不报错崩溃', () => {
     const unknownMeta = resolveChannelMeta({ otaChannelCode: 'AIRBNB' });
     expect(unknownMeta.short).toBe('AI');

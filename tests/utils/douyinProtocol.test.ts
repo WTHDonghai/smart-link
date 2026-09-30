@@ -70,6 +70,10 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(cleanCtx.guestName).toBe('刘彩霞');
     expect(cleanCtx.guestPhone).toBe('*******5090');
 
+    // 备注信息
+    expect(cleanCtx.remark).toBe('这里是备注信息');
+    expect(cleanCtx['订单备注']).toBe('这里是备注信息');
+
     // 财务金额 (分转元)
     expect(cleanCtx.payAmount).toBe('496.00');
     expect(cleanCtx['实付金额']).toBe('496.00');
@@ -323,5 +327,50 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(calendarProtocol.get('mainOrderId')).toBe('CALENDAR_ORDER_999');
     expect(calendarProtocol.get('isVoucher')).toBe(false);
     expect(calendarProtocol.toUnifiedOrder('日历房备注').otaOrderId).toBe('CALENDAR_ORDER_999');
+  });
+
+  it('correctly cleans and populates order remark in context and unified order', () => {
+    const protocol = cleanDouyinOrder(DOUYIN_RAW_SAMPLE_ORDER);
+    expect(protocol.get('remark')).toBe('这里是备注信息');
+    expect(protocol.get('订单备注')).toBe('这里是备注信息');
+    expect(protocol.get('备注')).toBe('这里是备注信息');
+    expect(protocol.get('客人备注')).toBe('这里是备注信息');
+    expect(protocol.get('原始备注')).toBe('这里是备注信息');
+
+    // 当未显式传递渲染模板文本时，toUnifiedOrder 默认回退使用客人原始备注
+    const unifiedDefault = protocol.toUnifiedOrder('');
+    expect(unifiedDefault.remark).toBe('这里是备注信息');
+
+    // 当传入已渲染模版文本时，toUnifiedOrder 优先采用已渲染文本
+    const unifiedCustom = protocol.toUnifiedOrder('PMS定制备注: 豪华房');
+    expect(unifiedCustom.remark).toBe('PMS定制备注: 豪华房');
+  });
+
+  it('supports {订单备注} and {备注} in remark templates', () => {
+    const protocol = cleanDouyinOrder(DOUYIN_RAW_SAMPLE_ORDER);
+    const tmplVars = protocol.getTemplateVariables();
+
+    const rendered1 = renderTemplate('单号:{预订单号} | 需求:{订单备注}', tmplVars);
+    expect(rendered1).toBe('单号:1116402292364180077 | 需求:这里是备注信息');
+
+    const rendered2 = renderTemplate('单号:{预订单号} | 需求:{备注}', tmplVars);
+    expect(rendered2).toBe('单号:1116402292364180077 | 需求:这里是备注信息');
+  });
+
+  it('handles empty remark gracefully without error or drift warning', () => {
+    const orderWithoutRemark = {
+      ...DOUYIN_RAW_SAMPLE_ORDER,
+      book_detail_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        remark_info: {
+          question_and_answer_list: [],
+          remark_info_str: '',
+        },
+      },
+    };
+    const protocol = cleanDouyinOrder(orderWithoutRemark);
+    expect(protocol.get('remark')).toBe('');
+    expect(protocol.get('订单备注')).toBe('');
+    expect(protocol.toUnifiedOrder('').remark).toBe('');
   });
 });

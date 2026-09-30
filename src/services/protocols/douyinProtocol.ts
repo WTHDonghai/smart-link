@@ -194,6 +194,16 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       description: '抖音预订状态标签',
       enabled: true,
     },
+    {
+      key: 'remark',
+      label: '订单备注',
+      path: 'book_detail_info.remark_info.remark_info_str || book_detail_info.remark || remark',
+      category: 'basic',
+      transform: 'string',
+      sampleValue: '这里是备注信息',
+      description: '客人预约或下单时填写的订单备注需求',
+      enabled: true,
+    },
 
     // 2. 酒店房型
     {
@@ -535,7 +545,9 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
         paytype,
         pricing,
       },
-      remark: renderedRemark,
+      remark: (renderedRemark !== undefined && renderedRemark !== null && renderedRemark !== '')
+        ? renderedRemark
+        : String(this.context.remark || this.context['订单备注'] || this.context['备注'] || ''),
       rawPayload: this.raw,
     };
   }
@@ -767,6 +779,24 @@ export function cleanDouyinOrder(
     context.guestPhone = String(decryptedPhone);
     context['联系电话'] = context.guestPhone;
   }
+
+  // 提取并归一化备注字段 (兼顾自定义 Schema、原始 remark_info 及各级字段)
+  const remarkInfo = (bookInfo.remark_info || {}) as Record<string, unknown>;
+  const rawRemarkVal =
+    context.remark ??
+    context['订单备注'] ??
+    context['备注'] ??
+    remarkInfo.remark_info_str ??
+    bookInfo.remark ??
+    data.remark ??
+    rawRecord.remark ??
+    '';
+  const remark = String(rawRemarkVal || '').trim();
+  context.remark = remark;
+  context['订单备注'] = remark;
+  context['备注'] = remark;
+  context['客人备注'] = remark;
+  context['原始备注'] = remark;
 
   return new DouyinOrderProtocol(context, rawRecord);
 }

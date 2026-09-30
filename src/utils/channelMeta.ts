@@ -19,6 +19,9 @@ export interface ChannelCandidate {
   id: string;
   name: string;
   code?: string;
+  channelCode?: string;
+  channelId?: string;
+  targetSystem?: string;
   short?: string;
   bgColor?: string;
   textColor?: string;
@@ -85,6 +88,11 @@ KNOWN_CHANNEL_METAS.fliggy = KNOWN_CHANNEL_METAS.FLIGGY;
 KNOWN_CHANNEL_METAS.qunar = KNOWN_CHANNEL_METAS.QUNAR;
 KNOWN_CHANNEL_METAS.xiaohongshu = KNOWN_CHANNEL_METAS.XIAOHONGSHU;
 
+// PMS 映射代码直接别名（主流 OTA 渠道 PMS 映射 ID）
+KNOWN_CHANNEL_METAS['6131180'] = KNOWN_CHANNEL_METAS.DOUYIN;
+KNOWN_CHANNEL_METAS['6016008'] = KNOWN_CHANNEL_METAS.MEITUAN;
+KNOWN_CHANNEL_METAS['6002760'] = KNOWN_CHANNEL_METAS.CTRIP;
+
 /**
  * 统一精准解析渠道图徽元数据：
  * 优先匹配已配置 channels 列表，次级根据渠道代码与特征智能推断，彻底杜绝 MEITUAN 与 MEITUAN_BIZ 降级为 OTA
@@ -119,30 +127,38 @@ export function resolveChannelMeta(
 
   const channelId = String(rawObj.otaChannelId || rawObj.channelId || rawObj.id || '').trim();
   const channelCode = String(rawObj.otaChannelCode || rawObj.channelCode || rawObj.code || '').trim();
+  const candidateKeys = [channelCode, channelId].filter(Boolean);
+  const normalizedCandidateKeys = candidateKeys.map((k) => k.replace(/[-_]/g, '').toUpperCase());
 
   // 1. 优先从全局已配置渠道列表中精确/归一化查找
-  const matchedChannel = channels.find((c) => {
-    if (channelId && c.id.toLowerCase() === channelId.toLowerCase()) return true;
-    if (channelCode && c.code && c.code.toUpperCase() === channelCode.toUpperCase()) return true;
-    const normCId = c.id.replace(/[-_]/g, '').toLowerCase();
-    const normHId = channelId.replace(/[-_]/g, '').toLowerCase();
-    if (normHId && normCId === normHId) return true;
-    const normCCode = (c.code || '').replace(/[-_]/g, '').toUpperCase();
-    const normHCode = channelCode.replace(/[-_]/g, '').toUpperCase();
-    if (normHCode && normCCode === normHCode) return true;
-    return false;
-  });
+  if (channels.length > 0 && candidateKeys.length > 0) {
+    const matchedChannel = channels.find((c) => {
+      const channelKeys = [c.code, c.channelCode, c.targetSystem, c.channelId, c.id].filter(
+        (k): k is string => Boolean(k)
+      );
+      return channelKeys.some((ck) => {
+        const normCk = ck.replace(/[-_]/g, '').toUpperCase();
+        return normalizedCandidateKeys.includes(normCk);
+      });
+    });
 
-  if (matchedChannel && matchedChannel.short) {
-    return {
-      name: matchedChannel.name,
-      short: matchedChannel.short,
-      bgColor: matchedChannel.bgColor || 'bg-blue-100',
-      textColor: matchedChannel.textColor || 'text-blue-700',
-    };
+    if (matchedChannel && matchedChannel.short) {
+      return {
+        name: matchedChannel.name,
+        short: matchedChannel.short,
+        bgColor: matchedChannel.bgColor || 'bg-blue-100',
+        textColor: matchedChannel.textColor || 'text-blue-700',
+      };
+    }
   }
 
-  // 2. 内置主流渠道特征匹配规则（确保 MEITUAN 与 MEITUAN_BIZ 无论何种边界均精准渲染徽标）
+  // 2. 内置主流渠道字典直接匹配（支持别名如 6131180、6016008、6002760、DOUYIN 等）
+  for (const key of candidateKeys) {
+    const meta = KNOWN_CHANNEL_METAS[key] || KNOWN_CHANNEL_METAS[key.toUpperCase()];
+    if (meta) return meta;
+  }
+
+  // 3. 渠道特征关键词推断
   const combined = `${channelCode}_${channelId}`.toUpperCase().replace(/[-_]/g, '');
   if (combined.includes('MEITUANBIZ') || combined.includes('MTBIZ') || combined.includes('BUSINESS')) {
     return KNOWN_CHANNEL_METAS.meituanbiz;
@@ -170,7 +186,7 @@ export function resolveChannelMeta(
   }
 
   return {
-    name: matchedChannel?.name || rawObj.name || channelCode || channelId || 'OTA',
+    name: rawObj.name || channelCode || channelId || 'OTA',
     short: channelCode ? channelCode.slice(0, 2) : 'OTA',
     bgColor: 'bg-blue-100',
     textColor: 'text-blue-700',

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { ToolkitOrder } from '../../types';
+import type { ChannelCandidate } from '../../utils/channelMeta';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { StatusBadge } from '../common/StatusBadge';
 import { EmptyState } from '../common/EmptyState';
@@ -13,6 +14,7 @@ import { Edit3, Download, Trash2, Ban, Loader2, Copy, Check, MoreVertical, Alert
 
 export interface OrderTableProps {
   orders: ToolkitOrder[];
+  channels?: readonly ChannelCandidate[];
   actionLoadingId?: string;
   initialOpenMenuId?: string;
   initialConfirmAction?: { orderId: string; action: 'CANCEL' | 'DELETE' };
@@ -26,6 +28,7 @@ export interface OrderTableProps {
 
 export const OrderTable: React.FC<OrderTableProps> = ({
   orders,
+  channels = [],
   actionLoadingId,
   initialOpenMenuId,
   initialConfirmAction,
@@ -181,7 +184,7 @@ export const OrderTable: React.FC<OrderTableProps> = ({
                   {/* 列 2: OTA 订单 */}
                   <td className="py-3 px-4 align-top sticky left-[180px] z-10 bg-white group-hover:bg-[#f8faff] w-[230px] min-w-[230px] border-b border-r border-[#e2e8f0] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
                     <div className="flex items-start gap-2">
-                      <ChannelBadge channelCode={ord.otaChannel} size="xs" />
+                      <ChannelBadge channelCode={ord.otaChannel} channels={channels} size="xs" />
                       <div className="flex flex-col min-w-0">
                         <div className="flex items-center gap-1">
                           <span

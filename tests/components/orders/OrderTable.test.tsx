@@ -186,4 +186,21 @@ describe('OrderTable 高密订单表格组件', () => {
     expect(html).toContain('取消');
     expect(html).not.toContain('确定在中台发起取消订单');
   });
+
+  it('当订单 otaChannel 为 PMS 渠道代码 6131180 时，表格中正确渲染抖音徽标 [抖] 而非 [61]', () => {
+    const douyinOrder: ToolkitOrder = {
+      ...mockOrders[0],
+      id: 'ord-dy-pms',
+      otaChannel: '6131180',
+      otaOrderId: 'DY-888999111',
+    };
+
+    const html = renderToStaticMarkup(
+      <OrderTable {...defaultProps} orders={[douyinOrder]} />
+    );
+
+    expect(html).toContain('>抖</div>');
+    expect(html).toContain('title="抖音"');
+    expect(html).not.toContain('>61</div>');
+  });
 });

@@ -56,4 +56,32 @@ describe('ChannelBadge 渠道图徽通用组件', () => {
     expect(html).toContain('>携</div>');
     expect(html).not.toContain('title=');
   });
+
+  it('抖音 PMS 渠道代码 6131180 正确渲染为「抖」图徽，绝不降级显示为 61', () => {
+    const html = renderToStaticMarkup(<ChannelBadge channelCode="6131180" size="xs" />);
+    expect(html).toContain('>抖</div>');
+    expect(html).toContain('title="抖音"');
+    expect(html).toContain('bg-[#0f172a]');
+    expect(html).toContain('text-white');
+    expect(html).not.toContain('>61</div>');
+  });
+
+  it('支持传入 channels 列表由映射动态解析 PMS 代码', () => {
+    const channels = [
+      {
+        id: 'douyin',
+        name: '抖音民宿',
+        code: 'DOUYIN',
+        short: '抖',
+        channelCode: '6131180',
+        bgColor: 'bg-[#0f172a]',
+        textColor: 'text-white',
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <ChannelBadge channelCode="6131180" channels={channels} size="xs" />
+    );
+    expect(html).toContain('>抖</div>');
+    expect(html).toContain('title="抖音民宿"');
+  });
 });

@@ -5,6 +5,7 @@ import type {
   InternalProductOptions,
   NightlyPricing,
 } from '../../types';
+import type { ChannelCandidate } from '../../utils/channelMeta';
 import { ChannelBadge } from '../common/ChannelBadge';
 import { StatusBadge } from '../common/StatusBadge';
 import { SearchableSelect, type SelectOption } from '../common/SearchableSelect';
@@ -17,6 +18,7 @@ import { X, Save, AlertCircle, Loader2, Calendar, User, Phone, BedDouble, FileTe
 
 export interface EditOrderDrawerProps {
   order: ToolkitOrder | null;
+  channels?: readonly ChannelCandidate[];
   productOptions: InternalProductOptions;
   isOpen: boolean;
   isLoading?: boolean;
@@ -30,6 +32,7 @@ export interface EditOrderDrawerProps {
 
 export const EditOrderDrawer: React.FC<EditOrderDrawerProps> = ({
   order,
+  channels = [],
   productOptions,
   isOpen,
   isLoading = false,
@@ -235,7 +238,7 @@ export const EditOrderDrawer: React.FC<EditOrderDrawerProps> = ({
                 <h2 id="edit-order-drawer-title" className="text-base font-bold text-[#0b1c30]">
                   {isReadOnly ? '文旅订单详情' : '编辑文旅订单'}
                 </h2>
-                {order && <ChannelBadge channelCode={order.otaChannel} size="xs" />}
+                {order && <ChannelBadge channelCode={order.otaChannel} channels={channels} size="xs" />}
                 {order && (
                   <StatusBadge
                     variant={getOrderStatusMeta(order.status).tone}
