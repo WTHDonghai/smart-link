@@ -47,12 +47,12 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     );
 
     // 基础三单号与状态
-    expect(cleanCtx.orderNo).toBe('800014640948279296216700077');
-    expect(cleanCtx['预订单号']).toBe('800014640948279296216700077');
+    expect(cleanCtx.orderNo).toBe('1116402292364180077');
+    expect(cleanCtx['预订单号']).toBe('1116402292364180077');
     expect(cleanCtx.mainOrderId).toBe('1116431119643540077');
     expect(cleanCtx['抖音主单号']).toBe('1116431119643540077');
-    expect(cleanCtx.bookId).toBe('800014640948279296216700077');
-    expect(cleanCtx['预约单号']).toBe('800014640948279296216700077');
+    expect(cleanCtx.bookId).toBe('1116402292364180077');
+    expect(cleanCtx['预约单号']).toBe('1116402292364180077');
     expect(cleanCtx.confirmNo).toBe('2608280008');
     expect(cleanCtx['确认号']).toBe('2608280008');
     expect(cleanCtx.orderStatus).toBe('待入住');
@@ -90,7 +90,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     const rendered = renderTemplate(SAMPLE_DOUYIN_REMARK_TEMPLATE, cleanCtx);
 
     expect(rendered).toContain('【抖音团购核销】主单号:1116431119643540077');
-    expect(rendered).toContain('预约单:800014640948279296216700077');
+    expect(rendered).toContain('预约单:1116402292364180077');
     expect(rendered).toContain('确认号:2608280008');
     expect(rendered).toContain('房型:豪华大床房 x 1间');
     expect(rendered).toContain('客人:刘彩霞 (*******5090)');
@@ -210,13 +210,13 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
 
     // 传入外层包装对象及目标单号，验证防御性解包生效，不会报字段缺失/协议漂移告警
     const protocol = cleanDouyinOrder(listResponseWrapper, null, '1116431119643540077');
-    expect(protocol.get('orderNo')).toBe('800014640948279296216700077');
+    expect(protocol.get('orderNo')).toBe('1116402292364180077');
     expect(protocol.get('mainOrderId')).toBe('1116431119643540077');
-    expect(protocol.get('bookId')).toBe('800014640948279296216700077');
+    expect(protocol.get('bookId')).toBe('1116402292364180077');
     expect(protocol.get('roomName')).toBe('豪华大床房');
 
     const unified = protocol.toUnifiedOrder('自动化入单测试');
-    expect(unified.otaOrderId).toBe('800014640948279296216700077');
+    expect(unified.otaOrderId).toBe('1116402292364180077');
     expect(unified.booking.roomTypeName).toBe('豪华大床房');
     expect(unified.booking.totalPrice).toBe(499);
   });
@@ -228,9 +228,9 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     // 针对用户真实导入的订单「1112665199685496539」执行清洗
     const protocol = cleanDouyinOrder(rawDetailPayload, null, '1112665199685496539');
 
-    expect(protocol.get('orderNo')).toBe('800000263871637635716526539');
+    expect(protocol.get('orderNo')).toBe('1111599122141816539');
     expect(protocol.get('mainOrderId')).toBe('1112665199685496539');
-    expect(protocol.get('bookId')).toBe('800000263871637635716526539');
+    expect(protocol.get('bookId')).toBe('1111599122141816539');
     expect(protocol.get('roomName')).toBe('豪华大床房');
     expect(protocol.get('checkInDate')).toBe('2026-11-16');
     expect(protocol.get('checkOutDate')).toBe('2026-11-17');
@@ -239,7 +239,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(protocol.get('guestPhone')).toBe('*******3563');
 
     const unified = protocol.toUnifiedOrder('【中台自动导入】');
-    expect(unified.otaOrderId).toBe('800000263871637635716526539');
+    expect(unified.otaOrderId).toBe('1111599122141816539');
     expect(unified.otaChannel).toBe('DOUYIN');
     expect(unified.unitId).toBe('7130223634133092383');
     expect(unified.unitName).toBe('淮安日月洲度假村(西游乐园店)');
@@ -292,15 +292,16 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
       order_base_info: { order_id: 'ORDER_MAIN_111' },
       book_detail_info: {
         ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        book_order_id: 'BOOK_ORDER_111',
         book_id: 'BOOK_8000222',
       },
       play_methods_v2: { is_hotel_presale: true, is_hotel_calendar: false },
     };
     const voucherProtocol = cleanDouyinOrder(voucherOrder);
-    expect(voucherProtocol.get('orderNo')).toBe('BOOK_8000222');
+    expect(voucherProtocol.get('orderNo')).toBe('BOOK_ORDER_111');
     expect(voucherProtocol.get('mainOrderId')).toBe('ORDER_MAIN_111');
     expect(voucherProtocol.get('isVoucher')).toBe(true);
-    expect(voucherProtocol.toUnifiedOrder('券备注').otaOrderId).toBe('BOOK_8000222');
+    expect(voucherProtocol.toUnifiedOrder('券备注').otaOrderId).toBe('BOOK_ORDER_111');
 
     // 2. 日历房：取交易主单号 order_id 作为订单号
     const calendarOrder = {

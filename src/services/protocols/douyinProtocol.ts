@@ -146,11 +146,11 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     {
       key: 'orderNo',
       label: '预订单号',
-      path: 'book_detail_info.book_id',
+      path: 'book_detail_info.book_order_id || book_detail_info.book_id',
       category: 'basic',
       transform: 'string',
-      sampleValue: '800014640948279296216700077',
-      description: '抖音预订单号/券号（中台唯一订单号）',
+      sampleValue: '1116402292364180077',
+      description: '抖音预约单号（券订单取此单号作为中台唯一订单号）',
       enabled: true,
       required: true,
     },
@@ -161,17 +161,17 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       category: 'basic',
       transform: 'string',
       sampleValue: '1116431119643540077',
-      description: '抖音电商交易主单号',
+      description: '抖音电商交易主单号（订单编号）',
       enabled: true,
     },
     {
       key: 'bookId',
       label: '预约单号',
-      path: 'book_detail_info.book_id',
+      path: 'book_detail_info.book_order_id || book_detail_info.book_id',
       category: 'basic',
       transform: 'string',
-      sampleValue: '800014640948279296216700077',
-      description: '酒店预订核销流水号',
+      sampleValue: '1116402292364180077',
+      description: '抖音预约单号',
       enabled: true,
     },
     {
@@ -552,10 +552,11 @@ function isDouyinOrderMatch(rec: Record<string, unknown>, cleanTargetId: string)
   const afterSaleInner = (afterSaleV2?.after_sale_info || {}) as Record<string, unknown>;
 
   const oId = String(baseInfo?.order_id || rec.order_id || rec.otaOrderId || '').trim();
-  const bId = String(bookInfo?.book_id || bookInfo?.book_order_id || rec.book_id || '').trim();
+  const bOrderId = String(bookInfo?.book_order_id || '').trim();
+  const bId = String(bookInfo?.book_id || rec.book_id || '').trim();
   const aId = String(afterSaleInfo?.after_sale_order_id || afterSaleInner.after_sale_id || rec.after_sale_id || '').trim();
 
-  return oId === cleanTargetId || bId === cleanTargetId || aId === cleanTargetId;
+  return oId === cleanTargetId || bOrderId === cleanTargetId || bId === cleanTargetId || aId === cleanTargetId;
 }
 
 /**
@@ -688,17 +689,24 @@ export function cleanDouyinOrder(
   // 判定当前订单是否为券类订单
   const isVoucher = isDouyinVoucherOrder(data);
 
-  // 提取预约单号/券号 (book_id) 与抖音主单号 (order_id)
+  // 提取预约单号 (优先界面展示的 book_order_id，兜底 book_id) 与抖音订单编号/主单号 (order_id)
   const bookInfo = (data.book_detail_info || {}) as Record<string, unknown>;
   const baseInfo = (data.order_base_info || {}) as Record<string, unknown>;
-  const bookId = String(context.bookId || context.orderNo || bookInfo.book_id || '').trim();
+  const bookOrderId = String(
+    bookInfo.book_order_id ||
+    context.bookOrderId ||
+    context.bookId ||
+    context.orderNo ||
+    bookInfo.book_id ||
+    ''
+  ).trim();
   const mainOrderId = String(context.mainOrderId || baseInfo.order_id || '').trim();
 
   // 核心唯一订单号（智能兼容预售券与日历房）：
-  // 如果是券，取预约单号/券号作为订单号；否则取交易订单号作为订单号
+  // 如果是券，取预约单号作为订单号；否则取交易订单号作为订单号
   const effectiveOrderNo = isVoucher
-    ? (bookId || String(targetOrderId || '').trim() || mainOrderId)
-    : (mainOrderId || String(targetOrderId || '').trim() || bookId);
+    ? (bookOrderId || String(targetOrderId || '').trim() || mainOrderId)
+    : (mainOrderId || String(targetOrderId || '').trim() || bookOrderId);
 
   if (effectiveOrderNo) {
     context.orderNo = effectiveOrderNo;
@@ -706,13 +714,19 @@ export function cleanDouyinOrder(
     context['OTA订单号'] = effectiveOrderNo;
     context['订单号'] = effectiveOrderNo;
     context['抖音单号'] = effectiveOrderNo;
-    context['预订单号'] = isVoucher ? effectiveOrderNo : (bookId || effectiveOrderNo);
-    context['券号'] = bookId || effectiveOrderNo;
-    context['预约单号'] = bookId || effectiveOrderNo;
+    context['预订单号'] = isVoucher ? effectiveOrderNo : (bookOrderId || effectiveOrderNo);
+  }
+  if (bookOrderId) {
+    context.bookOrderId = bookOrderId;
+    context.bookId = bookOrderId;
+    context['预约单号'] = bookOrderId;
+    context['券号'] = bookOrderId;
   }
   if (mainOrderId) {
     context.mainOrderId = mainOrderId;
     context['抖音主单号'] = mainOrderId;
+    context['订单编号'] = mainOrderId;
+    context['主单号'] = mainOrderId;
   }
   context.isVoucher = isVoucher;
   context['是否为券'] = isVoucher;

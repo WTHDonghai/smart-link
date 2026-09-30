@@ -12,6 +12,18 @@ export function getNestedValue(target: unknown, path: string): unknown {
   const trimmed = path.trim();
   if (!trimmed) return undefined;
 
+  // 支持多个候选路径依次求值 (例如 "book_detail_info.book_order_id || book_detail_info.book_id")
+  if (trimmed.includes('||')) {
+    const subPaths = trimmed.split('||');
+    for (const subPath of subPaths) {
+      const val = getNestedValue(target, subPath.trim());
+      if (val !== undefined && val !== null && val !== '') {
+        return val;
+      }
+    }
+    return undefined;
+  }
+
   // 将 array index 格式如 a[0].b 转换为统一的 a.0.b，将 a[*].b 或 a[].b 转换为 a.*.b
   const normalizedPath = trimmed
     .replace(/\[\*\]/g, '.*')

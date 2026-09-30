@@ -138,9 +138,9 @@ export function extractDouyinOrdersFromPayload(
     const afterSaleInfoV2 = (rec.after_sale_info_v2 || {}) as Record<string, unknown>;
     const afterSaleInner = (afterSaleInfoV2.after_sale_info || {}) as Record<string, unknown>;
 
-    // 预定单号/券号（用于中台唯一订单号）
-    const bookId = String(bookDetailInfo.book_id || '').trim() || undefined;
-    // 抖音交易主单号
+    // 预约单号（优先取界面展示的 book_order_id，兜底取 book_id）
+    const bookOrderId = String(bookDetailInfo.book_order_id || bookDetailInfo.book_id || '').trim() || undefined;
+    // 抖音交易主单号（订单编号）
     const mainOrderId = String(orderBaseInfo.order_id || '').trim() || undefined;
     // 有after_sale_id 表示是取消单
     const afterSaleId = String(afterSaleInner.after_sale_id || '').trim() || undefined;
@@ -150,8 +150,8 @@ export function extractDouyinOrdersFromPayload(
 
     // 确定唯一订单编号：如果是券取预约单号，否则取订单号
     const orderId = isVoucher
-      ? (bookId || mainOrderId || '')
-      : (mainOrderId || bookId || '');
+      ? (bookOrderId || mainOrderId || '')
+      : (mainOrderId || bookOrderId || '');
 
     if (!orderId) continue;
 
@@ -212,7 +212,7 @@ export function extractDouyinOrdersFromPayload(
 
     orders.push({
       orderId,
-      bookId,
+      bookId: bookOrderId,
       mainOrderId,
       isVoucher,
       afterSaleId,

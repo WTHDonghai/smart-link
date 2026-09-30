@@ -92,8 +92,8 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(orders).toHaveLength(1);
 
       const first = orders[0];
-      expect(first.orderId).toBe('800000522465461174916676823');
-      expect(first.bookId).toBe('800000522465461174916676823');
+      expect(first.orderId).toBe('1113572317175416823');
+      expect(first.bookId).toBe('1113572317175416823');
       expect(first.mainOrderId).toBe('1113572432327416823');
       expect(first.hotelId).toBe('7130223634133092383');
       expect(first.hotelName).toBe('淮安日月洲度假村(西游乐园店)');
@@ -118,8 +118,8 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(orders).toHaveLength(1);
 
       const refundOrder = orders[0];
-      expect(refundOrder.orderId).toBe('800000263678588854916054527');
-      expect(refundOrder.bookId).toBe('800000263678588854916054527');
+      expect(refundOrder.orderId).toBe('1112767046775414527');
+      expect(refundOrder.bookId).toBe('1112767046775414527');
       expect(refundOrder.mainOrderId).toBe('1112732801688054527');
       expect(refundOrder.afterSaleId).toBe('768912266776597510130734527');
       expect(refundOrder.cancelOrder).toBe(true);
@@ -161,7 +161,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
 
       const summaries = parseDouyinOrderListResponse(payload, true);
       expect(summaries).toHaveLength(1);
-      expect(summaries[0].orderId).toBe('800000263678588854916054527');
+      expect(summaries[0].orderId).toBe('1112767046775414527');
       expect(summaries[0].cancelOrder).toBe(true);
       expect(summaries[0].afterSaleId).toBe('768912266776597510130734527');
     });
@@ -173,7 +173,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       const summaries = parseDouyinBookOrderListResponse(payload);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toEqual({
-        orderId: '800000522465461174916676823',
+        orderId: '1113572317175416823',
         hotelId: '7130223634133092383',
         hotelName: '淮安日月洲度假村(西游乐园店)',
         cancelOrder: false,
@@ -189,7 +189,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       const summaries = parseDouyinRefundOrderListResponse(payload);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toEqual({
-        orderId: '800000263678588854916054527',
+        orderId: '1112767046775414527',
         hotelId: undefined,
         hotelName: '淮安日月洲度假村(西游乐园店)',
         cancelOrder: true,
