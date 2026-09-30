@@ -34,6 +34,7 @@
     "duty:refresh-list": "vite-node src/crawler/duty/cli/refreshListCli.ts --wait-manual-close",
     "duty:refresh-list:mock": "vite-node --mode mock src/crawler/duty/cli/refreshListCli.ts",
     "duty:inspect-detail": "vite-node src/crawler/duty/cli/inspectDetailCli.ts --wait-manual-close",
+    "duty:inspect-detail:douyin": "vite-node src/crawler/duty/cli/inspectDetailCli.ts --channel douyin --wait-manual-close",
     "duty:inspect-detail:mock": "vite-node --mode mock src/crawler/duty/cli/inspectDetailCli.ts",
     "duty:confirm-import": "vite-node src/crawler/duty/cli/confirmImportCli.ts --wait-manual-close",
     "duty:confirm-import:douyin": "vite-node src/crawler/duty/cli/confirmImportCli.ts --channel douyin --wait-manual-close",

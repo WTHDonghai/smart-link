@@ -1,16 +1,37 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from '../channels/meituan/meituanDutyRunner';
+import { DouyinDutyRunner } from '../channels/douyin/douyinDutyRunner';
+import type { BaseChannelDutyRunner } from '../dutyContracts';
 import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import { cleanChannelOrder } from '@/src/services/protocols';
 import { remarkTemplateManager } from '../remarkTemplateManager';
 import { renderRemarkFromVariables } from '@/src/utils/template/orderPayloadTransformer';
+import { resolveChannelMeta } from '@/src/utils/channelMeta';
 
-function parseArgs(argv: string[]) {
+interface CliOptions {
+  channel: 'MEITUAN' | 'DOUYIN';
+  orderId?: string;
+  customTemplate?: string;
+  headless: boolean;
+  waitManualClose: boolean;
+  closeBrowser: boolean;
+}
+
+function parseArgs(argv: string[]): CliOptions {
+  let channel: 'MEITUAN' | 'DOUYIN' = 'MEITUAN';
   let orderId: string | undefined;
   let customTemplate: string | undefined;
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--order-id' || arg === '--orderId') {
+    if (arg === '--channel' || arg === '-c') {
+      const ch = (argv[i + 1] || '').toUpperCase();
+      channel = ch === 'DOUYIN' || ch === 'DY' ? 'DOUYIN' : 'MEITUAN';
+      i++;
+    } else if (arg.startsWith('--channel=')) {
+      const ch = arg.split('=')[1]?.toUpperCase() || '';
+      channel = ch === 'DOUYIN' || ch === 'DY' ? 'DOUYIN' : 'MEITUAN';
+    } else if (arg === '--order-id' || arg === '--orderId') {
       orderId = argv[i + 1];
       i++;
     } else if (arg.startsWith('--order-id=')) {
@@ -25,7 +46,13 @@ function parseArgs(argv: string[]) {
     }
   }
 
+  // 若未显式传入渠道但单号以 DY 开头，自动推断为抖音
+  if (channel === 'MEITUAN' && orderId && /^DY/i.test(orderId)) {
+    channel = 'DOUYIN';
+  }
+
   return {
+    channel,
     orderId,
     customTemplate,
     headless: argv.includes('--headless'),
@@ -36,15 +63,19 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const {
+    channel,
     orderId: explicitOrderId,
     customTemplate,
     headless,
     waitManualClose,
     closeBrowser,
   } = parseArgs(process.argv.slice(2));
-  const runner = new MeituanDutyRunner();
 
-  console.log(`[DutyInspectDetail:CLI] 启动美团订单详情抓取测试 (Headless: ${headless})...`);
+  const isDouyin = channel === 'DOUYIN';
+  const runner: BaseChannelDutyRunner = isDouyin ? new DouyinDutyRunner() : new MeituanDutyRunner();
+  const channelLabel = resolveChannelMeta(channel).name || (isDouyin ? '抖音' : '美团');
+
+  console.log(`[DutyInspectDetail:CLI] 启动${channelLabel}订单详情抓取测试 (Channel: ${channel}, Headless: ${headless})...`);
   process.env[PROCESS_ENV_KEYS.playwrightHeadless] = headless ? 'true' : 'false';
 
   try {
@@ -53,11 +84,11 @@ async function main() {
     let targetOrderId = explicitOrderId;
 
     if (!targetOrderId) {
-      console.log('[DutyInspectDetail:CLI] 未指定 --order-id，正在刷新待确认列表自动获取第一笔订单...');
+      console.log(`[DutyInspectDetail:CLI] 未指定 --order-id，正在刷新${channelLabel}待处理列表自动获取第一笔订单...`);
       const orders = await runner.collectUnhandledOrders();
       if (!orders || orders.length === 0) {
-        console.log('[DutyInspectDetail:CLI] 当前美团「待确认订单」列表中暂无待处理订单。');
-        console.log('[DutyInspectDetail:CLI] 提示: 可通过 `npm run duty:inspect-detail -- --order-id <订单号>` 测试指定历史或测试订单。');
+        console.log(`[DutyInspectDetail:CLI] 当前${channelLabel}「待处理订单」列表中暂无待处理订单。`);
+        console.log(`[DutyInspectDetail:CLI] 提示: 可通过 \`npm run duty:inspect-detail${isDouyin ? ':douyin' : ''} -- --order-id <订单号>\` 测试指定历史或测试订单。`);
         if (waitManualClose) {
           console.log('[DutyInspectDetail:CLI] 可继续检查页面；手动关闭浏览器窗口后退出。');
           await runner.waitForBrowserClose();
@@ -66,7 +97,7 @@ async function main() {
         return;
       }
       targetOrderId = orders[0].orderId;
-      console.log(`[DutyInspectDetail:CLI] 成功获取到 ${orders.length} 笔待确认订单，选择第 1 笔进行详情抓取: 「${targetOrderId}」`);
+      console.log(`[DutyInspectDetail:CLI] 成功获取到 ${orders.length} 笔待处理订单，选择第 1 笔进行详情抓取: 「${targetOrderId}」`);
     }
 
     if (!targetOrderId) {
@@ -77,7 +108,7 @@ async function main() {
     try {
       console.log(`[DutyInspectDetail:CLI] 正在执行 inspectOrderDetail(otaOrderId: 「${targetOrderId}」)...`);
       const rawDetail = await runner.inspectOrderDetail(targetOrderId);
-      const channelOrder = cleanChannelOrder('MEITUAN', rawDetail, null, targetOrderId);
+      const channelOrder = cleanChannelOrder(channel, rawDetail, null, targetOrderId);
       const tmplVars = channelOrder.getTemplateVariables();
 
       let remoteTemplate: string | null = null;
@@ -89,7 +120,8 @@ async function main() {
       }
 
       const rawRemark = String(
-        rawDetail.remark ||
+        tmplVars['原始备注'] ||
+          rawDetail.remark ||
           (rawDetail.data as Record<string, unknown> | undefined)?.remark ||
           (rawDetail.data as Record<string, unknown> | undefined)?.memo ||
           ''
@@ -106,9 +138,9 @@ async function main() {
       // 转换为统一订单导入协议 (UnifiedOrderProtocol)
       const unified = channelOrder.toUnifiedOrder(renderedRemark);
 
-      console.log('\n================ 美团订单详情提取结果 ================\n');
+      console.log(`\n================ ${channelLabel}订单详情提取结果 ================\n`);
       console.log(`  OTA 渠道:      ${unified.otaChannel}`);
-      console.log(`  美团订单号:    ${unified.otaOrderId}`);
+      console.log(`  ${channelLabel}订单号:    ${unified.otaOrderId}`);
       console.log(`  酒店名称:      ${unified.unitName || '-'}`);
       console.log(`  酒店 POI ID:   ${unified.unitId || '-'}`);
       console.log(`  入住客人姓名:  ${unified.contact.name}`);
@@ -135,8 +167,8 @@ async function main() {
       if (!renderedRemark) {
         console.log('\n[DutyInspectDetail:CLI:诊断提示] 最终入单备注为空的原因：');
         console.log('  1. 远程模版未配置或无法连接中台；');
-        console.log('  2. 当前美团订单客人下单时未填写任何特殊需求 (原备注为空)；');
-        console.log('  3. 可通过参数测试模版，例如: npm run duty:inspect-detail -- --template="{{入住人}} {{联系电话}} {{房型名称}}"');
+        console.log(`  2. 当前${channelLabel}订单客人下单时未填写任何特殊需求 (原备注为空)；`);
+        console.log(`  3. 可通过参数测试模版，例如: npm run duty:inspect-detail${isDouyin ? ':douyin' : ''} -- --template="{{入住人}} {{联系电话}} {{房型名称}}"`);
       }
     } catch (error) {
       if (waitManualClose) {
