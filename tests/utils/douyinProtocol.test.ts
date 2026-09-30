@@ -270,18 +270,19 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
   });
 
   it('correctly discriminates between voucher orders and calendar room orders', () => {
-    // 预售券特征识别
+    // 权威预售券特征识别 (play_methods_v2.is_hotel_presale 或 product_type_name === '预售券')
     expect(isDouyinVoucherOrder(DOUYIN_RAW_SAMPLE_ORDER)).toBe(true);
     expect(isDouyinVoucherOrder({ play_methods_v2: { is_hotel_presale: true } })).toBe(true);
     expect(isDouyinVoucherOrder({ sale_product_info: { product_type_name: '预售券' } })).toBe(true);
-    expect(isDouyinVoucherOrder({ sale_product_info: { product_tag: ['超值券'] } })).toBe(true);
-    expect(isDouyinVoucherOrder({ book_detail_info: { book_id: '8000123456789' } })).toBe(true);
 
-    // 日历房特征识别
+    // 权威日历房特征识别 (play_methods_v2.is_hotel_calendar 或普通房态商品)
     expect(isDouyinVoucherOrder({ play_methods_v2: { is_hotel_calendar: true } })).toBe(false);
     expect(isDouyinVoucherOrder({
       play_methods_v2: { is_hotel_calendar: true, is_hotel_presale: false },
-      sale_product_info: { physical_room_name: '标准大床房', product_name: '标准大床房1晚' },
+      sale_product_info: { physical_room_name: '标准大床房', product_name: '标准大床房1晚', product_type_name: '日历房' },
+    })).toBe(false);
+    expect(isDouyinVoucherOrder({
+      sale_product_info: { product_type_name: '日历房' },
     })).toBe(false);
   });
 

@@ -652,48 +652,21 @@ export function extractDouyinOrderFromResponse(
  * 依据抖音官方接口权威特征：
  * 1. play_methods_v2.is_hotel_presale === true 为权威预售券标识
  * 2. play_methods_v2.is_hotel_calendar === true 为明确日历房标识（优先排除）
- * 3. 辅助特征：product_type_name 包含 "券"、product_tag 包含 "券"、order_tag_list 包含 "券"
- * 4. 兜底特征：存在以 "8000" 开头的预约单号/券号 book_id
+ * 3. 辅助特征：sale_product_info.product_type_name === '预售券'
  */
 export function isDouyinVoucherOrder(data: Record<string, unknown>): boolean {
   if (!data || typeof data !== 'object') return false;
 
   const playMethodsV2 = (data.play_methods_v2 || {}) as Record<string, unknown>;
-  if (playMethodsV2.is_hotel_calendar === true) {
-    return false;
-  }
   if (playMethodsV2.is_hotel_presale === true) {
     return true;
   }
+  if (playMethodsV2.is_hotel_calendar === true) {
+    return false;
+  }
 
   const saleProductInfo = (data.sale_product_info || {}) as Record<string, unknown>;
-  if (String(saleProductInfo.product_type_name || '').includes('券')) {
-    return true;
-  }
-  const productTags = Array.isArray(saleProductInfo.product_tag) ? saleProductInfo.product_tag : [];
-  if (productTags.some((tag) => typeof tag === 'string' && tag.includes('券'))) {
-    return true;
-  }
-
-  const productInfoV2 = (data.product_info_v2 || {}) as Record<string, unknown>;
-  const sku = (productInfoV2.sku || {}) as Record<string, unknown>;
-  if (String(sku.product_type_name || '').includes('券')) {
-    return true;
-  }
-
-  const orderBaseInfo = (data.order_base_info || {}) as Record<string, unknown>;
-  const orderTags = Array.isArray(orderBaseInfo.order_tag_list) ? orderBaseInfo.order_tag_list : [];
-  if (orderTags.some((tag) => typeof tag === 'string' && tag.includes('券'))) {
-    return true;
-  }
-
-  const bookDetailInfo = (data.book_detail_info || {}) as Record<string, unknown>;
-  const bookId = String(bookDetailInfo.book_id || '').trim();
-  if (bookId && bookId.startsWith('8000')) {
-    return true;
-  }
-
-  return false;
+  return saleProductInfo.product_type_name === '预售券';
 }
 
 /**
