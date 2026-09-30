@@ -553,7 +553,7 @@ describe('meituanDutyRunner', () => {
       const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
       expect(result).toBe(true);
       expect(clickMock).toHaveBeenCalledTimes(1);
-      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 1500 });
+      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 3500 });
     });
 
     it('should NOT dismiss modal when it contains 酒店确认号 (core business red line)', async () => {
@@ -717,7 +717,7 @@ describe('meituanDutyRunner', () => {
       const result = await dismissMeituanNoticeModals(mockPage as unknown as Parameters<typeof dismissMeituanNoticeModals>[0]);
       expect(result).toBe(true);
       expect(clickMock).toHaveBeenCalledTimes(1);
-      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 1500 });
+      expect(waitForMock).toHaveBeenCalledWith({ state: 'hidden', timeout: 3500 });
     });
   });
 

@@ -29,7 +29,7 @@ describe('dutyTimingConfig', () => {
       expect(ACTION_TIMEOUT.FAST_PROBE).toBe(150);
       expect(ACTION_TIMEOUT.PROBE).toBe(500);
       expect(ACTION_TIMEOUT.SENSITIVE_FIELD).toBe(1000);
-      expect(ACTION_TIMEOUT.ELEMENT).toBe(1500);
+      expect(ACTION_TIMEOUT.ELEMENT).toBe(3500);
       expect(ACTION_TIMEOUT.QUICK_ACTION).toBe(2000);
       expect(ACTION_TIMEOUT.MODAL).toBe(2500);
       expect(ACTION_TIMEOUT.CLICK).toBe(5000);
@@ -135,13 +135,13 @@ describe('dutyTimingConfig', () => {
       expect(locator.isVisible).toHaveBeenCalledWith({ timeout: 500 });
     });
 
-    it('isElementVisible 应使用 ACTION_TIMEOUT.ELEMENT (1500ms) 并在元素异常时安全返回 false', async () => {
+    it('isElementVisible 应使用 ACTION_TIMEOUT.ELEMENT (3500ms) 并在元素异常时安全返回 false', async () => {
       delete process.env.SMARTLINK_TIMING_SCALE;
       const locator = createMockLocator({ visibleRejects: true });
       const result = await isElementVisible(locator);
 
       expect(result).toBe(false);
-      expect(locator.isVisible).toHaveBeenCalledWith({ timeout: 1500 });
+      expect(locator.isVisible).toHaveBeenCalledWith({ timeout: 3500 });
     });
 
     it('isModalVisible 应使用 ACTION_TIMEOUT.MODAL (2500ms)', async () => {

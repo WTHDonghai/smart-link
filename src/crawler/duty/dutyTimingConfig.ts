@@ -14,8 +14,8 @@ export const ACTION_TIMEOUT = {
   /** 2. 轻量脱敏字段级 (Sensitive Field Reveal): 1,000ms，用于姓名/手机号脱敏查看按钮快速探查 */
   SENSITIVE_FIELD: 1_000,
 
-  /** 3. 交互控件级 (Element / Micro Action): 1,500ms，用于输入框、按钮、关闭图标可见性检测 */
-  ELEMENT: 1_500,
+  /** 3. 交互控件级 (Element / Micro Action): 3,500ms，用于输入框、按钮、关闭图标可见性检测 */
+  ELEMENT: 3_500,
 
   /** 4. 快捷操作级 (Quick Action / Card Check): 2,000ms，用于列表订单卡片快速判定与就绪 */
   QUICK_ACTION: 2_000,

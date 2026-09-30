@@ -7,7 +7,6 @@ import { PROCESS_ENV_KEYS } from '@/src/types/env';
 interface CliOptions {
   channel: 'meituan' | 'douyin';
   orderId?: string;
-  isDryRun: boolean;
   isSubmit: boolean;
   headless: boolean;
   waitManualClose: boolean;
@@ -17,7 +16,7 @@ interface CliOptions {
 function parseArgs(argv: string[]): CliOptions {
   let channel: 'meituan' | 'douyin' = 'meituan';
   let orderId: string | undefined;
-  let isDryRun = argv.includes('--dry-run');
+  // let isDryRun = argv.includes('--dry-run');
   const isSubmit = argv.includes('--submit');
 
   for (let i = 0; i < argv.length; i++) {
@@ -45,14 +44,13 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   // 若未显式传入 --submit，则默认启用安全演练模式（Dry-Run）以防止意外确认真实取消订单
-  if (!isSubmit && !isDryRun) {
-    isDryRun = true;
-  }
+  // if (!isSubmit && !isDryRun) {
+  //   isDryRun = true;
+  // }
 
   return {
     channel,
     orderId,
-    isDryRun,
     isSubmit,
     headless: argv.includes('--headless'),
     waitManualClose: argv.includes('--wait-manual-close') || !argv.includes('--close-browser'),
@@ -100,21 +98,11 @@ async function main() {
 
     console.log(`\n[DutyConfirmCancel:CLI] 目标订单号: 「${targetOrderId}」`);
 
-    if (options.isDryRun) {
-      console.log('[DutyConfirmCancel:CLI] 🛡️ 正在以【安全演练模式 (Dry-Run)】执行定位验证...');
-      const verification = await runner.confirmCancel(targetOrderId, { dryRun: true });
-      console.log('\n======================================================');
-      console.log('🎉 演练全流程验证成功！卡片激活与「我已知晓」按钮定位完全匹配！');
-      console.log(`  验证步骤: ${verification.verifiedSteps.join(' -> ')}`);
-      console.log('   （若需要在生产环境真实点击「我已知晓」，请加上 `--submit` 参数）');
-      console.log('======================================================\n');
-    } else {
-      console.log('[DutyConfirmCancel:CLI] ⚠️ 【真实提交模式】正在执行真实的「我已知晓」点击提交...');
-      await runner.confirmCancel(targetOrderId);
-      console.log('\n======================================================');
-      console.log(`🎉 订单「${targetOrderId}」已成功点击「我已知晓」完成取消确认！`);
-      console.log('======================================================\n');
-    }
+    console.log('[DutyConfirmCancel:CLI] ⚠️ 【真实提交模式】正在执行真实的「我已知晓」点击提交...');
+    await runner.confirmCancel(targetOrderId);
+    console.log('\n======================================================');
+    console.log(`🎉 订单「${targetOrderId}」已成功点击「我已知晓」完成取消确认！`);
+    console.log('======================================================\n');
 
     if (options.waitManualClose) {
       console.log('[DutyConfirmCancel:CLI] 操作完成；浏览器保持开启供您目视核对。手动关闭窗口后退出。');

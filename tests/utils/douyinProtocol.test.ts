@@ -161,7 +161,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     const unified = protocol.toUnifiedOrder('测试备注');
 
     expect(unified.booking.roomTypeId).toBe('1874664066064411');
-    expect(unified.booking.rateCode).toBe('');
+    expect(unified.booking.rateCode).toBe('OTA');
     expect(unified.booking.paytype).toBe('预付');
     expect(unified.booking.arrival).toBe('2026-10-01');
     expect(unified.booking.departure).toBe('2026-10-05');
@@ -247,7 +247,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(unified.contact.mobile).toBe('*******3563');
     expect(unified.booking.roomTypeName).toBe('豪华大床房');
     expect(unified.booking.roomTypeId).toBe('1874906660640768');
-    expect(unified.booking.rateCode).toBe('');
+    expect(unified.booking.rateCode).toBe('OTA');
     expect(unified.booking.arrival).toBe('2026-11-16');
     expect(unified.booking.departure).toBe('2026-11-17');
     expect(unified.booking.nights).toBe(1);

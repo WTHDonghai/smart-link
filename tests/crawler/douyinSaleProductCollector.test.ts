@@ -97,6 +97,69 @@ describe('DouyinSaleProductCollector (预售房型快照采集器)', () => {
       expect(mockPage.off).toHaveBeenCalledWith('response', expect.any(Function));
     });
 
+    it('当收到 OPTIONS 预检请求时直接忽略跳过，不误拦截为有效响应', async () => {
+      let registeredResponseHandler: ((response: Response) => Promise<void>) | null = null;
+
+      const mockOptionsResponse = {
+        request: () => ({ method: () => 'OPTIONS' }),
+        url: () => 'https://life.douyin.com/life/hotel/query_sale_product',
+        ok: () => true,
+        text: async () => '',
+      } as unknown as Response;
+
+      const mockGetResponse = {
+        request: () => ({ method: () => 'GET' }),
+        url: () => 'https://life.douyin.com/life/hotel/query_sale_product',
+        ok: () => true,
+        text: async () =>
+          JSON.stringify({
+            status_code: 0,
+            status_msg: 'success',
+            sale_product_group: [
+              {
+                product_list: [
+                  {
+                    sku_id: 'SKU-001',
+                    physical_room_id: 'PHYS-001',
+                    physical_room_name: '高级商务大床房',
+                    sale_product_id: 'SP-001',
+                    sale_product_name: '预售单晚含早大床房',
+                  },
+                ],
+              },
+            ],
+          }),
+      } as unknown as Response;
+
+      const mockPage = {
+        url: () => DOUYIN_SALE_PRODUCT_PAGE_URL,
+        on: vi.fn((event: string, handler: (r: Response) => Promise<void>) => {
+          if (event === 'response') {
+            registeredResponseHandler = handler;
+          }
+        }),
+        off: vi.fn(),
+        goto: vi.fn().mockImplementation(async () => {
+          if (registeredResponseHandler) {
+            await registeredResponseHandler(mockOptionsResponse);
+            await registeredResponseHandler(mockGetResponse);
+          }
+        }),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Page;
+
+      const request: ProductCrawlRequest = {
+        channelCode: 'DOUYIN',
+        extUnitCode: 'LA-8888',
+        otaHotelName: '测试酒店',
+        waitMs: 10,
+      };
+
+      const result = await collector.collect(mockPage, {} as BrowserContext, request);
+      expect(result).toHaveLength(1);
+      expect(result[0].skuId).toBe('SKU-001');
+    });
+
     it('当重定向至登录页时，必须显式抛出登录态过期错误', async () => {
       const mockPage = {
         url: () => 'https://passport.douyin.com/login',

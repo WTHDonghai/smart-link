@@ -137,6 +137,103 @@ describe('DouyinProductCollector (商品管理采集器)', () => {
       expect(mockPage.off).toHaveBeenCalledWith('response', expect.any(Function));
     });
 
+    it('当收到 OPTIONS 预检请求时直接忽略跳过，不误拦截为有效响应', async () => {
+      vi.spyOn(douyinSaleProductCollector, 'collect').mockResolvedValue([
+        {
+          skuId: 'SKU-K1',
+          otaBasicRoomId: 'PHYS-K1',
+          otaBasicRoomName: '豪华大床房',
+          saleProductId: 'SP-1',
+          saleProductName: '预售大床',
+        },
+      ]);
+
+      let registeredResponseHandler: ((response: Response) => Promise<void>) | null = null;
+
+      const mockOptionsResponse = {
+        request: () => ({ method: () => 'OPTIONS' }),
+        url: () => 'https://life.douyin.com/life/tobias/merge/products/list',
+        ok: () => true,
+        text: async () => '',
+      } as unknown as Response;
+
+      const mockPostResponse = {
+        request: () => ({ method: () => 'POST' }),
+        url: () => 'https://life.douyin.com/life/tobias/merge/products/list',
+        ok: () => true,
+        text: async () =>
+          JSON.stringify({
+            status_code: 0,
+            cursor: '1',
+            total: 1,
+            product_detail_list: [
+              {
+                product: {
+                  product_id: 'PROD-888',
+                  product_name: '抖音大促大床房',
+                  poi_id_list: ['POI-1'],
+                },
+                sku_list: [
+                  {
+                    sku_id: 'SKU-K1',
+                    bind_sku_list: [
+                      {
+                        poi_id: 'POI-1',
+                        sku_ids: ['SKU-K1'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+      } as unknown as Response;
+
+      const createMockLocator = () => {
+        const loc = {
+          isVisible: vi.fn().mockResolvedValue(true),
+          waitFor: vi.fn().mockResolvedValue(undefined),
+          click: vi.fn().mockResolvedValue(undefined),
+          fill: vi.fn().mockResolvedValue(undefined),
+          count: vi.fn().mockResolvedValue(1),
+          first: () => loc,
+          filter: () => loc,
+          locator: () => loc,
+          evaluate: vi.fn().mockResolvedValue(false),
+        };
+        return loc as unknown as Locator;
+      };
+
+      const mockPage = {
+        url: () => 'https://life.douyin.com/p/goods-list',
+        on: vi.fn((event: string, handler: (r: Response) => Promise<void>) => {
+          if (event === 'response') {
+            registeredResponseHandler = handler;
+          }
+        }),
+        off: vi.fn(),
+        goto: vi.fn().mockImplementation(async () => {
+          if (registeredResponseHandler) {
+            await registeredResponseHandler(mockOptionsResponse);
+            await registeredResponseHandler(mockPostResponse);
+          }
+        }),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        locator: vi.fn().mockImplementation(() => createMockLocator()),
+      } as unknown as Page;
+
+      const request: ProductCrawlRequest = {
+        channelCode: 'DOUYIN',
+        extUnitCode: 'LA-1001',
+        otaHotelName: '希尔顿欢朋酒店',
+        waitMs: 10,
+      };
+
+      const result = await collector.collect(mockPage, {} as BrowserContext, request);
+      expect(result).toHaveLength(1);
+      expect(result[0].otaRoomTypeId).toBe('PROD-888');
+    });
+
     it('当缺少 extUnitCode 或 otaHotelName 时，应立即 Fail-Fast 报错', async () => {
       const mockPage = {} as Page;
       await expect(

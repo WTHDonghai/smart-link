@@ -10,6 +10,7 @@ import {
   HUMAN_DELAY,
   humanDelay,
   getScaledKeystrokeDelay,
+  getScaledTimeout,
   isElementVisible,
 } from '../../dutyTimingConfig';
 import { assertNoDouyinPageRisk } from './douyinRiskGuard';
@@ -129,23 +130,26 @@ export class DouyinActionExecutor {
       }
     }
 
-    // 4. 定位“填写确认号”触发按钮
+    // 4. 定位“填写确认号”触发按钮（必须包含“填写确认号”文案，防止误匹配同样使用 .byted-confirm 包裹的接单按钮）
     const triggerBtn = scope.locator(
-      '.byted-popper-trigger.byted-confirm button, ' +
-      '.byted-popper-trigger.byted-confirm, ' +
-      'button:has-text("填写确认号")'
+      'button:has-text("填写确认号"), ' +
+      '.byted-popper-trigger:has-text("填写确认号"), ' +
+      '.byted-confirm button:has-text("填写确认号"), ' +
+      '[role="button"]:has-text("填写确认号")'
     ).first();
 
-    const isTriggerDirectlyVisible = await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION);
+    const isTriggerDirectlyVisible = await isElementVisible(triggerBtn, ACTION_TIMEOUT.PROBE);
 
     // 若触发按钮尚未出现，检查是否处于“待接单”状态，需要先执行「接单」确认
     if (!isTriggerDirectlyVisible) {
       const acceptBtn = scope.locator(
         'button:has-text("接单"), ' +
-        '[role="button"]:has-text("接单")'
+        'button:has-text("确认接单"), ' +
+        '[role="button"]:has-text("接单"), ' +
+        '[role="button"]:has-text("确认接单")'
       ).first();
 
-      const isAcceptVisible = await isElementVisible(acceptBtn, ACTION_TIMEOUT.QUICK_ACTION);
+      const isAcceptVisible = await isElementVisible(acceptBtn, ACTION_TIMEOUT.PROBE);
 
       if (isAcceptVisible) {
         await updateVisualTrackerStatus(page, `🛎️ 订单「${cleanOrderId}」处于待接单状态，正在执行「接单」操作...`, 'action');
@@ -154,7 +158,9 @@ export class DouyinActionExecutor {
           await visualClickLocator(page, acceptBtn, `点击订单「${cleanOrderId}」接单按钮展开接单确认气泡`);
           await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-          const acceptPopover = scope.locator('.byted-popover-confirm-inner, .byted-popover-confirm-container').first();
+          const acceptPopover = scope.locator(
+            '.byted-popover-confirm-container, .byted-popover-confirm-inner'
+          ).first();
           const cancelBtn = acceptPopover.locator('.byted-confirm-cancel, button:has-text("取消")').first();
 
           if (await isElementVisible(cancelBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
@@ -182,11 +188,13 @@ export class DouyinActionExecutor {
           };
         }
 
-        // 真实接单流程：点击接单 -> 气泡点击确定接单
+        // 真实接单流程：点击接单 -> 气泡二次确认点击确定接单
         await visualClickLocator(page, acceptBtn, `点击订单「${cleanOrderId}」接单按钮展开接单确认气泡`);
         await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-        const acceptPopover = scope.locator('.byted-popover-confirm-inner, .byted-popover-confirm-container').first();
+        const acceptPopover = scope.locator(
+          '.byted-popover-confirm-container, .byted-popover-confirm-inner'
+        ).first();
         if (!await isElementVisible(acceptPopover, ACTION_TIMEOUT.QUICK_ACTION)) {
           throw new DutyExecutionError(
             `订单「${cleanOrderId}」点击接单后未弹出接单确认气泡`,
@@ -204,15 +212,36 @@ export class DouyinActionExecutor {
           );
         }
 
-        await visualClickLocator(page, acceptOkBtn, '点击确定完成接单');
-        await humanDelay(page, ...HUMAN_DELAY.SHORT);
+        await visualClickLocator(page, acceptOkBtn, '点击确定完成接单二次确认');
 
-        // 接单成功后等待填写确认号按钮出现
-        await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION);
+        // 等待接单气泡关闭与后台状态流转（对齐 smart-link-auto-queue-split waitForScopesClosed）
+        try {
+          if (typeof acceptPopover.waitFor === 'function') {
+            await acceptPopover.waitFor({ state: 'hidden', timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK) });
+          }
+        } catch {
+          // 气泡已关闭或动画完成
+        }
+
+        // 轮询等待页面状态更新并出现“填写确认号”按钮（对齐 smart-link-auto-queue-split verify 阶段，允许后端网络请求与 DOM 渲染就绪）
+        const deadline = Date.now() + getScaledTimeout(ACTION_TIMEOUT.NETWORK);
+        while (Date.now() <= deadline) {
+          if (await isElementVisible(triggerBtn, ACTION_TIMEOUT.PROBE)) {
+            break;
+          }
+          // 若接单后订单详情区域因列表重绘失焦，尝试重新激活卡片
+          if (orderCard && await isElementVisible(orderCard, ACTION_TIMEOUT.PROBE)) {
+            const hasDetail = await isElementVisible(scope.locator('#detailSection').first(), ACTION_TIMEOUT.PROBE);
+            if (!hasDetail) {
+              await visualClickLocator(page, orderCard, `重新激活订单「${cleanOrderId}」详情展示`);
+            }
+          }
+          await humanDelay(page, 300, 500);
+        }
       }
     }
 
-    if (!await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
+    if (!await isElementVisible(triggerBtn, ACTION_TIMEOUT.ELEMENT)) {
       throw new DutyExecutionError(
         `订单「${cleanOrderId}」未找到「填写确认号/接单」触发按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
@@ -225,7 +254,7 @@ export class DouyinActionExecutor {
 
     // 5. 定位行内气泡确认框容器 (Popover Confirm)
     const popover = scope.locator(
-      '.byted-popover-confirm-inner, .byted-popover-confirm-container'
+      '.byted-popover-confirm-container, .byted-popover-confirm-inner'
     ).first();
 
     if (!await isElementVisible(popover, ACTION_TIMEOUT.QUICK_ACTION)) {
