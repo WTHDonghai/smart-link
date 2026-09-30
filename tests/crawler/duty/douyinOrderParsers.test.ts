@@ -347,27 +347,27 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealOrderDetail.json');
       const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
 
-      const extracted = extractDouyinOrderFromResponse(payload, '1112769276121338025');
+      const extracted = extractDouyinOrderFromResponse(payload, '1112665199685496539');
       expect(extracted).not.toBeNull();
       const baseInfo = extracted?.order_base_info as Record<string, unknown>;
-      expect(baseInfo.order_id).toBe('1112769276121338025');
+      expect(baseInfo.order_id).toBe('1112665199685496539');
       const bookInfo = extracted?.book_detail_info as Record<string, unknown>;
-      expect(bookInfo.book_id).toBe('800000449770071274116238025');
+      expect(bookInfo.book_id).toBe('800000263871637635716526539');
       expect(bookInfo.hotel_name).toBe('淮安日月洲度假村(西游乐园店)');
-      expect(bookInfo.book_start_time).toBe(1790784000);
-      expect(bookInfo.book_end_time).toBe(1790870400);
+      expect(bookInfo.book_start_time).toBe(1794758400);
+      expect(bookInfo.book_end_time).toBe(1794844800);
 
       const saleProduct = extracted?.sale_product_info as Record<string, unknown>;
-      expect(saleProduct.physical_room_name).toBe('海洋主题家庭房');
-      expect(saleProduct.product_id).toBe('1874909917667332');
+      expect(saleProduct.physical_room_name).toBe('豪华大床房');
+      expect(saleProduct.product_id).toBe('1874906660640768');
 
       const amountInfo = extracted?.amount_info as Record<string, unknown>;
-      expect(amountInfo.pay_amount).toBe(127298);
+      expect(amountInfo.pay_amount).toBe(49429);
 
       const guestInfo = extracted?.guest_info as Record<string, unknown>;
       const userList = guestInfo.user_list as Array<{ name: string; phone: string }>;
-      expect(userList[0].name).toBe('谢佳安');
-      expect(userList[0].phone).toBe('*******3150');
+      expect(userList[0].name).toBe('赵锴');
+      expect(userList[0].phone).toBe('*******3563');
     });
 
     it('should return null for null/undefined or non-object inputs', () => {

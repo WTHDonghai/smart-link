@@ -139,17 +139,18 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(rendered).toContain('客人:刘彩霞、王小明 (138****5090、139****8888)');
   });
 
-  it('correctly derives nights and pricing breakdown from arrival and departure dates when nights is not in context', () => {
+  it('correctly calculates nightly pricing breakdown based on nights and total amount', () => {
     const rawOrder = {
       ...DOUYIN_RAW_SAMPLE_ORDER,
       book_detail_info: {
         ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        book_night_count: 4,
         book_start_time: 1790812800, // 2026-10-01
         book_end_time: 1791158400, // 2026-10-05 (4 nights)
       },
-      amount_info: {
-        ...DOUYIN_RAW_SAMPLE_ORDER.amount_info,
-        pay_amount: 80000, // 800 元
+      order_fee: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.order_fee,
+        payment_total_amount: 80000, // 800 元
       },
     };
 
@@ -157,7 +158,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     const unified = protocol.toUnifiedOrder('测试备注');
 
     expect(unified.booking.roomTypeId).toBe('1874664066064411');
-    expect(unified.booking.rateCode).toBe('预售券');
+    expect(unified.booking.rateCode).toBe('');
     expect(unified.booking.paytype).toBe('预付');
     expect(unified.booking.arrival).toBe('2026-10-01');
     expect(unified.booking.departure).toBe('2026-10-05');
@@ -170,14 +171,25 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(unified.booking.pricing[3]).toEqual({ date: '2026-10-04', price: 200 });
   });
 
-  it('fails fast when toUnifiedOrder lacks required fields and does not use hardcoded fallbacks', () => {
+  it('fails fast when cleanDouyinOrder lacks required fields and does not use hardcoded fallbacks', () => {
+    // Missing required fields (nights, payment_total_amount) triggers protocol drift error
+    expect(() =>
+      cleanDouyinOrder({
+        order_base_info: { order_id: '123' },
+        book_detail_info: { book_id: '456', book_start_time: 1788537600, book_end_time: 1788624000 },
+        sale_product_info: { physical_room_name: '大床房' },
+        amount_info: { pay_amount: 10000 },
+      })
+    ).toThrow(/缺失关键字段/);
+
+    // When required fields exist but roomTypeId is missing in toUnifiedOrder
     const invalidProtocol = cleanDouyinOrder({
       order_base_info: { order_id: '123' },
-      book_detail_info: { book_id: '456', book_start_time: 1788537600, book_end_time: 1788624000 },
+      book_detail_info: { book_id: '456', book_night_count: 1, book_start_time: 1788537600, book_end_time: 1788624000 },
       sale_product_info: { physical_room_name: '大床房' },
+      order_fee: { payment_total_amount: 10000 },
       amount_info: { pay_amount: 10000 },
     });
-    // Missing roomTypeId / productId and rateCode
     expect(() => invalidProtocol.toUnifiedOrder('测试')).toThrow(/缺少必要关键字段/);
   });
 
@@ -202,39 +214,39 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     const unified = protocol.toUnifiedOrder('自动化入单测试');
     expect(unified.otaOrderId).toBe('1116431119643540077');
     expect(unified.booking.roomTypeName).toBe('豪华大床房');
-    expect(unified.booking.totalPrice).toBe(496);
+    expect(unified.booking.totalPrice).toBe(499);
   });
 
   it('end-to-end cleans real production detail API fixture provided by merchant workbench', () => {
     const fixturePath = path.resolve(process.cwd(), 'tests/fixtures/douyinRealOrderDetail.json');
     const rawDetailPayload = JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
 
-    // 针对用户真实报错的订单「1112769276121338025」执行清洗
-    const protocol = cleanDouyinOrder(rawDetailPayload, null, '1112769276121338025');
+    // 针对用户真实导入的订单「1112665199685496539」执行清洗
+    const protocol = cleanDouyinOrder(rawDetailPayload, null, '1112665199685496539');
 
-    expect(protocol.get('orderNo')).toBe('1112769276121338025');
-    expect(protocol.get('bookId')).toBe('800000449770071274116238025');
-    expect(protocol.get('roomName')).toBe('海洋主题家庭房');
-    expect(protocol.get('checkInDate')).toBe('2026-10-01');
-    expect(protocol.get('checkOutDate')).toBe('2026-10-02');
-    expect(protocol.get('payAmount')).toBe('1272.98'); // 127298 分 -> 1272.98 元
-    expect(protocol.get('guestName')).toBe('谢佳安');
-    expect(protocol.get('guestPhone')).toBe('*******3150');
+    expect(protocol.get('orderNo')).toBe('1112665199685496539');
+    expect(protocol.get('bookId')).toBe('800000263871637635716526539');
+    expect(protocol.get('roomName')).toBe('豪华大床房');
+    expect(protocol.get('checkInDate')).toBe('2026-11-16');
+    expect(protocol.get('checkOutDate')).toBe('2026-11-17');
+    expect(protocol.get('payAmount')).toBe('494.29');
+    expect(protocol.get('guestName')).toBe('赵锴');
+    expect(protocol.get('guestPhone')).toBe('*******3563');
 
     const unified = protocol.toUnifiedOrder('【中台自动导入】');
-    expect(unified.otaOrderId).toBe('1112769276121338025');
+    expect(unified.otaOrderId).toBe('1112665199685496539');
     expect(unified.otaChannel).toBe('DOUYIN');
     expect(unified.unitId).toBe('7130223634133092383');
     expect(unified.unitName).toBe('淮安日月洲度假村(西游乐园店)');
-    expect(unified.contact.name).toBe('谢佳安');
-    expect(unified.contact.mobile).toBe('*******3150');
-    expect(unified.booking.roomTypeName).toBe('海洋主题家庭房');
-    expect(unified.booking.roomTypeId).toBe('1874909917667332');
-    expect(unified.booking.rateCode).toBe('预售券');
-    expect(unified.booking.arrival).toBe('2026-10-01');
-    expect(unified.booking.departure).toBe('2026-10-02');
+    expect(unified.contact.name).toBe('赵锴');
+    expect(unified.contact.mobile).toBe('*******3563');
+    expect(unified.booking.roomTypeName).toBe('豪华大床房');
+    expect(unified.booking.roomTypeId).toBe('1874906660640768');
+    expect(unified.booking.rateCode).toBe('');
+    expect(unified.booking.arrival).toBe('2026-11-16');
+    expect(unified.booking.departure).toBe('2026-11-17');
     expect(unified.booking.nights).toBe(1);
-    expect(unified.booking.totalPrice).toBe(1272.98);
+    expect(unified.booking.totalPrice).toBe(499.9);
     expect(unified.booking.paytype).toBe('预付');
   });
 

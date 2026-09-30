@@ -30,7 +30,36 @@ export enum DouyinDutyErrorCode {
   CONFIRM_SUBMIT_NOT_FOUND = 'CONFIRM_SUBMIT_NOT_FOUND',     // 未找到确认提交按钮
   CONFIRM_RESPONSE_TIMEOUT = 'CONFIRM_RESPONSE_TIMEOUT',     // 确认接口网络响应超时
   CONFIRM_RESULT_UNVERIFIED = 'CONFIRM_RESULT_UNVERIFIED',   // 确认接口返回失败或未通过校验
+  ORDER_STATUS_NOT_MATCHED = 'ORDER_STATUS_NOT_MATCHED',     // 订单状态不匹配或未处于可操作状态
+  ACCEPT_ORDER_FAILED = 'ACCEPT_ORDER_FAILED',               // 接单确认操作失败
 }
+
+/**
+ * 抖音来客工作台权威页面选择器与文案契约 (对齐 smart-link-auto-queue-split)
+ */
+export const DOUYIN_PAGE_SELECTORS = {
+  observationBusinessTabSelector: '.byted-tab-bar-item',
+  observationBusinessTabActiveClass: 'byted-tab-bar-item-active',
+  newOrderTabText: '新订/变更',
+  cancelOrderTabText: '取消/退款',
+  orderCardSelector: '.hotel-book-list-order-card[data-form-insight-meta]',
+  detailSelector: '#detailSection',
+  detailOrderIdSelector: '.trade_copy.trade_copy_horizontal',
+  pendingAcceptanceStatusText: '待接单',
+  cancelledStatusTexts: ['已取消', '已退款'] as const,
+  acceptOrderButtonText: '接单',
+  acceptOrderPromptText: '确认接单吗？',
+  acceptOrderScopeSelector: '.byted-popover-confirm-container',
+  acceptOrderSubmitSelector: '.byted-confirm-ok',
+  confirmationTriggerSelector: '.byted-popper-trigger.byted-confirm',
+  confirmationTriggerText: '填写确认号',
+  confirmationScopeSelector: '.byted-popover-confirm-container',
+  confirmationInputSelector: 'input.byted-input[placeholder*="确认号"], input.byted-input, input[placeholder*="确认号"]',
+  confirmationSubmitSelector: '.byted-confirm-ok',
+  confirmationDismissSelector: '.byted-confirm-cancel',
+  confirmationStateSelector: '.max-w-\\[200px\\]:has(+ .byted-popper-trigger.byted-confirm)',
+  cancellationAcknowledgeButtonText: '我知道了',
+} as const;
 
 /**
  * 抖音订单列表采集结构化结果

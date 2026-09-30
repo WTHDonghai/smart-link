@@ -235,6 +235,17 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       enabled: true,
     },
     {
+      key: 'nights',
+      label: '间夜数',
+      path: 'book_detail_info.book_night_count',
+      category: 'hotel',
+      transform: 'string',
+      sampleValue: '1',
+      description: '间夜数',
+      enabled: true,
+      required: true,
+    },
+    {
       key: 'roomTypeId',
       label: '房型商品ID',
       path: 'sale_product_info.product_id',
@@ -242,16 +253,6 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       transform: 'string',
       sampleValue: '1874664066064411',
       description: '抖音房型商品或团购商品ID',
-      enabled: true,
-    },
-    {
-      key: 'rateCode',
-      label: '价格方案',
-      path: 'sale_product_info.product_type_name',
-      category: 'hotel',
-      transform: 'string',
-      sampleValue: '预售券',
-      description: '抖音价格方案或产品类型',
       enabled: true,
     },
 
@@ -310,6 +311,18 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       transform: 'centsToYuan',
       sampleValue: '496.00',
       description: '顾客最终实付支付金额 (元)',
+      enabled: true,
+      required: true,
+    },
+    // 实收金额
+    {
+      key: 'payTotalAmount',
+      label: '实收金额',
+      path: 'order_fee.payment_total_amount',
+      category: 'finance',
+      transform: 'centsToYuan',
+      sampleValue: '496.00',
+      description: '实收金额 (元)',
       enabled: true,
       required: true,
     },
@@ -438,23 +451,17 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
     const departure = String(this.context.checkOutDate || this.context['离店日期'] || '').slice(0, 10);
 
     let nights = Number(this.context.nights || this.context['间夜数'] || 0);
-    if ((!nights || Number.isNaN(nights) || nights <= 0) && arrival && departure) {
-      const diff = Math.round((Date.parse(departure) - Date.parse(arrival)) / 86400000);
-      nights = diff > 0 ? diff : 0;
-    }
-    nights = Math.max(1, nights || 1);
-
     const quantity = Math.max(1, Number(this.context.roomCount || this.context['房间间数'] || 1));
-    const totalPrice = Number(this.context.payAmount ?? this.context.totalAmount ?? 0);
-    const floorPrice = totalPrice;
+    const totalPrice = Number(this.context.payTotalAmount ?? 0);
 
-    // 按日价格计算：直接消费 context.pricing，若无则根据间夜平摊推导
+    // TODO: 单类型为“预售券”（套餐券预约）：
+    // play_methods_v2.is_hotel_presale = true
+    // product_info_v2.sku.product_type_name = "预售券"
+    // 预售券是用户先购买固定总价的套餐券，后续再发起预约入离。抖音后台对于预售券不会直接生成日历房格式的 order_fee_by_day 每日排期价。
+    // 按日价格计算：预授权根据间夜平摊推导
+    // 日历房：order_fee.order_fee_by_day.details
     let pricing: OrderProtocolPricing[] = [];
-    if (Array.isArray(this.context.pricing) && this.context.pricing.length > 0) {
-      pricing = this.context.pricing as OrderProtocolPricing[];
-    } else if (Array.isArray(this.context['每日价格']) && (this.context['每日价格'] as OrderProtocolPricing[]).length > 0) {
-      pricing = this.context['每日价格'] as OrderProtocolPricing[];
-    } else if (arrival && departure) {
+    if (arrival && departure) {
       const nightlyPrice = Math.round((totalPrice / nights) * 100) / 100;
       pricing = Array.from({ length: nights }, (_, i) => {
         const d = new Date(`${arrival}T00:00:00.000Z`);
@@ -477,14 +484,7 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
       throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 房型商品ID (roomTypeId)`);
     }
 
-    const rateCode = String(
-      this.context.rateCode ||
-      this.context['价格方案'] ||
-      ''
-    ).trim();
-    if (!rateCode) {
-      throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 价格方案 (rateCode)`);
-    }
+    const rateCode = ''
 
     const paytype = String(
       this.context.paytype ||
@@ -514,7 +514,6 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
         nights,
         quantity,
         totalPrice,
-        floorPrice,
         paytype,
         pricing,
       },
@@ -687,20 +686,9 @@ export function cleanDouyinOrder(
     context['房型ID'] = context.roomTypeId;
     context['房型商品ID'] = context.roomTypeId;
   }
-  if (context.rateCode) {
-    context['价格方案'] = context.rateCode;
-  }
 
   // 补齐并归一化支付方式 (预付/现付)
-  if (!context.paytype) {
-    const rawPay = (data.order_base_info as Record<string, unknown> | undefined)?.pay_type ?? data.pay_type;
-    if (rawPay != null) {
-      const pStr = String(rawPay).trim();
-      context.paytype = pStr === '1' || pStr.includes('现付') ? '现付' : '预付';
-    } else if (data.sale_product_info || data.amount_info) {
-      context.paytype = '预付';
-    }
-  }
+  context.paytype = '预付';
   if (context.paytype) {
     context['支付方式'] = context.paytype;
   }

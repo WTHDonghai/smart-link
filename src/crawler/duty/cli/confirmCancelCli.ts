@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import { MeituanDutyRunner } from '../channels/meituan/meituanDutyRunner';
+import { DouyinDutyRunner } from '../channels/douyin/douyinDutyRunner';
+import { DutyOrderStatus } from '../dutyTaskContext';
 import { PROCESS_ENV_KEYS } from '@/src/types/env';
 
 interface CliOptions {
+  channel: 'meituan' | 'douyin';
   orderId?: string;
   isDryRun: boolean;
   isSubmit: boolean;
@@ -12,13 +15,21 @@ interface CliOptions {
 }
 
 function parseArgs(argv: string[]): CliOptions {
+  let channel: 'meituan' | 'douyin' = 'meituan';
   let orderId: string | undefined;
   let isDryRun = argv.includes('--dry-run');
   const isSubmit = argv.includes('--submit');
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--order-id' || arg === '--orderId') {
+    if (arg === '--channel') {
+      const ch = (argv[i + 1] || '').toLowerCase();
+      channel = ch === 'douyin' ? 'douyin' : 'meituan';
+      i++;
+    } else if (arg.startsWith('--channel=')) {
+      const ch = arg.split('=')[1]?.toLowerCase() || '';
+      channel = ch === 'douyin' ? 'douyin' : 'meituan';
+    } else if (arg === '--order-id' || arg === '--orderId') {
       orderId = argv[i + 1];
       i++;
     } else if (arg.startsWith('--order-id=')) {
@@ -28,12 +39,18 @@ function parseArgs(argv: string[]): CliOptions {
     }
   }
 
+  // 若未显式传入渠道但单号以 DY 开头，自动推断为抖音
+  if (channel === 'meituan' && orderId && /^DY/i.test(orderId)) {
+    channel = 'douyin';
+  }
+
   // 若未显式传入 --submit，则默认启用安全演练模式（Dry-Run）以防止意外确认真实取消订单
   if (!isSubmit && !isDryRun) {
     isDryRun = true;
   }
 
   return {
+    channel,
     orderId,
     isDryRun,
     isSubmit,
@@ -45,11 +62,13 @@ function parseArgs(argv: string[]): CliOptions {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const runner = new MeituanDutyRunner();
+  const isDouyin = options.channel === 'douyin';
+  const runner: MeituanDutyRunner | DouyinDutyRunner = isDouyin ? new DouyinDutyRunner() : new MeituanDutyRunner();
 
   console.log('\n======================================================');
-  console.log('       美团 E-booking 取消确认（我已知晓）测试 CLI      ');
+  console.log(isDouyin ? '       抖音来客 取消确认（我知道了）测试 CLI      ' : '       美团 E-booking 取消确认（我已知晓）测试 CLI      ');
   console.log('======================================================');
+  console.log(`  目标渠道:     ${isDouyin ? '抖音来客 (DOUYIN)' : '美团 (MEITUAN)'}`);
   console.log(`  运行模式:     ${options.isSubmit ? '🔴 真实提交模式 (--submit)' : '🟢 安全演练模式 (--dry-run)'}`);
   console.log(`  无头模式:     ${options.headless}`);
   console.log(`  保持窗口:     ${options.waitManualClose}`);
@@ -63,11 +82,11 @@ async function main() {
     let targetOrderId = options.orderId;
 
     if (!targetOrderId) {
-      console.log('[DutyConfirmCancel:CLI] 未指定 --order-id，正在刷新待确认列表自动获取第 1 笔订单...');
-      const orders = await runner.collectUnhandledOrders();
+      console.log(`[DutyConfirmCancel:CLI] 未指定 --order-id，正在刷新${isDouyin ? '抖音' : '美团'}取消/退款列表自动获取第 1 笔订单...`);
+      const orders = await runner.collectUnhandledOrders(DutyOrderStatus.CANCEL);
       if (!orders || orders.length === 0) {
-        console.log('[DutyConfirmCancel:CLI] ⚠️ 当前美团「待确认订单」列表中暂无待处理订单。');
-        console.log('[DutyConfirmCancel:CLI] 提示: 您可通过 `npm run duty:confirm-cancel -- --order-id <订单号>` 指定已取消的订单。');
+        console.log(`[DutyConfirmCancel:CLI] ⚠️ 当前${isDouyin ? '抖音' : '美团'}「取消/退款」列表中暂无待处理订单。`);
+        console.log(`[DutyConfirmCancel:CLI] 提示: 您可通过 \`npm run duty:confirm-cancel -- ${isDouyin ? '--channel douyin ' : ''}--order-id <订单号>\` 指定已取消的订单。`);
         if (options.waitManualClose) {
           console.log('[DutyConfirmCancel:CLI] 浏览器保持开启；手动关闭浏览器窗口后退出。');
           await runner.waitForBrowserClose();

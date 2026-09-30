@@ -8,7 +8,10 @@ interface MockPageOptions {
   orderId?: string;
   cardVisible?: boolean;
   triggerBtnVisible?: boolean;
+  acceptBtnVisible?: boolean;
   popoverVisible?: boolean;
+  acceptPopoverVisible?: boolean;
+  acceptPopoverConfirmBtnVisible?: boolean;
   inputVisible?: boolean;
   initialInputValue?: string;
   readBackInputValue?: string;
@@ -16,6 +19,8 @@ interface MockPageOptions {
   cancelBtnVisible?: boolean;
   ackBtnVisible?: boolean;
   riskDetected?: boolean;
+  existingConfirmationNo?: string;
+  orderStatusText?: string;
 }
 
 function createMockEnvironment(options: MockPageOptions = {}) {
@@ -28,11 +33,31 @@ function createMockEnvironment(options: MockPageOptions = {}) {
     click: vi.fn().mockResolvedValue(undefined),
   };
 
+  let triggerVisible = options.triggerBtnVisible ?? (options.acceptBtnVisible ? false : true);
   const mockTriggerBtn = {
-    isVisible: vi.fn().mockResolvedValue(options.triggerBtnVisible ?? true),
+    isVisible: vi.fn().mockImplementation(async () => triggerVisible),
     scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
     boundingBox: vi.fn().mockResolvedValue({ x: 300, y: 120, width: 100, height: 36 }),
     click: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const mockAcceptBtn = {
+    isVisible: vi.fn().mockResolvedValue(options.acceptBtnVisible ?? false),
+    scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+    boundingBox: vi.fn().mockResolvedValue({ x: 300, y: 120, width: 80, height: 36 }),
+    click: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const mockExistingState = {
+    isVisible: vi.fn().mockResolvedValue(options.existingConfirmationNo !== undefined),
+    innerText: vi.fn().mockResolvedValue(options.existingConfirmationNo ?? ''),
+    textContent: vi.fn().mockResolvedValue(options.existingConfirmationNo ?? ''),
+  };
+
+  const mockStatusText = {
+    isVisible: vi.fn().mockResolvedValue(options.orderStatusText !== undefined),
+    innerText: vi.fn().mockResolvedValue(options.orderStatusText ?? ''),
+    textContent: vi.fn().mockResolvedValue(options.orderStatusText ?? ''),
   };
 
   let currentInputValue = options.initialInputValue ?? '';
@@ -69,6 +94,28 @@ function createMockEnvironment(options: MockPageOptions = {}) {
     click: vi.fn().mockResolvedValue(undefined),
   };
 
+  const mockAcceptOkBtn = {
+    isVisible: vi.fn().mockResolvedValue(options.acceptPopoverConfirmBtnVisible ?? true),
+    click: vi.fn().mockImplementation(async () => {
+      triggerVisible = true;
+    }),
+  };
+
+  const mockAcceptPopover = {
+    isVisible: vi.fn().mockResolvedValue(options.acceptPopoverVisible ?? true),
+    locator: vi.fn((sel: string) => {
+      if (sel.includes('byted-confirm-cancel') || sel.includes('取消')) {
+        return { first: () => mockCancelBtn };
+      }
+      if (sel.includes('byted-confirm-ok') || sel.includes('确定')) {
+        return { first: () => mockAcceptOkBtn };
+      }
+      return {
+        first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+      };
+    }),
+  };
+
   const mockPopover = {
     isVisible: vi.fn().mockResolvedValue(options.popoverVisible ?? true),
     locator: vi.fn((sel: string) => {
@@ -98,6 +145,8 @@ function createMockEnvironment(options: MockPageOptions = {}) {
     press: vi.fn().mockResolvedValue(undefined),
   };
 
+  let acceptClicked = false;
+
   const mockPage = {
     url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
     frames: () => [],
@@ -115,7 +164,19 @@ function createMockEnvironment(options: MockPageOptions = {}) {
           first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
         };
       }
-      // 2. 订单卡片选择器
+      // 2. 已回填确认号呈现元素
+      if (sel.includes('max-w-')) {
+        return {
+          first: () => mockExistingState,
+        };
+      }
+      // 3. 订单状态元素
+      if (sel.includes('订单状态') || sel.includes('byted-tag') || sel.includes('已取消') || sel.includes('已退款')) {
+        return {
+          first: () => mockStatusText,
+        };
+      }
+      // 4. 订单卡片选择器
       if (
         (targetOrderId && sel.includes(targetOrderId)) ||
         (!targetOrderId && (sel.includes('.hotel-book-list-order-card') || sel.includes('data-form-insight-meta')))
@@ -125,19 +186,30 @@ function createMockEnvironment(options: MockPageOptions = {}) {
           last: () => mockCard,
         };
       }
-      // 3. 填写确认号触发按钮选择器（位于详情区）
+      // 5. 接单按钮选择器
+      if (options.acceptBtnVisible !== undefined && sel.includes('接单') && !sel.includes('填写确认号')) {
+        return {
+          first: () => ({
+            ...mockAcceptBtn,
+            click: vi.fn().mockImplementation(async () => {
+              acceptClicked = true;
+            }),
+          }),
+        };
+      }
+      // 6. 填写确认号触发按钮选择器（位于详情区）
       if (sel.includes('byted-popper-trigger') || sel.includes('填写确认号') || sel.includes('接单')) {
         return {
           first: () => mockTriggerBtn,
         };
       }
-      // 4. 气泡容器选择器
+      // 7. 气泡容器选择器
       if (sel.includes('byted-popover-confirm')) {
         return {
-          first: () => mockPopover,
+          first: () => (acceptClicked && !triggerVisible ? mockAcceptPopover : mockPopover),
         };
       }
-      // 5. 确认取消按钮选择器（真实 DOM 为「我知道了」）
+      // 8. 确认取消按钮选择器（真实 DOM 为「我知道了」）
       if (sel.includes('我知道了')) {
         return {
           first: () => mockAckBtn,
@@ -154,6 +226,10 @@ function createMockEnvironment(options: MockPageOptions = {}) {
     mockPage,
     mockCard,
     mockTriggerBtn,
+    mockAcceptBtn,
+    mockAcceptOkBtn,
+    mockExistingState,
+    mockStatusText,
     mockPopover,
     mockInput,
     mockConfirmBtn,
@@ -455,6 +531,147 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
       expect(mockConfirmBtn.click).toHaveBeenCalled();
       expect(mockCancelBtn.click).not.toHaveBeenCalled();
     });
+
+    it('should return immediately without re-submitting when confirmation number is already filled and matches target confirmNo (idempotency)', async () => {
+      const executor = new DouyinActionExecutor();
+      const {
+        mockPage,
+        mockCard,
+        mockTriggerBtn,
+        mockConfirmBtn,
+      } = createMockEnvironment({ existingConfirmationNo: 'CF-ALREADY-123' });
+
+      const result = await executor.confirmImport(mockPage, 'CF-ALREADY-123', 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+      });
+
+      expect(result).toBeUndefined();
+      expect(mockCard.click).toHaveBeenCalled();
+      // 确认号已存在且相同，不触发填写与提交
+      expect(mockTriggerBtn.click).not.toHaveBeenCalled();
+      expect(mockConfirmBtn.click).not.toHaveBeenCalled();
+    });
+
+    it('should return verification result in dryRun when confirmation number is already filled and matches target confirmNo', async () => {
+      const executor = new DouyinActionExecutor();
+      const {
+        mockPage,
+        mockCard,
+        mockTriggerBtn,
+      } = createMockEnvironment({ existingConfirmationNo: 'CF-ALREADY-123' });
+
+      const result = await executor.confirmImport(mockPage, 'CF-ALREADY-123', 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+        dryRun: true,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.verified).toBe(true);
+      expect(result.dryRun).toBe(true);
+      expect(result.verifiedSteps).toContain('already_completed');
+      expect(mockCard.click).toHaveBeenCalled();
+      expect(mockTriggerBtn.click).not.toHaveBeenCalled();
+    });
+
+    it('should throw CONFIRM_INPUT_ALREADY_FILLED when existing confirmation number differs from target confirmNo', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage } = createMockEnvironment({ existingConfirmationNo: 'CF-DIFFERENT-999' });
+
+      await expect(
+        executor.confirmImport(mockPage, 'CF-NEW-123', 'DY-ORDER-888', {
+          refreshOrderList: vi.fn(),
+        })
+      ).rejects.toMatchObject({
+        errorCode: DouyinDutyErrorCode.CONFIRM_INPUT_ALREADY_FILLED,
+        retryable: false,
+      });
+    });
+
+    it('should execute accept order flow before filling confirmation number when accept button is visible and trigger button is not yet visible', async () => {
+      const executor = new DouyinActionExecutor();
+      const {
+        mockPage,
+        mockCard,
+        mockTriggerBtn,
+        mockAcceptBtn,
+        mockAcceptOkBtn,
+        mockInput,
+        mockConfirmBtn,
+      } = createMockEnvironment({ acceptBtnVisible: true });
+
+      const result = await executor.confirmImport(mockPage, 'CF-ACCEPT-FLOW', 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+      });
+
+      expect(result).toBeUndefined();
+      expect(mockCard.click).toHaveBeenCalled();
+      expect(mockAcceptOkBtn.click).toHaveBeenCalled();
+      expect(mockTriggerBtn.click).toHaveBeenCalled();
+      expect(mockInput.pressSequentially).toHaveBeenCalledWith('CF-ACCEPT-FLOW', expect.any(Object));
+      expect(mockConfirmBtn.click).toHaveBeenCalled();
+    });
+
+    it('should safely perform dryRun for accept button when order is in 待接单', async () => {
+      const executor = new DouyinActionExecutor();
+      const {
+        mockPage,
+        mockCard,
+        mockCancelBtn,
+      } = createMockEnvironment({ acceptBtnVisible: true });
+
+      const result = await executor.confirmImport(mockPage, 'CF-DRY-ACCEPT', 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+        dryRun: true,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.verified).toBe(true);
+      expect(result.dryRun).toBe(true);
+      expect(result.verifiedSteps).toEqual([
+        'locate_order_card',
+        'activate_order_detail',
+        'locate_accept_btn',
+        'click_accept_btn',
+        'verify_accept_popover',
+        'close_popover_safely',
+      ]);
+      expect(mockCard.click).toHaveBeenCalled();
+      expect(mockCancelBtn.click).toHaveBeenCalled();
+    });
+
+    it('should throw CONFIRM_INPUT_NOT_FOUND if accept popover does not appear after clicking accept button', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage } = createMockEnvironment({
+        acceptBtnVisible: true,
+        acceptPopoverVisible: false,
+      });
+
+      await expect(
+        executor.confirmImport(mockPage, 'CF-ACCEPT-FAIL', 'DY-ORDER-888', {
+          refreshOrderList: vi.fn(),
+        })
+      ).rejects.toMatchObject({
+        errorCode: DouyinDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
+        retryable: false,
+      });
+    });
+
+    it('should throw CONFIRM_SUBMIT_NOT_FOUND if accept popover confirm button is missing', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage } = createMockEnvironment({
+        acceptBtnVisible: true,
+        acceptPopoverConfirmBtnVisible: false,
+      });
+
+      await expect(
+        executor.confirmImport(mockPage, 'CF-ACCEPT-FAIL-BTN', 'DY-ORDER-888', {
+          refreshOrderList: vi.fn(),
+        })
+      ).rejects.toMatchObject({
+        errorCode: DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
+        retryable: false,
+      });
+    });
   });
 
   describe('confirmCancel (确认取消/我知道了)', () => {
@@ -487,6 +704,22 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
 
       expect(refreshOrderList).toHaveBeenCalledWith(mockPage, DutyOrderStatus.CANCEL);
       expect(mockCard.click).not.toHaveBeenCalled();
+    });
+
+    it('should throw ORDER_STATUS_NOT_MATCHED when order status is not in cancelled/refunded status set', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage } = createMockEnvironment({
+        orderStatusText: '待接单',
+      });
+
+      await expect(
+        executor.confirmCancel(mockPage, 'DY-ORDER-888', {
+          refreshOrderList: vi.fn(),
+        })
+      ).rejects.toMatchObject({
+        errorCode: DouyinDutyErrorCode.ORDER_STATUS_NOT_MATCHED,
+        retryable: false,
+      });
     });
 
     it('should click orderCard, but throw CONFIRM_SUBMIT_NOT_FOUND if ack button is not visible', async () => {
@@ -531,7 +764,24 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
 
     it('should complete real confirmCancel flow: click card -> click ackBtn', async () => {
       const executor = new DouyinActionExecutor();
-      const { mockPage, mockCard, mockAckBtn } = createMockEnvironment();
+      const { mockPage, mockCard, mockAckBtn } = createMockEnvironment({
+        orderStatusText: '已取消',
+      });
+
+      const result = await executor.confirmCancel(mockPage, 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+      });
+
+      expect(result).toBeUndefined();
+      expect(mockCard.click).toHaveBeenCalled();
+      expect(mockAckBtn.click).toHaveBeenCalled();
+    });
+
+    it('should complete real confirmCancel flow for refunded order: click card -> click ackBtn', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage, mockCard, mockAckBtn } = createMockEnvironment({
+        orderStatusText: '已退款',
+      });
 
       const result = await executor.confirmCancel(mockPage, 'DY-ORDER-888', {
         refreshOrderList: vi.fn(),

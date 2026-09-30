@@ -93,12 +93,124 @@ export class DouyinActionExecutor {
     await visualClickLocator(page, orderCard, `点击订单「${cleanOrderId}」卡片激活详情展示`);
     await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-    // 3. 定位并点击“填写确认号”触发按钮
+    // 3. 检查是否已经填入确认号 (Idempotency 幂等核对与防串单校验，对齐 smart-link-auto-queue-split confirmationStateSelector)
+    const existingStateLocator = scope.locator(
+      '#detailSection .max-w-\\[200px\\], .max-w-\\[200px\\]'
+    ).first();
+
+    const targetState = existingStateLocator;
+    if (targetState && (await isElementVisible(targetState, ACTION_TIMEOUT.PROBE))) {
+      const existingText = (await targetState.innerText().catch(() => '') || '').trim();
+      if (existingText === cleanConfirmNo) {
+        await updateVisualTrackerStatus(page, `✅ 抖音订单「${cleanOrderId}」已存在相同确认号「${cleanConfirmNo}」，无需重复回填`, 'success');
+        if (options.dryRun) {
+          return {
+            verified: true,
+            orderId: cleanOrderId,
+            action: 'confirmImport',
+            dryRun: true,
+            verifiedSteps: [
+              'locate_order_card',
+              'activate_order_detail',
+              'check_existing_confirmation',
+              'already_completed',
+            ],
+            fieldValues: { confirmNo: cleanConfirmNo },
+            message: `订单「${cleanOrderId}」已存在相同确认号「${cleanConfirmNo}」，无需重复操作`,
+          };
+        }
+        return;
+      } else if (existingText && existingText !== cleanConfirmNo) {
+        throw new DutyExecutionError(
+          `订单「${cleanOrderId}」已存在其他确认号「${existingText}」，系统已停止覆盖以防串单`,
+          DouyinDutyErrorCode.CONFIRM_INPUT_ALREADY_FILLED,
+          false
+        );
+      }
+    }
+
+    // 4. 定位“填写确认号”触发按钮
     const triggerBtn = scope.locator(
       '.byted-popper-trigger.byted-confirm button, ' +
-      'button:has-text("填写确认号"), ' +
-      'button:has-text("接单")'
+      '.byted-popper-trigger.byted-confirm, ' +
+      'button:has-text("填写确认号")'
     ).first();
+
+    const isTriggerDirectlyVisible = await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION);
+
+    // 若触发按钮尚未出现，检查是否处于“待接单”状态，需要先执行「接单」确认
+    if (!isTriggerDirectlyVisible) {
+      const acceptBtn = scope.locator(
+        'button:has-text("接单"), ' +
+        '[role="button"]:has-text("接单")'
+      ).first();
+
+      const isAcceptVisible = await isElementVisible(acceptBtn, ACTION_TIMEOUT.QUICK_ACTION);
+
+      if (isAcceptVisible) {
+        await updateVisualTrackerStatus(page, `🛎️ 订单「${cleanOrderId}」处于待接单状态，正在执行「接单」操作...`, 'action');
+
+        if (options.dryRun) {
+          await visualClickLocator(page, acceptBtn, `点击订单「${cleanOrderId}」接单按钮展开接单确认气泡`);
+          await humanDelay(page, ...HUMAN_DELAY.SHORT);
+
+          const acceptPopover = scope.locator('.byted-popover-confirm-inner, .byted-popover-confirm-container').first();
+          const cancelBtn = acceptPopover.locator('.byted-confirm-cancel, button:has-text("取消")').first();
+
+          if (await isElementVisible(cancelBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
+            await visualClickLocator(page, cancelBtn, '安全演练收尾：取消接单气泡');
+          } else if (page.keyboard && typeof page.keyboard.press === 'function') {
+            await page.keyboard.press('Escape');
+          }
+          await humanDelay(page, ...HUMAN_DELAY.SHORT);
+
+          return {
+            verified: true,
+            orderId: cleanOrderId,
+            action: 'confirmImport',
+            dryRun: true,
+            verifiedSteps: [
+              'locate_order_card',
+              'activate_order_detail',
+              'locate_accept_btn',
+              'click_accept_btn',
+              'verify_accept_popover',
+              'close_popover_safely',
+            ],
+            fieldValues: { confirmNo: cleanConfirmNo },
+            message: `订单「${cleanOrderId}」接单按钮与确认气泡验证完毕，演练模式已安全关闭`,
+          };
+        }
+
+        // 真实接单流程：点击接单 -> 气泡点击确定接单
+        await visualClickLocator(page, acceptBtn, `点击订单「${cleanOrderId}」接单按钮展开接单确认气泡`);
+        await humanDelay(page, ...HUMAN_DELAY.SHORT);
+
+        const acceptPopover = scope.locator('.byted-popover-confirm-inner, .byted-popover-confirm-container').first();
+        if (!await isElementVisible(acceptPopover, ACTION_TIMEOUT.QUICK_ACTION)) {
+          throw new DutyExecutionError(
+            `订单「${cleanOrderId}」点击接单后未弹出接单确认气泡`,
+            DouyinDutyErrorCode.CONFIRM_INPUT_NOT_FOUND,
+            false
+          );
+        }
+
+        const acceptOkBtn = acceptPopover.locator('.byted-confirm-ok, button:has-text("确定")').first();
+        if (!await isElementVisible(acceptOkBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
+          throw new DutyExecutionError(
+            `订单「${cleanOrderId}」接单气泡内未找到确定按钮`,
+            DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
+            false
+          );
+        }
+
+        await visualClickLocator(page, acceptOkBtn, '点击确定完成接单');
+        await humanDelay(page, ...HUMAN_DELAY.SHORT);
+
+        // 接单成功后等待填写确认号按钮出现
+        await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION);
+      }
+    }
 
     if (!await isElementVisible(triggerBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
@@ -111,7 +223,7 @@ export class DouyinActionExecutor {
     await visualClickLocator(page, triggerBtn, `点击订单「${cleanOrderId}」填写确认号触发按钮`);
     await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-    // 4. 定位行内气泡确认框容器 (Popover Confirm)
+    // 5. 定位行内气泡确认框容器 (Popover Confirm)
     const popover = scope.locator(
       '.byted-popover-confirm-inner, .byted-popover-confirm-container'
     ).first();
@@ -124,7 +236,7 @@ export class DouyinActionExecutor {
       );
     }
 
-    // 5. 在气泡容器内定位确认号输入框，执行防串单校验与读回校验
+    // 6. 在气泡容器内定位确认号输入框，执行防串单校验与读回校验
     const targetInput = popover.locator(
       'input.byted-input[placeholder*="确认号"], input.byted-input, input[placeholder*="确认号"]'
     ).first();
@@ -168,7 +280,7 @@ export class DouyinActionExecutor {
       }
     }
 
-    // 6. 定位确认与取消按钮
+    // 7. 定位确认与取消按钮
     const confirmBtn = popover.locator('.byted-confirm-ok, button:has-text("确定")').first();
     const cancelBtn = popover.locator('.byted-confirm-cancel, button:has-text("取消")').first();
 
@@ -235,6 +347,8 @@ export class DouyinActionExecutor {
     }
     const cleanOrderId = otaOrderId.trim();
 
+    await assertNoDouyinPageRisk(page);
+
     await updateVisualTrackerStatus(
       page,
       options.dryRun
@@ -264,8 +378,36 @@ export class DouyinActionExecutor {
     await visualClickLocator(page, orderCard, `点击已取消订单「${cleanOrderId}」卡片激活详情展示`);
     await humanDelay(page, ...HUMAN_DELAY.SHORT);
 
-    // 3. 定位确认取消按钮（在详情中，真实 DOM 确定性文案为「我知道了」）
-    const ackBtn = scope.locator('button:has-text("我知道了")').first();
+    // 3. 校验订单状态是否属于已取消/已退款集合 (对齐 smart-link-auto-queue-split cancelledStatusTexts 契约)
+    const statusTextLocator = scope.locator(
+      '#detailSection .trade_cell_label:has-text("订单状态") + .cell_content, ' +
+      '#detailSection .byted-tag, ' +
+      '#detailSection span:has-text("已取消"), ' +
+      '#detailSection span:has-text("已退款")'
+    ).first();
+
+    if (await isElementVisible(statusTextLocator, ACTION_TIMEOUT.PROBE)) {
+      const statusText = (await statusTextLocator.innerText().catch(() => '')).trim();
+      const isCancelledOrRefunded = statusText.includes('已取消') || statusText.includes('已退款');
+      if (statusText && !isCancelledOrRefunded && (
+        statusText.includes('待接单') ||
+        statusText.includes('已确认') ||
+        statusText.includes('已接待') ||
+        statusText.includes('待处理')
+      )) {
+        throw new DutyExecutionError(
+          `订单「${cleanOrderId}」当前状态为「${statusText}」，不属于已取消或已退款订单，无法执行取消确认`,
+          DouyinDutyErrorCode.ORDER_STATUS_NOT_MATCHED,
+          false
+        );
+      }
+    }
+
+    // 4. 定位确认取消按钮（在详情中，真实 DOM 确定性文案为「我知道了」）
+    const ackBtn = scope.locator(
+      'button:has-text("我知道了"), ' +
+      '[role="button"]:has-text("我知道了")'
+    ).first();
 
     if (!await isElementVisible(ackBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
       throw new DutyExecutionError(
@@ -293,7 +435,7 @@ export class DouyinActionExecutor {
       };
     }
 
-    // 4. 点击按钮执行取消确认
+    // 5. 点击按钮执行取消确认
     await visualClickLocator(page, ackBtn, `点击按钮确认取消订单「${cleanOrderId}」`);
     await humanDelay(page, ...HUMAN_DELAY.MEDIUM);
   }

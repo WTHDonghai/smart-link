@@ -36,7 +36,9 @@
     "duty:inspect-detail": "vite-node src/crawler/duty/cli/inspectDetailCli.ts --wait-manual-close",
     "duty:inspect-detail:mock": "vite-node --mode mock src/crawler/duty/cli/inspectDetailCli.ts",
     "duty:confirm-import": "vite-node src/crawler/duty/cli/confirmImportCli.ts --wait-manual-close",
+    "duty:confirm-import:douyin": "vite-node src/crawler/duty/cli/confirmImportCli.ts --channel douyin --wait-manual-close",
     "duty:confirm-cancel": "vite-node src/crawler/duty/cli/confirmCancelCli.ts --wait-manual-close",
+    "duty:confirm-cancel:douyin": "vite-node src/crawler/duty/cli/confirmCancelCli.ts --channel douyin --wait-manual-close",
     "duty:test-douyin-parser": "vite-node scripts/testDouyinOrderParserCli.ts"
   },
   "dependencies": {
