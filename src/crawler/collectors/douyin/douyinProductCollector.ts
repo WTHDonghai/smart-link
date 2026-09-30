@@ -156,6 +156,11 @@ export class DouyinProductCollector implements ChannelProductCollector {
 
     const responseHandler = async (response: Response) => {
       try {
+        const method = response.request?.()?.method?.().toUpperCase();
+        if (method === 'OPTIONS') {
+          return;
+        }
+
         const url = response.url();
 
         // 显式拒绝日历房商品接口

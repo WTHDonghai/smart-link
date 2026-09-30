@@ -84,6 +84,11 @@ export class DouyinSaleProductCollector {
 
     const responseHandler = async (response: Response) => {
       try {
+        const method = response.request?.()?.method?.().toUpperCase();
+        if (method === 'OPTIONS') {
+          return;
+        }
+
         const url = response.url();
         if (isDouyinSaleProductResponseUrl(url) && response.ok()) {
           const bodyText = await response.text();

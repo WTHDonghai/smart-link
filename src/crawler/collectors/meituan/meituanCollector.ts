@@ -50,6 +50,11 @@ export class MeituanHotelCollector implements ChannelHotelCollector {
     // 1. 注册网络监听器（用于捕获 /accountpoi/poiInfos 等核心 JSON 数据包）
     const responseHandler = async (response: Response) => {
       try {
+        const method = response.request?.()?.method?.().toUpperCase();
+        if (method === 'OPTIONS') {
+          return;
+        }
+
         const url = response.url();
         if (isMeituanStoreListResponseUrl(url) && response.ok()) {
           const bodyText = await response.text();

@@ -501,7 +501,8 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
       throw new Error(`[DouyinProtocol] 订单「${otaOrderId || 'UNKNOWN'}」缺少必要关键字段: 房型商品ID (roomTypeId)`);
     }
 
-    const rateCode = ''
+    // TODO: 默认OTA
+    const rateCode = 'OTA'
 
     const paytype = String(
       this.context.paytype ||

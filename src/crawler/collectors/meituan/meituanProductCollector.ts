@@ -59,6 +59,11 @@ export class MeituanProductCollector implements ChannelProductCollector {
     // 1. 网络监听器：纯接口响应拦截，从真实页面网络流中捕获商品接口数据（坚决不伪造或主动构造接口调用）
     const responseHandler = async (response: Response) => {
       try {
+        const method = response.request?.()?.method?.().toUpperCase();
+        if (method === 'OPTIONS') {
+          return;
+        }
+
         const url = response.url();
         if (isMeituanProductListResponseUrl(url) && response.ok()) {
           const bodyText = await response.text();
