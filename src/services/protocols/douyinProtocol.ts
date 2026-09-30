@@ -122,6 +122,10 @@ export const DOUYIN_RAW_SAMPLE_ORDER = {
     ],
     room_sale_mode: 1,
   },
+  play_methods_v2: {
+    is_hotel_calendar: false,
+    is_hotel_presale: true,
+  },
   status_info: {
     color_type: 'primary',
     count_down: 0,
@@ -650,23 +654,13 @@ export function extractDouyinOrderFromResponse(
 /**
  * 判定当前抖音订单是否属于“预售券/套餐券”类订单
  * 依据抖音官方接口权威特征：
- * 1. play_methods_v2.is_hotel_presale === true 为权威预售券标识
- * 2. play_methods_v2.is_hotel_calendar === true 为明确日历房标识（优先排除）
- * 3. 辅助特征：sale_product_info.product_type_name === '预售券'
+ * play_methods_v2.is_hotel_presale === true 为权威预售券标识
  */
 export function isDouyinVoucherOrder(data: Record<string, unknown>): boolean {
   if (!data || typeof data !== 'object') return false;
 
   const playMethodsV2 = (data.play_methods_v2 || {}) as Record<string, unknown>;
-  if (playMethodsV2.is_hotel_presale === true) {
-    return true;
-  }
-  if (playMethodsV2.is_hotel_calendar === true) {
-    return false;
-  }
-
-  const saleProductInfo = (data.sale_product_info || {}) as Record<string, unknown>;
-  return saleProductInfo.product_type_name === '预售券';
+  return playMethodsV2.is_hotel_presale === true;
 }
 
 /**
