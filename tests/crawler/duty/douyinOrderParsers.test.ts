@@ -197,6 +197,44 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
         orderDisplayLabel: '已取消',
       });
     });
+
+    it('should extract order_id as orderId for calendar room orders in list response', () => {
+      const calendarListPayload = {
+        status_code: 0,
+        status_msg: '',
+        data: {
+          data: [
+            JSON.stringify({
+              order_base_info: { order_id: 'CALENDAR_123456789' },
+              book_detail_info: {
+                book_id: '8000999',
+                book_night_count: 1,
+                book_room_count: 1,
+                book_start_time: 1790179200,
+                book_end_time: 1790265600,
+              },
+              play_methods_v2: { is_hotel_calendar: true, is_hotel_presale: false },
+              sale_product_info: {
+                physical_room_name: '高级商务房',
+                product_id: '998877',
+                product_tag: [],
+              },
+              amount_info: { pay_amount: 30000 },
+            }),
+          ],
+        },
+      };
+
+      const orders = extractDouyinOrdersFromPayload(calendarListPayload, false);
+      expect(orders).toHaveLength(1);
+      expect(orders[0].orderId).toBe('CALENDAR_123456789'); // 日历房取订单号
+      expect(orders[0].bookId).toBe('8000999');
+      expect(orders[0].mainOrderId).toBe('CALENDAR_123456789');
+      expect(orders[0].isVoucher).toBe(false);
+
+      const summaries = parseDouyinOrderListResponse(calendarListPayload, false);
+      expect(summaries[0].orderId).toBe('CALENDAR_123456789');
+    });
   });
 
   describe('Fail-Fast error handling', () => {

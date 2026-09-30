@@ -7,6 +7,7 @@ import {
   DOUYIN_RAW_SAMPLE_ORDER,
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
   cleanDouyinOrder,
+  isDouyinVoucherOrder,
 } from '../../src/services/protocols/douyinProtocol';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -266,5 +267,60 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
 
     const unified = protocol.toUnifiedOrder('解密测试');
     expect(unified.contact.mobile).toBe('13812345678');
+  });
+
+  it('correctly discriminates between voucher orders and calendar room orders', () => {
+    // 预售券特征识别
+    expect(isDouyinVoucherOrder(DOUYIN_RAW_SAMPLE_ORDER)).toBe(true);
+    expect(isDouyinVoucherOrder({ play_methods_v2: { is_hotel_presale: true } })).toBe(true);
+    expect(isDouyinVoucherOrder({ sale_product_info: { product_type_name: '预售券' } })).toBe(true);
+    expect(isDouyinVoucherOrder({ sale_product_info: { product_tag: ['超值券'] } })).toBe(true);
+    expect(isDouyinVoucherOrder({ book_detail_info: { book_id: '8000123456789' } })).toBe(true);
+
+    // 日历房特征识别
+    expect(isDouyinVoucherOrder({ play_methods_v2: { is_hotel_calendar: true } })).toBe(false);
+    expect(isDouyinVoucherOrder({
+      play_methods_v2: { is_hotel_calendar: true, is_hotel_presale: false },
+      sale_product_info: { physical_room_name: '标准大床房', product_name: '标准大床房1晚' },
+    })).toBe(false);
+  });
+
+  it('compatibly picks book_id as otaOrderId for vouchers, and order_id as otaOrderId for calendar room orders', () => {
+    // 1. 预售券：优先取预约单号/券号 book_id 作为订单号
+    const voucherOrder = {
+      ...DOUYIN_RAW_SAMPLE_ORDER,
+      order_base_info: { order_id: 'ORDER_MAIN_111' },
+      book_detail_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        book_id: 'BOOK_8000222',
+      },
+      play_methods_v2: { is_hotel_presale: true, is_hotel_calendar: false },
+    };
+    const voucherProtocol = cleanDouyinOrder(voucherOrder);
+    expect(voucherProtocol.get('orderNo')).toBe('BOOK_8000222');
+    expect(voucherProtocol.get('mainOrderId')).toBe('ORDER_MAIN_111');
+    expect(voucherProtocol.get('isVoucher')).toBe(true);
+    expect(voucherProtocol.toUnifiedOrder('券备注').otaOrderId).toBe('BOOK_8000222');
+
+    // 2. 日历房：取交易主单号 order_id 作为订单号
+    const calendarOrder = {
+      ...DOUYIN_RAW_SAMPLE_ORDER,
+      order_base_info: { order_id: 'CALENDAR_ORDER_999' },
+      book_detail_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.book_detail_info,
+        book_id: 'CALENDAR_BOOK_888',
+      },
+      play_methods_v2: { is_hotel_calendar: true, is_hotel_presale: false },
+      sale_product_info: {
+        ...DOUYIN_RAW_SAMPLE_ORDER.sale_product_info,
+        product_tag: [],
+        product_type_name: '日历房',
+      },
+    };
+    const calendarProtocol = cleanDouyinOrder(calendarOrder);
+    expect(calendarProtocol.get('orderNo')).toBe('CALENDAR_ORDER_999');
+    expect(calendarProtocol.get('mainOrderId')).toBe('CALENDAR_ORDER_999');
+    expect(calendarProtocol.get('isVoucher')).toBe(false);
+    expect(calendarProtocol.toUnifiedOrder('日历房备注').otaOrderId).toBe('CALENDAR_ORDER_999');
   });
 });

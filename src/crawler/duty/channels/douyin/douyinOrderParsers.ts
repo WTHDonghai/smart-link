@@ -7,6 +7,7 @@ import {
   DutyExecutionError,
 } from './douyinDutyContracts';
 import { fmtDate } from '@/src/utils/template/filters';
+import { isDouyinVoucherOrder } from '@/src/services/protocols/douyinProtocol';
 
 export const DOUYIN_BOOK_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/book/query/list';
 export const DOUYIN_REFUND_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/refund/query/hotel_after_sale_record_list';
@@ -144,8 +145,13 @@ export function extractDouyinOrdersFromPayload(
     // 有after_sale_id 表示是取消单
     const afterSaleId = String(afterSaleInner.after_sale_id || '').trim() || undefined;
 
-    // 确定唯一订单编号：优先使用预订单号/券号，降级为主单号
-    const orderId = bookId || mainOrderId || '';
+    // 智能识别当前条目是否为预售券/套餐券
+    const isVoucher = isDouyinVoucherOrder(rec);
+
+    // 确定唯一订单编号：如果是券取预约单号，否则取订单号
+    const orderId = isVoucher
+      ? (bookId || mainOrderId || '')
+      : (mainOrderId || bookId || '');
 
     if (!orderId) continue;
 
@@ -208,6 +214,7 @@ export function extractDouyinOrdersFromPayload(
       orderId,
       bookId,
       mainOrderId,
+      isVoucher,
       afterSaleId,
       hotelId,
       hotelName,

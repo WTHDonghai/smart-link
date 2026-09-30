@@ -648,6 +648,55 @@ export function extractDouyinOrderFromResponse(
 }
 
 /**
+ * 判定当前抖音订单是否属于“预售券/套餐券”类订单
+ * 依据抖音官方接口权威特征：
+ * 1. play_methods_v2.is_hotel_presale === true 为权威预售券标识
+ * 2. play_methods_v2.is_hotel_calendar === true 为明确日历房标识（优先排除）
+ * 3. 辅助特征：product_type_name 包含 "券"、product_tag 包含 "券"、order_tag_list 包含 "券"
+ * 4. 兜底特征：存在以 "8000" 开头的预约单号/券号 book_id
+ */
+export function isDouyinVoucherOrder(data: Record<string, unknown>): boolean {
+  if (!data || typeof data !== 'object') return false;
+
+  const playMethodsV2 = (data.play_methods_v2 || {}) as Record<string, unknown>;
+  if (playMethodsV2.is_hotel_calendar === true) {
+    return false;
+  }
+  if (playMethodsV2.is_hotel_presale === true) {
+    return true;
+  }
+
+  const saleProductInfo = (data.sale_product_info || {}) as Record<string, unknown>;
+  if (String(saleProductInfo.product_type_name || '').includes('券')) {
+    return true;
+  }
+  const productTags = Array.isArray(saleProductInfo.product_tag) ? saleProductInfo.product_tag : [];
+  if (productTags.some((tag) => typeof tag === 'string' && tag.includes('券'))) {
+    return true;
+  }
+
+  const productInfoV2 = (data.product_info_v2 || {}) as Record<string, unknown>;
+  const sku = (productInfoV2.sku || {}) as Record<string, unknown>;
+  if (String(sku.product_type_name || '').includes('券')) {
+    return true;
+  }
+
+  const orderBaseInfo = (data.order_base_info || {}) as Record<string, unknown>;
+  const orderTags = Array.isArray(orderBaseInfo.order_tag_list) ? orderBaseInfo.order_tag_list : [];
+  if (orderTags.some((tag) => typeof tag === 'string' && tag.includes('券'))) {
+    return true;
+  }
+
+  const bookDetailInfo = (data.book_detail_info || {}) as Record<string, unknown>;
+  const bookId = String(bookDetailInfo.book_id || '').trim();
+  if (bookId && bookId.startsWith('8000')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * 抖音订单原始报文清洗入口函数
  */
 export function cleanDouyinOrder(
@@ -669,21 +718,28 @@ export function cleanDouyinOrder(
 
   const context = normalizeOrderPayload(data, schema);
 
-  // 提取预订单号/券号 (book_id) 与抖音主单号 (order_id)
+  // 判定当前订单是否为券类订单
+  const isVoucher = isDouyinVoucherOrder(data);
+
+  // 提取预约单号/券号 (book_id) 与抖音主单号 (order_id)
   const bookInfo = (data.book_detail_info || {}) as Record<string, unknown>;
   const baseInfo = (data.order_base_info || {}) as Record<string, unknown>;
-  const bookId = String(context.orderNo || context.bookId || bookInfo.book_id || '').trim();
+  const bookId = String(context.bookId || context.orderNo || bookInfo.book_id || '').trim();
   const mainOrderId = String(context.mainOrderId || baseInfo.order_id || '').trim();
 
-  // 核心唯一订单号（优先取预订单号/券号 book_id，降级取外部传入的 targetOrderId 或交易主单号 mainOrderId）
-  const effectiveOrderNo = bookId || String(targetOrderId || '').trim() || mainOrderId;
+  // 核心唯一订单号（智能兼容预售券与日历房）：
+  // 如果是券，取预约单号/券号作为订单号；否则取交易订单号作为订单号
+  const effectiveOrderNo = isVoucher
+    ? (bookId || String(targetOrderId || '').trim() || mainOrderId)
+    : (mainOrderId || String(targetOrderId || '').trim() || bookId);
 
   if (effectiveOrderNo) {
     context.orderNo = effectiveOrderNo;
     context.otaOrderId = effectiveOrderNo;
     context['OTA订单号'] = effectiveOrderNo;
+    context['订单号'] = effectiveOrderNo;
     context['抖音单号'] = effectiveOrderNo;
-    context['预订单号'] = effectiveOrderNo;
+    context['预订单号'] = isVoucher ? effectiveOrderNo : (bookId || effectiveOrderNo);
     context['券号'] = bookId || effectiveOrderNo;
     context['预约单号'] = bookId || effectiveOrderNo;
   }
@@ -691,6 +747,8 @@ export function cleanDouyinOrder(
     context.mainOrderId = mainOrderId;
     context['抖音主单号'] = mainOrderId;
   }
+  context.isVoucher = isVoucher;
+  context['是否为券'] = isVoucher;
 
   if (!context.hotelId && (data.book_detail_info as Record<string, unknown> | undefined)?.poi_life_account_id) {
     context.hotelId = String((data.book_detail_info as Record<string, unknown>).poi_life_account_id);

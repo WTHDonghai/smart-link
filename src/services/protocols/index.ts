@@ -15,6 +15,7 @@ import {
   DOUYIN_RAW_SAMPLE_ORDER,
   DouyinOrderProtocol,
   cleanDouyinOrder,
+  isDouyinVoucherOrder,
 } from './douyinProtocol';
 
 export {
@@ -26,6 +27,7 @@ export {
   DOUYIN_RAW_SAMPLE_ORDER,
   DouyinOrderProtocol,
   cleanDouyinOrder,
+  isDouyinVoucherOrder,
 };
 
 /**

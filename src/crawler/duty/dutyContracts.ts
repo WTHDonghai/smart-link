@@ -96,6 +96,7 @@ export interface RawDouyinDutyOrder {
   orderId: string;
   bookId?: string;
   mainOrderId?: string;
+  isVoucher?: boolean;
   afterSaleId?: string;
   hotelId?: string;
   hotelName?: string;
