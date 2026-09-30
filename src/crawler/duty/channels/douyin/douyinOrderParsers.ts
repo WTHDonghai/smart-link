@@ -137,15 +137,17 @@ export function extractDouyinOrdersFromPayload(
     const afterSaleInfoV2 = (rec.after_sale_info_v2 || {}) as Record<string, unknown>;
     const afterSaleInner = (afterSaleInfoV2.after_sale_info || {}) as Record<string, unknown>;
 
-    // 确定唯一订单编号
-    const orderId = String(orderBaseInfo.order_id || '').trim();
-
-    if (!orderId) continue;
-
-    // 预定单号
+    // 预定单号/券号（用于中台唯一订单号）
     const bookId = String(bookDetailInfo.book_id || '').trim() || undefined;
+    // 抖音交易主单号
+    const mainOrderId = String(orderBaseInfo.order_id || '').trim() || undefined;
     // 有after_sale_id 表示是取消单
     const afterSaleId = String(afterSaleInner.after_sale_id || '').trim() || undefined;
+
+    // 确定唯一订单编号：优先使用预订单号/券号，降级为主单号
+    const orderId = bookId || mainOrderId || '';
+
+    if (!orderId) continue;
 
     const hotelId = String(
       bookDetailInfo.poi_life_account_id ||
@@ -205,6 +207,7 @@ export function extractDouyinOrdersFromPayload(
     orders.push({
       orderId,
       bookId,
+      mainOrderId,
       afterSaleId,
       hotelId,
       hotelName,

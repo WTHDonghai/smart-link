@@ -46,7 +46,9 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     );
 
     // 基础三单号与状态
-    expect(cleanCtx.orderNo).toBe('1116431119643540077');
+    expect(cleanCtx.orderNo).toBe('800014640948279296216700077');
+    expect(cleanCtx['预订单号']).toBe('800014640948279296216700077');
+    expect(cleanCtx.mainOrderId).toBe('1116431119643540077');
     expect(cleanCtx['抖音主单号']).toBe('1116431119643540077');
     expect(cleanCtx.bookId).toBe('800014640948279296216700077');
     expect(cleanCtx['预约单号']).toBe('800014640948279296216700077');
@@ -114,7 +116,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     } catch (e) {
       const err = e as ProtocolNormalizationError;
       expect(err.warning.channelCode).toBe('DOUYIN');
-      expect(err.warning.missingRequiredFields.some((f) => f.includes('预约单号'))).toBe(true);
+      expect(err.warning.missingRequiredFields.some((f) => f.includes('预订单号'))).toBe(true);
       expect(err.warning.missingRequiredFields.some((f) => f.includes('房型名称'))).toBe(true);
     }
   });
@@ -207,12 +209,13 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
 
     // 传入外层包装对象及目标单号，验证防御性解包生效，不会报字段缺失/协议漂移告警
     const protocol = cleanDouyinOrder(listResponseWrapper, null, '1116431119643540077');
-    expect(protocol.get('orderNo')).toBe('1116431119643540077');
+    expect(protocol.get('orderNo')).toBe('800014640948279296216700077');
+    expect(protocol.get('mainOrderId')).toBe('1116431119643540077');
     expect(protocol.get('bookId')).toBe('800014640948279296216700077');
     expect(protocol.get('roomName')).toBe('豪华大床房');
 
     const unified = protocol.toUnifiedOrder('自动化入单测试');
-    expect(unified.otaOrderId).toBe('1116431119643540077');
+    expect(unified.otaOrderId).toBe('800014640948279296216700077');
     expect(unified.booking.roomTypeName).toBe('豪华大床房');
     expect(unified.booking.totalPrice).toBe(499);
   });
@@ -224,7 +227,8 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     // 针对用户真实导入的订单「1112665199685496539」执行清洗
     const protocol = cleanDouyinOrder(rawDetailPayload, null, '1112665199685496539');
 
-    expect(protocol.get('orderNo')).toBe('1112665199685496539');
+    expect(protocol.get('orderNo')).toBe('800000263871637635716526539');
+    expect(protocol.get('mainOrderId')).toBe('1112665199685496539');
     expect(protocol.get('bookId')).toBe('800000263871637635716526539');
     expect(protocol.get('roomName')).toBe('豪华大床房');
     expect(protocol.get('checkInDate')).toBe('2026-11-16');
@@ -234,7 +238,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(protocol.get('guestPhone')).toBe('*******3563');
 
     const unified = protocol.toUnifiedOrder('【中台自动导入】');
-    expect(unified.otaOrderId).toBe('1112665199685496539');
+    expect(unified.otaOrderId).toBe('800000263871637635716526539');
     expect(unified.otaChannel).toBe('DOUYIN');
     expect(unified.unitId).toBe('7130223634133092383');
     expect(unified.unitName).toBe('淮安日月洲度假村(西游乐园店)');

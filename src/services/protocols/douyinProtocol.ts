@@ -141,6 +141,17 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     // 1. 基础单号与状态
     {
       key: 'orderNo',
+      label: '预订单号',
+      path: 'book_detail_info.book_id',
+      category: 'basic',
+      transform: 'string',
+      sampleValue: '800014640948279296216700077',
+      description: '抖音预订单号/券号（中台唯一订单号）',
+      enabled: true,
+      required: true,
+    },
+    {
+      key: 'mainOrderId',
       label: '抖音主单号',
       path: 'order_base_info.order_id',
       category: 'basic',
@@ -148,7 +159,6 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       sampleValue: '1116431119643540077',
       description: '抖音电商交易主单号',
       enabled: true,
-      required: true,
     },
     {
       key: 'bookId',
@@ -159,7 +169,6 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       sampleValue: '800014640948279296216700077',
       description: '酒店预订核销流水号',
       enabled: true,
-      required: true,
     },
     {
       key: 'confirmNo',
@@ -419,7 +428,11 @@ export class DouyinOrderProtocol implements IChannelOrderProtocol {
   public toUnifiedOrder(renderedRemark: string): UnifiedOrderProtocol {
     const otaOrderId = String(
       this.context.orderNo ||
+      this.context.bookId ||
       this.context.otaOrderId ||
+      this.context['预订单号'] ||
+      this.context['券号'] ||
+      this.context['预约单号'] ||
       this.context.bookOrderId ||
       this.context['抖音单号'] ||
       ''
@@ -656,14 +669,27 @@ export function cleanDouyinOrder(
 
   const context = normalizeOrderPayload(data, schema);
 
-  if (!context.orderNo && targetOrderId) {
-    context.orderNo = targetOrderId;
-    context['抖音单号'] = targetOrderId;
+  // 提取预订单号/券号 (book_id) 与抖音主单号 (order_id)
+  const bookInfo = (data.book_detail_info || {}) as Record<string, unknown>;
+  const baseInfo = (data.order_base_info || {}) as Record<string, unknown>;
+  const bookId = String(context.orderNo || context.bookId || bookInfo.book_id || '').trim();
+  const mainOrderId = String(context.mainOrderId || baseInfo.order_id || '').trim();
+
+  // 核心唯一订单号（优先取预订单号/券号 book_id，降级取外部传入的 targetOrderId 或交易主单号 mainOrderId）
+  const effectiveOrderNo = bookId || String(targetOrderId || '').trim() || mainOrderId;
+
+  if (effectiveOrderNo) {
+    context.orderNo = effectiveOrderNo;
+    context.otaOrderId = effectiveOrderNo;
+    context['OTA订单号'] = effectiveOrderNo;
+    context['抖音单号'] = effectiveOrderNo;
+    context['预订单号'] = effectiveOrderNo;
+    context['券号'] = bookId || effectiveOrderNo;
+    context['预约单号'] = bookId || effectiveOrderNo;
   }
-  if (context.orderNo) {
-    context['OTA订单号'] = context.orderNo;
-    context['抖音单号'] = context.orderNo;
-    context.otaOrderId = context.orderNo;
+  if (mainOrderId) {
+    context.mainOrderId = mainOrderId;
+    context['抖音主单号'] = mainOrderId;
   }
 
   if (!context.hotelId && (data.book_detail_info as Record<string, unknown> | undefined)?.poi_life_account_id) {

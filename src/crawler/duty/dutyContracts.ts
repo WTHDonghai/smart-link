@@ -95,6 +95,7 @@ export interface RawMeituanDutyOrder {
 export interface RawDouyinDutyOrder {
   orderId: string;
   bookId?: string;
+  mainOrderId?: string;
   afterSaleId?: string;
   hotelId?: string;
   hotelName?: string;
