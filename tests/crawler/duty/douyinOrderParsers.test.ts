@@ -12,6 +12,9 @@ import {
   parseDouyinBookOrderListResponse,
   parseDouyinRefundOrderListResponse,
   extractDouyinOrderFromResponse,
+  isDouyinSecretNumUrl,
+  parseDouyinSecretNumResponse,
+  DOUYIN_REVEAL_PHONE_SELECTOR,
 } from '@/src/crawler/duty/channels/douyin/douyinOrderParsers';
 import { DutyExecutionError } from '@/src/crawler/duty/dutyContracts';
 import { DouyinDutyErrorCode } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
@@ -415,6 +418,73 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(extractDouyinOrderFromResponse(null, '123')).toBeNull();
       expect(extractDouyinOrderFromResponse(undefined, '123')).toBeNull();
       expect(extractDouyinOrderFromResponse('not-json', '123')).toBeNull();
+    });
+  });
+
+  describe('isDouyinSecretNumUrl, parseDouyinSecretNumResponse & DOUYIN_REVEAL_PHONE_SELECTOR', () => {
+    it('isDouyinSecretNumUrl should match get_secret_num endpoint', () => {
+      expect(
+        isDouyinSecretNumUrl('https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896&life_biz_view_id=22&life_account_biz_ids=')
+      ).toBe(true);
+      expect(
+        isDouyinSecretNumUrl('/life/trade_view/v1/common/get_secret_num')
+      ).toBe(true);
+      expect(
+        isDouyinSecretNumUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail')
+      ).toBe(false);
+      expect(isDouyinSecretNumUrl('')).toBe(false);
+    });
+
+    it('parseDouyinSecretNumResponse should parse real production secret_nums payload', () => {
+      const realPayload = {
+        BaseResp: {
+          StatusCode: 0,
+          StatusMessage: '',
+        },
+        log_id: '20260930142831FDEF23439EBFCF1046C6',
+        now: '1790749711649',
+        secret_nums: {
+          'MEEEDNFQo4YACPPRukcsQAQfMQ6O22SjVuDREqWCgeGZTSjEgP8jarXhsXAe4yij/wQQqE2+1UHH/AesfRnuoR/dlQ==': {
+            phone: '15782987061转3308',
+            show_type: 1,
+          },
+        },
+        status_code: 0,
+        status_msg: '',
+      };
+
+      // 1. 传入 JSON 对象
+      const phoneFromObj = parseDouyinSecretNumResponse(realPayload);
+      expect(phoneFromObj).toBe('15782987061转3308');
+
+      // 2. 传入 JSON 字符串
+      const phoneFromString = parseDouyinSecretNumResponse(JSON.stringify(realPayload));
+      expect(phoneFromString).toBe('15782987061转3308');
+
+      // 3. 指定期望密文
+      const cipher = 'MEEEDNFQo4YACPPRukcsQAQfMQ6O22SjVuDREqWCgeGZTSjEgP8jarXhsXAe4yij/wQQqE2+1UHH/AesfRnuoR/dlQ==';
+      const phoneWithCipher = parseDouyinSecretNumResponse(realPayload, cipher);
+      expect(phoneWithCipher).toBe('15782987061转3308');
+    });
+
+    it('parseDouyinSecretNumResponse should fail-fast when status_code is non-zero or data is invalid', () => {
+      // 业务状态码错误
+      expect(parseDouyinSecretNumResponse({ status_code: 10001, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
+      // BaseResp 状态码错误
+      expect(parseDouyinSecretNumResponse({ BaseResp: { StatusCode: 500 }, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
+      // secret_nums 缺失或为空
+      expect(parseDouyinSecretNumResponse({ status_code: 0, secret_nums: {} })).toBeNull();
+      expect(parseDouyinSecretNumResponse({ status_code: 0 })).toBeNull();
+      // 非法输入
+      expect(parseDouyinSecretNumResponse(null)).toBeNull();
+      expect(parseDouyinSecretNumResponse('invalid-json')).toBeNull();
+      expect(parseDouyinSecretNumResponse(12345)).toBeNull();
+    });
+
+    it('DOUYIN_REVEAL_PHONE_SELECTOR should include SVG class and SVG path attributes', () => {
+      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('hideStroke-VRjAsE');
+      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('M4.385 7.368');
+      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('SecretNumV2');
     });
   });
 });

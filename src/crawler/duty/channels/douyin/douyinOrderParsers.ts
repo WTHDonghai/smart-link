@@ -12,6 +12,87 @@ import { isDouyinVoucherOrder } from '@/src/services/protocols/douyinProtocol';
 export const DOUYIN_BOOK_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/book/query/list';
 export const DOUYIN_REFUND_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/refund/query/hotel_after_sale_record_list';
 export const DOUYIN_BOOK_ORDER_DETAIL_PATH = '/life/trade_view/v1/workbench/book/query/detail';
+export const DOUYIN_SECRET_NUM_PATH = '/life/trade_view/v1/common/get_secret_num';
+
+/**
+ * 抖音获取联系电话（隐私号）元素定位选择器
+ * 基于生产环境真实 DOM 与 SVG 特征：
+ * 1. SVG 默认携带 hideStroke-VRjAsE 类名
+ * 2. 电话手柄图标路径特征：d^="M4.385 7.368"
+ * 3. 所在组件容器为 SecretNumV2
+ */
+export const DOUYIN_REVEAL_PHONE_SELECTOR =
+  'svg.hideStroke-VRjAsE, ' +
+  'svg[class*="hideStroke"], ' +
+  'svg:has(path[d^="M4.385 7.368"]), ' +
+  'path[d^="M4.385 7.368"], ' +
+  '[data-sub-type="SecretNumV2"] svg';
+
+/**
+ * 判断 URL 是否属于抖音隐私号/联系电话接口
+ */
+export function isDouyinSecretNumUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname === DOUYIN_SECRET_NUM_PATH;
+  } catch {
+    return url.includes(DOUYIN_SECRET_NUM_PATH);
+  }
+}
+
+/**
+ * 纯函数：从抖音隐私号/联系电话接口响应中提取手机号
+ * 遵循 Fail-Fast 原则：状态码非 0 或结构无效立即返回 null
+ * @param payload 接口响应 JSON 对象或序列化字符串
+ * @param expectedCipher 可选的期望密文字符串，若传入则优先匹配该密文键
+ */
+export function parseDouyinSecretNumResponse(
+  payload: unknown,
+  expectedCipher?: string
+): string | null {
+  if (!payload) return null;
+  let json: Record<string, unknown>;
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim();
+    if (!trimmed) return null;
+    try {
+      json = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  } else if (typeof payload === 'object') {
+    json = payload as Record<string, unknown>;
+  } else {
+    return null;
+  }
+
+  const statusCode = json.status_code ?? (json.BaseResp as Record<string, unknown> | undefined)?.StatusCode;
+  if (statusCode !== 0 && statusCode !== undefined) {
+    return null;
+  }
+
+  const secretNums = json.secret_nums;
+  if (!secretNums || typeof secretNums !== 'object') {
+    return null;
+  }
+
+  const numsMap = secretNums as Record<string, { phone?: unknown; show_type?: unknown }>;
+
+  // 1. 若指定了密文，优先读取匹配的密文对应项
+  if (expectedCipher && numsMap[expectedCipher]?.phone) {
+    const p = String(numsMap[expectedCipher].phone || '').trim();
+    if (p) return p;
+  }
+
+  // 2. 否则遍历所有密文项，提取第一个非空手机号
+  for (const item of Object.values(numsMap)) {
+    if (item && typeof item === 'object' && item.phone) {
+      const p = String(item.phone || '').trim();
+      if (p) return p;
+    }
+  }
+
+  return null;
+}
 
 /**
  * 判断 URL 是否属于抖音新订/变更订单列表接口

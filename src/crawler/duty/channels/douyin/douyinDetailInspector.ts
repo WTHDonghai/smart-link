@@ -18,6 +18,9 @@ import { getDouyinOrderScope, locateDouyinOrderCard } from './douyinCardLocator'
 import {
   isDouyinOrderDetailUrl,
   isDouyinRiskControlText,
+  isDouyinSecretNumUrl,
+  parseDouyinSecretNumResponse,
+  DOUYIN_REVEAL_PHONE_SELECTOR,
 } from './douyinOrderParsers';
 
 export interface DouyinDetailInspectorOptions {
@@ -137,7 +140,7 @@ export class DouyinDetailInspector {
         );
       }
 
-      // 6. HTTP 状态码校验 (Fail-Fast: status !== 200)
+      // 5. HTTP 状态码校验 (Fail-Fast: status !== 200)
       if (response.status() !== 200) {
         logger.warn(`[抖音详情] 订单「${cleanOrderId}」详情接口非 200 (HTTP ${response.status()})`, {
           module: 'DUTY_TASK',
@@ -154,7 +157,7 @@ export class DouyinDetailInspector {
         );
       }
 
-      // 7. 反序列化与业务校验
+      // 6. 反序列化与业务校验
       try {
         const text = await response.text().catch((err) => {
           throw new Error(`读取响应文本失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -184,8 +187,8 @@ export class DouyinDetailInspector {
       await dismissDouyinNoticeModals(page, scope).catch(() => false);
     }
 
-    // 8. 敏感信息自动解密尝试（若存在 phone_ciphertext 则调用官方 decrypt_data 接口）
-    return await this.decryptPhoneIfPresent(page, rawDetail, cleanOrderId);
+    // 7. 敏感信息脱敏解除：定位界面元素并点击触发，拦截 get_secret_num 接口响应
+    return await this.revealAndCapturePhone(page, scope, rawDetail, cleanOrderId);
   }
 
   /**
@@ -238,58 +241,105 @@ export class DouyinDetailInspector {
 
 
   /**
-   * 识别 phone_ciphertext 并调用官方解密接口解密手机号
+   * 定位页面电话图标并点击，通过 Playwright waitForResponse 拦截 get_secret_num 接口响应获取联系电话
    */
-  private async decryptPhoneIfPresent(
+  private async revealAndCapturePhone(
     page: Page,
+    scope: Page | FrameLocator,
     rawDetail: Record<string, unknown>,
     cleanOrderId: string
   ): Promise<Record<string, unknown>> {
     try {
-      const rawString = JSON.stringify(rawDetail);
-      const hasUnmaskedPhone = /\\?"phone\\?"\s*:\s*\\?"1[3-9]\d{9}\\?"/.test(rawString);
-      const cipherMatch = rawString.match(/\\?"phone_ciphertext\\?"\s*:\s*\\?"([^\\"]+)/);
-      const ciphertext = cipherMatch ? cipherMatch[1] : '';
+      // 1. 定位脱敏解除元素（图标/按钮），不可见则直接返回
+      const revealPhoneBtn = scope.locator(DOUYIN_REVEAL_PHONE_SELECTOR).first();
+      if (!await isElementVisible(revealPhoneBtn, ACTION_TIMEOUT.SENSITIVE_FIELD)) {
+        return rawDetail;
+      }
 
-      if (ciphertext && !hasUnmaskedPhone && typeof page.evaluate === 'function') {
-        const decryptedPhone = await page.evaluate(async (cipher) => {
-          try {
-            const res = await fetch('/life/trade_view/v1/commmon/decrypt_data', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ encrypted_data: cipher }),
-            });
-            if (!res.ok) return null;
-            const json = await res.json();
-            const statusCode = json?.status_code ?? json?.BaseResp?.StatusCode;
-            if (statusCode !== 0 && statusCode !== undefined) return null;
-            const raw = String(json?.decrypte_data ?? json?.decrypted_data ?? json?.data ?? '').trim();
-            const digits = raw.replace(/[^\d]/g, '').replace(/^86(?=1\d{10}$)/, '');
-            return /^1\d{10}$/.test(digits) ? digits : null;
-          } catch {
-            return null;
-          }
-        }, ciphertext).catch(() => null);
+      // 2. 声明式监听 get_secret_num 接口响应
+      const secretResponsePromise = typeof page.waitForResponse === 'function'
+        ? page
+            .waitForResponse(
+              (res) => isDouyinSecretNumUrl(res.url()) && res.status() === 200,
+              { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
+            )
+            .catch(() => null)
+        : Promise.resolve(null);
 
-        if (decryptedPhone) {
-          logger.info(`[抖音详情] 订单「${cleanOrderId}」密文手机号解密成功`, {
-            module: 'DUTY_TASK',
-            channelId: 'DOUYIN',
-            orderNo: cleanOrderId,
-          });
-          const resultDetail = JSON.parse(JSON.stringify(rawDetail)) as Record<string, unknown>;
-          resultDetail.decryptedPhone = decryptedPhone;
-          const guestInfo = (resultDetail.guest_info || {}) as Record<string, unknown>;
+      // 3. 拟人化点击电话图标
+      await updateVisualTrackerStatus(
+        page,
+        `正在点击订单「${cleanOrderId}」联系电话图标获取隐私号码...`,
+        'action'
+      );
+      await visualClickLocator(page, revealPhoneBtn, `点击订单「${cleanOrderId}」联系电话图标获取隐私号码`);
+      await humanDelay(page, ...HUMAN_DELAY.SENSITIVE_REVEAL);
+
+      // 4. 等待拦截到的网络响应
+      const secretResponse = await secretResponsePromise;
+      if (!secretResponse) {
+        return rawDetail;
+      }
+
+      const responseText = await secretResponse.text().catch(() => '');
+      if (!responseText || isDouyinRiskControlText(responseText)) {
+        return rawDetail;
+      }
+
+      const decryptedPhone = parseDouyinSecretNumResponse(responseText);
+      if (decryptedPhone) {
+        logger.info(`[抖音详情] 订单「${cleanOrderId}」联系电话获取成功: ${decryptedPhone}`, {
+          module: 'DUTY_TASK',
+          channelId: 'DOUYIN',
+          orderNo: cleanOrderId,
+        });
+
+        const resultDetail = JSON.parse(JSON.stringify(rawDetail)) as Record<string, unknown>;
+        resultDetail.decryptedPhone = decryptedPhone;
+
+        // 若根级有 guest_info
+        if (resultDetail.guest_info && typeof resultDetail.guest_info === 'object') {
+          const guestInfo = resultDetail.guest_info as Record<string, unknown>;
           const userList = Array.isArray(guestInfo.user_list) ? guestInfo.user_list : [];
-          if (userList[0]) {
+          if (userList[0] && typeof userList[0] === 'object') {
             (userList[0] as Record<string, unknown>).phone = decryptedPhone;
           }
-          return resultDetail;
+          if (guestInfo.buyer && typeof guestInfo.buyer === 'object') {
+            (guestInfo.buyer as Record<string, unknown>).phone = decryptedPhone;
+          }
         }
+
+        // 若为抖音标准嵌套字符串结构 data.data，同步更新内部实体
+        const innerDataObj = resultDetail.data as Record<string, unknown> | undefined;
+        if (innerDataObj && typeof innerDataObj.data === 'string') {
+          try {
+            const parsedInner = JSON.parse(innerDataObj.data);
+            if (parsedInner && typeof parsedInner === 'object') {
+              const innerGuest = (parsedInner.guest_info || {}) as Record<string, unknown>;
+              const innerUsers = Array.isArray(innerGuest.user_list) ? innerGuest.user_list : [];
+              if (innerUsers[0] && typeof innerUsers[0] === 'object') {
+                (innerUsers[0] as Record<string, unknown>).phone = decryptedPhone;
+              }
+              if (innerGuest.buyer && typeof innerGuest.buyer === 'object') {
+                (innerGuest.buyer as Record<string, unknown>).phone = decryptedPhone;
+              }
+              innerDataObj.data = JSON.stringify(parsedInner);
+            }
+          } catch {
+            // 忽略嵌套反序列化异常
+          }
+        }
+
+        return resultDetail;
       }
-    } catch {
-      // 容错密文解密，Fail-Fast 保证在后续清洗与入单校验中严格把控
+    } catch (err) {
+      logger.warn(`[抖音详情] 订单「${cleanOrderId}」尝试获取联系电话异常: ${err instanceof Error ? err.message : String(err)}`, {
+        module: 'DUTY_TASK',
+        channelId: 'DOUYIN',
+        orderNo: cleanOrderId,
+      });
+    } finally {
+      await dismissDouyinNoticeModals(page, scope).catch(() => false);
     }
 
     return rawDetail;

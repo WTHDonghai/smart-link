@@ -208,7 +208,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     expect(mockCard.click).toHaveBeenCalled();
   });
 
-  it('should decrypt guest phone when phone_ciphertext is present and phone is masked', async () => {
+  it('should locate element and intercept get_secret_num response when phone is masked', async () => {
     const inspector = new DouyinDetailInspector();
 
     const mockRawWithCipher = {
@@ -222,11 +222,27 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     };
     const mockPayload = { data: { data: JSON.stringify(mockRawWithCipher) } };
 
-    const mockResponse = {
+    const mockDetailResponse = {
       status: () => 200,
       url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
       text: async () => JSON.stringify(mockPayload),
       request: () => ({ method: () => 'POST' }),
+    };
+
+    const mockSecretNumResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896',
+      text: async () => JSON.stringify({
+        status_code: 0,
+        status_msg: '',
+        secret_nums: {
+          CIPHERTEXT_123: {
+            phone: '15782987061转3308',
+            show_type: 1,
+          },
+        },
+      }),
+      request: () => ({ method: () => 'GET' }),
     };
 
     const mockCard = {
@@ -235,17 +251,16 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       click: vi.fn().mockResolvedValue(undefined),
     };
 
-    const mockEvaluate = vi.fn().mockImplementation(async (fn: unknown, _arg: unknown) => {
-      if (typeof fn === 'function') {
-        return '13812345678';
-      }
-      return false;
-    });
+    const mockRevealBtn = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
 
     const mockPage = {
       url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
       frames: () => [],
-      evaluate: mockEvaluate,
+      evaluate: vi.fn().mockResolvedValue(false),
       locator: vi.fn((sel: string) => {
         if (sel.includes('.byted-modal')) {
           return { count: vi.fn().mockResolvedValue(0) };
@@ -256,23 +271,38 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
             last: () => mockCard,
           };
         }
+        if (sel.includes('hideStroke') || sel.includes('M4.385') || sel.includes('SecretNumV2')) {
+          return {
+            first: () => mockRevealBtn,
+            last: () => mockRevealBtn,
+          };
+        }
         return {
           first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
           count: vi.fn().mockResolvedValue(0),
         };
       }),
-      waitForResponse: vi.fn(async (predicate: (res: typeof mockResponse) => boolean) => {
-        expect(predicate(mockResponse)).toBe(true);
-        return mockResponse;
+      waitForResponse: vi.fn(async (predicate: (res: unknown) => boolean) => {
+        if (predicate(mockDetailResponse)) {
+          return mockDetailResponse;
+        }
+        if (predicate(mockSecretNumResponse)) {
+          return mockSecretNumResponse;
+        }
+        throw new Error('Unexpected response predicate');
       }),
+      on: vi.fn(),
+      off: vi.fn(),
     } as unknown as Page;
 
     const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
       refreshOrderList: vi.fn(),
     });
 
-    expect(mockEvaluate).toHaveBeenCalled();
-    expect(result.decryptedPhone).toBe('13812345678');
+    expect(mockRevealBtn.click).toHaveBeenCalled();
+    expect(result.decryptedPhone).toBe('15782987061转3308');
+    const innerData = JSON.parse((result.data as { data: string }).data);
+    expect(innerData.guest_info.user_list[0].phone).toBe('15782987061转3308');
   });
 
   it('should capture order detail via waitForResponse when network latency is simulated', async () => {

@@ -33,6 +33,12 @@ URL：
 ```
 ### 订单详情确认号点击按钮
 
+"确认接单" 气泡框
+```html
+<div class="byted-content-container byted-popover-confirm-container" elementtiming="element-timing"><div tabindex="-1" elementtiming="element-timing"></div><div class="byted-content-header byted-popover-confirm-header" elementtiming="element-timing"><div class="byted-content-inner-wrapper byted-popover-confirm-inner-wrapper" elementtiming="element-timing">确认接单吗？</div></div><div class="byted-content-inner byted-content-inner-notModal byted-popover-confirm-inner" elementtiming="element-timing"><div class="byted-content-inner-wrapper byted-popover-confirm-inner-wrapper" elementtiming="element-timing"></div></div><div class="byted-content-footer byted-popover-confirm-footer" elementtiming="element-timing"><div class="byted-content-inner-wrapper byted-popover-confirm-inner-wrapper" elementtiming="element-timing"><div class="byted-popover-confirm-footer" elementtiming="element-timing"><button type="button" class="byted-btn byted-btn-size-sm byted-btn-type-default byted-btn-shape-angle byted-btn-plain byted-can-input-grouped byted-confirm-cancel" elementtiming="element-timing">取消</button><button type="button" class="byted-btn byted-btn-size-sm byted-btn-type-primary byted-btn-shape-angle byted-can-input-grouped byted-confirm-ok" elementtiming="element-timing">确定</button></div></div></div></div>
+```
+
+
 #### ”填写确认号“ 触发元素定位参考：
 
 ```html
@@ -62,6 +68,36 @@ URL：
 
 ```html
 <div class="trade_cell" elementtiming="element-timing"><div class="trade_cell_label !flex-grow mr-4 font-medium text-[15px] leading-[22px] !text-text-gray-5 mt-[1px]" elementtiming="element-timing"><div class="flex items-center" elementtiming="element-timing">订单实收</div></div><div class="cell_content cell_content_right !grow-0 !shrink-0 !basis-auto" elementtiming="element-timing"><span class="trade_price_box trade_price_type trade_price_type_outlook whitespace-pre overflow-y-hidden font-medium !leading-[24px] !text-[18px]" elementtiming="element-timing"><span class="trade_price_type_outlook--currency text-xs" elementtiming="element-timing">￥</span><span class="trade_price_type_outlook--amount font-medium !leading-[24px] !text-[18px]" elementtiming="element-timing">1273<span elementtiming="element-timing">.00</span></span></span></div></div>
+```
+
+### 获取联系电话（隐私号）元素定位与接口响应:
+
+#### 1. 元素定位 (SVG 图标):
+```html
+<svg width="1em" height="1em" viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" fill="none" role="presentation" xmlns="http://www.w3.org/2000/svg" class="hideStroke-VRjAsE" elementtiming="element-timing"><g elementtiming="element-timing"><path data-follow-fill="currentColor" d="M4.385 7.368a1.25 1.25 0 0 0-1.77 1.764A13.213 13.213 0 0 0 12 13.03a13.21 13.21 0 0 0 9.385-3.898 1.25 1.25 0 1 0-1.77-1.764A10.713 10.713 0 0 1 12 10.53a10.713 10.713 0 0 1-7.615-3.162ZM4 13.855a1.25 1.25 0 0 1 2.5 0v1.5a1.25 1.25 0 1 1-2.5 0v-1.5Zm14.25-1.25c-.69 0-1.25.56-1.25 1.25v1.5a1.25 1.25 0 1 0 2.5 0v-1.5c0-.69-.56-1.25-1.25-1.25Zm-6.5 2c-.69 0-1.25.56-1.25 1.25v1.5a1.25 1.25 0 1 0 2.5 0v-1.5c0-.69-.56-1.25-1.25-1.25Z" elementtiming="element-timing" fill="currentColor"></path></g></svg>
+```
+
+#### 2. 接口 URL:
+`https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896&life_biz_view_id=22&life_account_biz_ids=`
+
+#### 3. 接口响应:
+```json
+{
+    "BaseResp": {
+        "StatusCode": 0,
+        "StatusMessage": ""
+    },
+    "log_id": "20260930142831FDEF23439EBFCF1046C6",
+    "now": "1790749711649",
+    "secret_nums": {
+        "MEEEDNFQo4YACPPRukcsQAQfMQ6O22SjVuDREqWCgeGZTSjEgP8jarXhsXAe4yij/wQQqE2+1UHH/AesfRnuoR/dlQ==": {
+            "phone": "15782987061转3308",
+            "show_type": 1
+        }
+    },
+    "status_code": 0,
+    "status_msg": ""
+}
 ```
 
 
@@ -94,6 +130,39 @@ response:
     },
     "log_id": "202609291436077AED3CA5E72284FBBB2B",
     "now": "1790663768634",
+    "status_code": 0,
+    "status_msg": ""
+}
+```
+
+获取联系电话：
+
+元素定位：
+
+```html
+<svg width="1em" height="1em" viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" fill="none" role="presentation" xmlns="http://www.w3.org/2000/svg" class="hideStroke-VRjAsE" elementtiming="element-timing"><g elementtiming="element-timing"><path data-follow-fill="currentColor" d="M4.385 7.368a1.25 1.25 0 0 0-1.77 1.764A13.213 13.213 0 0 0 12 13.03a13.21 13.21 0 0 0 9.385-3.898 1.25 1.25 0 1 0-1.77-1.764A10.713 10.713 0 0 1 12 10.53a10.713 10.713 0 0 1-7.615-3.162ZM4 13.855a1.25 1.25 0 0 1 2.5 0v1.5a1.25 1.25 0 1 1-2.5 0v-1.5Zm14.25-1.25c-.69 0-1.25.56-1.25 1.25v1.5a1.25 1.25 0 1 0 2.5 0v-1.5c0-.69-.56-1.25-1.25-1.25Zm-6.5 2c-.69 0-1.25.56-1.25 1.25v1.5a1.25 1.25 0 1 0 2.5 0v-1.5c0-.69-.56-1.25-1.25-1.25Z" elementtiming="element-timing" fill="currentColor"></path></g></svg>
+```
+
+接口：
+
+https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896&life_biz_view_id=22&life_account_biz_ids=
+
+响应：
+
+```json
+{
+    "BaseResp": {
+        "StatusCode": 0,
+        "StatusMessage": ""
+    },
+    "log_id": "20260930142831FDEF23439EBFCF1046C6",
+    "now": "1790749711649",
+    "secret_nums": {
+        "MEEEDNFQo4YACPPRukcsQAQfMQ6O22SjVuDREqWCgeGZTSjEgP8jarXhsXAe4yij/wQQqE2+1UHH/AesfRnuoR/dlQ==": {
+            "phone": "15782987061转3308",
+            "show_type": 1
+        }
+    },
     "status_code": 0,
     "status_msg": ""
 }
