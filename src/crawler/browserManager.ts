@@ -94,11 +94,23 @@ export async function closeAllBrowserSessions(): Promise<void> {
 }
 
 /**
- * 判定 Page 实例是否存活可用
+ * 判定 Page 实例是否存活可用（排查已关闭或发生 OOM 渲染进程崩溃的 Page）
  */
 function isPageAlive(page?: Page | null): boolean {
   if (!page) return false;
+  if ((page as { __sl_crashed?: boolean }).__sl_crashed) return false;
   return typeof page.isClosed === 'function' ? !page.isClosed() : true;
+}
+
+/**
+ * 绑定 Page 崩溃监听器，标记崩溃状态以便生命周期探测和自动自愈
+ */
+function attachPageCrashListener(page: Page): void {
+  if (typeof page?.on === 'function') {
+    page.on('crash', () => {
+      (page as { __sl_crashed?: boolean }).__sl_crashed = true;
+    });
+  }
 }
 
 /**
@@ -168,6 +180,8 @@ async function tryConnectExistingBrowser(
       page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
     }
 
+    attachPageCrashListener(page);
+
     return { browser, context, page };
   } catch {
     return null;
@@ -211,6 +225,7 @@ export async function createPersistentBrowserSession(
       }
     }
 
+    attachPageCrashListener(restoredPage);
     existingSession.page = restoredPage;
     return existingSession;
   }
@@ -270,8 +285,9 @@ export async function createPersistentBrowserSession(
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: isHeadless,
     channel: 'chrome',
+    chromiumSandbox: true,
     args: [...getStealthLaunchArgs(), `--remote-debugging-port=${debugPort}`],
-    ignoreDefaultArgs: ['--enable-automation', '--use-mock-keychain', '--password-store=basic'],
+    ignoreDefaultArgs: ['--enable-automation', '--no-sandbox', '--use-mock-keychain', '--password-store=basic'],
     viewport: null,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
@@ -289,6 +305,7 @@ export async function createPersistentBrowserSession(
   const pages = context.pages?.() || [];
   const alivePages = pages.filter((p) => isPageAlive(p));
   const page = alivePages.length > 0 ? alivePages[0] : await context.newPage();
+  attachPageCrashListener(page);
 
   // 若以可视化模式运行，将窗口置于前台激活，并确保视觉指示器与接管渲染在当前页面就绪
   if (!isHeadless) {

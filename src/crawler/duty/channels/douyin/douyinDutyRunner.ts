@@ -226,10 +226,19 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
 
     const page = this.getActivePage(options?.dryRun ? '演练回填确认号' : '回填确认号');
     return this.runWithMutex(async () => {
-      return this.actionExecutor.confirmImport(page, confirmNo, otaOrderId, {
+      const result = await this.actionExecutor.confirmImport(page, confirmNo, otaOrderId, {
         ...options,
         refreshOrderList: (p, tab) => this.refreshOrderList(p, tab),
       });
+
+      // 防内存泄漏治理：真实回填完成后执行页面整页刷新以清空 Detached DOM 与 V8 堆内存，并重新就绪
+      if (!options?.dryRun && typeof page.reload === 'function') {
+        await updateVisualTrackerStatus(page, '🔄 确认号回填已完成，正在刷新抖音后台页面释放内存...', 'action');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await this.waitForPageReady(page);
+      }
+
+      return result;
     });
   }
 
@@ -250,10 +259,19 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
   ): Promise<DutyActionVerificationResult | void> {
     const page = this.getActivePage(options?.dryRun ? '演练确认取消' : '确认取消');
     return this.runWithMutex(async () => {
-      return this.actionExecutor.confirmCancel(page, otaOrderId, {
+      const result = await this.actionExecutor.confirmCancel(page, otaOrderId, {
         ...options,
         refreshOrderList: (p, tab) => this.refreshOrderList(p, tab),
       });
+
+      // 防内存泄漏治理：取消确认完成后执行页面整页刷新以清空 Detached DOM 与 V8 堆内存，并重新就绪
+      if (!options?.dryRun && typeof page.reload === 'function') {
+        await updateVisualTrackerStatus(page, '🔄 取消确认已完成，正在刷新抖音后台页面释放内存...', 'action');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await this.waitForPageReady(page);
+      }
+
+      return result;
     });
   }
 }

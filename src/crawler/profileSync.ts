@@ -611,7 +611,9 @@ export async function syncChromeSessionViaCDP(
       releaseProfileLocks(targetRoot);
       const targetContext = await chromium.launchPersistentContext(targetRoot, {
         headless: true,
+        chromiumSandbox: true,
         args: ['--no-startup-window'],
+        ignoreDefaultArgs: ['--no-sandbox'],
         ignoreHTTPSErrors: true,
       });
       try {

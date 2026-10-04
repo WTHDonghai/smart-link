@@ -7,8 +7,11 @@ describe('stealth', () => {
     const args = getStealthLaunchArgs();
     expect(args).toContain('--disable-blink-features=AutomationControlled');
     expect(args).toContain('--disable-infobars');
+    expect(args).toContain('--test-type');
+    expect(args).toContain('--js-flags=--max-old-space-size=4096');
     // 关键刚性约束：绝不包含破坏隔离与容易被特征标记的黑名单参数
     expect(args).not.toContain('--disable-features=IsolateOrigins,site-per-process');
+    expect(args).not.toContain('--no-sandbox');
   });
 
   it('registers stealth evasions via addInitScript and ensures un-tampered prototypes & complete chrome object', async () => {

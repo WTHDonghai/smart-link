@@ -744,5 +744,59 @@ describe('douyinDutyRunner', () => {
       await expect(runner.confirmImport?.('CN-123', 'DY-123')).rejects.toThrow('抖音值守执行器未运行，无法回填确认号');
       await expect(runner.confirmCancel?.('DY-123')).rejects.toThrow('抖音值守执行器未运行，无法确认取消');
     });
+
+    it('confirmImport (real mode) should reload page and await waitForPageReady to prevent memory leak', async () => {
+      const runner = new DouyinDutyRunner();
+      (runner as unknown as { running: boolean }).running = true;
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+      const readySpy = vi.spyOn(runner, 'waitForPageReady').mockResolvedValue(undefined);
+      const executorSpy = vi
+        .spyOn(
+          (runner as unknown as { actionExecutor: { confirmImport: () => Promise<void> } }).actionExecutor,
+          'confirmImport'
+        )
+        .mockResolvedValue(undefined);
+
+      const mockPage = {
+        isClosed: () => false,
+        reload: reloadSpy,
+      } as unknown as import('playwright').Page;
+
+      (runner as unknown as { session: { page: import('playwright').Page } }).session = {
+        page: mockPage,
+      };
+
+      await runner.confirmImport('CN-888', 'DY-888');
+      expect(executorSpy).toHaveBeenCalled();
+      expect(reloadSpy).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded' });
+      expect(readySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('confirmCancel (real mode) should reload page and await waitForPageReady to prevent memory leak', async () => {
+      const runner = new DouyinDutyRunner();
+      (runner as unknown as { running: boolean }).running = true;
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+      const readySpy = vi.spyOn(runner, 'waitForPageReady').mockResolvedValue(undefined);
+      const executorSpy = vi
+        .spyOn(
+          (runner as unknown as { actionExecutor: { confirmCancel: () => Promise<void> } }).actionExecutor,
+          'confirmCancel'
+        )
+        .mockResolvedValue(undefined);
+
+      const mockPage = {
+        isClosed: () => false,
+        reload: reloadSpy,
+      } as unknown as import('playwright').Page;
+
+      (runner as unknown as { session: { page: import('playwright').Page } }).session = {
+        page: mockPage,
+      };
+
+      await runner.confirmCancel('DY-CANCEL-888');
+      expect(executorSpy).toHaveBeenCalled();
+      expect(reloadSpy).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded' });
+      expect(readySpy).toHaveBeenCalledTimes(1);
+    });
   });
 });

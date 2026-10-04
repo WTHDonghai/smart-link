@@ -2178,6 +2178,101 @@ describe('meituanDutyRunner', () => {
       // 核心断言：绝不点击「我已知晓」按钮！
       expect(clickedActions).not.toContain('ack-btn-click');
     });
+
+    it('confirmImport (real mode) should reload page and await waitForPageReady to prevent memory leak', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+      const readySpy = vi.spyOn(runner, 'waitForPageReady').mockResolvedValue(undefined);
+
+      const fillSpy = vi.fn().mockResolvedValue(undefined);
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+
+      const inputLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        fill: fillSpy,
+        inputValue: vi.fn().mockResolvedValue('CFM-RELOAD-1'),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const btnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        click: clickSpy,
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+        locator: (selector: string) => ({
+          first: () => {
+            if (selector.includes('input')) return inputLocator;
+            if (selector.includes('button')) return btnLocator;
+            return cardLocator;
+          },
+        }),
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('input')) return inputLocator;
+              if (selector.includes('button')) return btnLocator;
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          waitForResponse: vi.fn().mockResolvedValue({ status: () => 200, url: () => 'confirm' }),
+          reload: reloadSpy,
+        },
+      };
+
+      await runner.confirmImport('CFM-RELOAD-1', 'MT-ORD-RELOAD');
+      expect(reloadSpy).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded' });
+      expect(readySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('confirmCancel (real mode) should reload page and await waitForPageReady to prevent memory leak', async () => {
+      (runner as unknown as { running: boolean }).running = true;
+      const reloadSpy = vi.fn().mockResolvedValue(undefined);
+      const readySpy = vi.spyOn(runner, 'waitForPageReady').mockResolvedValue(undefined);
+      const clickSpy = vi.fn().mockResolvedValue(undefined);
+
+      const ackBtnLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+      };
+
+      const cardLocator = {
+        isVisible: vi.fn().mockResolvedValue(true),
+        scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+        click: clickSpy,
+      };
+
+      (runner as unknown as { session: { page: unknown } }).session = {
+        page: {
+          locator: (selector: string) => ({
+            count: vi.fn().mockResolvedValue(1),
+            nth: () => cardLocator,
+            first: () => {
+              if (selector.includes('我已知晓')) return ackBtnLocator;
+              if (selector.includes('.detail-header')) return { isVisible: vi.fn().mockResolvedValue(true) };
+              return cardLocator;
+            },
+          }),
+          waitForTimeout: vi.fn().mockResolvedValue(undefined),
+          reload: reloadSpy,
+        },
+      };
+
+      await runner.confirmCancel('MT-ORD-CANCEL-RELOAD');
+      expect(reloadSpy).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded' });
+      expect(readySpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('MeituanDutyRunner executeTask delegation via dispatchDutyTask', () => {

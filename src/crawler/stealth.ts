@@ -102,9 +102,11 @@ export async function injectStealthScripts(target: BrowserContext | Page): Promi
 export function getStealthLaunchArgs(): string[] {
   return [
     '--disable-blink-features=AutomationControlled',
+    '--test-type',
     '--no-default-browser-check',
     '--no-first-run',
     '--disable-infobars',
     '--window-size=1280,900',
+    '--js-flags=--max-old-space-size=4096',
   ];
 }

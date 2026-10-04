@@ -73,9 +73,10 @@ describe('browserManager', () => {
     expect(calledOptions?.channel).toBe('chrome');
     expect(calledOptions?.headless).toBe(true);
 
-    // 核心断言：必须声明忽略 --enable-automation, --use-mock-keychain 与 --password-store=basic
+    // 核心断言：必须开启 chromiumSandbox 并声明忽略 --no-sandbox, --enable-automation, --use-mock-keychain 与 --password-store=basic
+    expect(calledOptions?.chromiumSandbox).toBe(true);
     expect(calledOptions?.ignoreDefaultArgs).toEqual(
-      expect.arrayContaining(['--enable-automation', '--use-mock-keychain', '--password-store=basic'])
+      expect.arrayContaining(['--enable-automation', '--no-sandbox', '--use-mock-keychain', '--password-store=basic'])
     );
     expect(calledOptions?.viewport).toBeNull();
 
@@ -190,6 +191,48 @@ describe('browserManager', () => {
       expect(healedSession).toBe(session);
       // 核心断言：自动重新绑定为新 Tab，绝不返回已关闭的 Page 实例
       expect(healedSession.page).toBe(healedPage);
+      expect(mockContext.newPage).toHaveBeenCalledTimes(1);
+
+      await session.close();
+    });
+
+    it('当 Page 发生 OOM 崩溃 (触发 crash 事件) 时，isPageAlive 返回 false 并自动自愈新建 Tab 恢复会话', async () => {
+      let crashCallback: (() => void) | null = null;
+      const crashedPage = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false), // 关键：崩溃时 isClosed 依然为 false
+        on: vi.fn().mockImplementation((event: string, cb: () => void) => {
+          if (event === 'crash') {
+            crashCallback = cb;
+          }
+        }),
+      };
+      const restoredPage = {
+        bringToFront: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        isClosed: vi.fn().mockReturnValue(false),
+        on: vi.fn(),
+      };
+      const mockContext = {
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        pages: vi.fn().mockReturnValue([crashedPage]),
+        newPage: vi.fn().mockResolvedValue(restoredPage),
+        close: vi.fn().mockResolvedValue(undefined),
+        on: vi.fn(),
+      };
+      vi.mocked(chromium.launchPersistentContext).mockResolvedValue(mockContext as unknown as never);
+
+      const session = await createPersistentBrowserSession({ channelCode: 'DOUYIN', headless: true });
+      expect(session.page).toBe(crashedPage);
+      expect(crashCallback).toBeTypeOf('function');
+
+      // 模拟 Chromium 渲染进程发生 Out of Memory 崩溃
+      crashCallback!();
+
+      // 核心验证：页面虽未显式 isClosed()，但由于崩溃标记，重新获取会话时自动自愈并换新 Page
+      const healedSession = await createPersistentBrowserSession({ channelCode: 'DOUYIN', headless: true });
+      expect(healedSession.page).toBe(restoredPage);
       expect(mockContext.newPage).toHaveBeenCalledTimes(1);
 
       await session.close();
