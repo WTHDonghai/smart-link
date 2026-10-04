@@ -18,6 +18,7 @@ export const ROUTINE_NOISE_EVENTS = new Set([
   'ORDER_POLL_SUCCESS',
   'PLAYWRIGHT_HEARTBEAT',
   'SYS_STORAGE_PURGE',
+  'AUTH_TOKEN_REFRESH',
 ]);
 
 export function shouldPersist(entry: SystemLogEntry): boolean {

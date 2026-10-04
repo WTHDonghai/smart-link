@@ -113,20 +113,25 @@ describe('logPersistenceMiddleware 日志持久化唯一入口', () => {
         event: 'PLAYWRIGHT_HEARTBEAT',
         message: '前台浏览器探活正常',
       }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'AUTH_TOKEN_REFRESH',
+        message: '[Auth] 平台访问凭证 (AccessToken) 自动续期成功',
+      }));
 
       await logger.flushStorage();
 
-      // 严密断言：上述 4 条常规噪声均未进入持久化存储
+      // 严密断言：上述 5 条常规噪声（含凭证正常自动续期）均未进入持久化存储
       expect(saveSpy).not.toHaveBeenCalled();
       // 但内存实时流中仍正常存在以供值守控制台观察
-      expect(store.getState().systemLog.logs).toHaveLength(4);
+      expect(store.getState().systemLog.logs).toHaveLength(5);
     });
 
-    it('心跳发生 WARN 或 ERROR 异常时坚决落库，绝不掩盖系统故障', async () => {
+    it('心跳或凭证续期发生 WARN 或 ERROR 异常时坚决落库，绝不掩盖系统故障', async () => {
       const saveSpy = vi.spyOn(logStorage, 'saveLogs').mockResolvedValue(undefined);
       const store = createAppStore();
 
-      // 派发带有心跳事件名但级别为 ERROR 和 WARN 的异常
+      // 派发带有心跳与凭证事件名但级别为 ERROR 和 WARN 的异常
       store.dispatch(addLog({
         level: 'ERROR',
         event: 'DUTY_ACTUAL_STATE_REPORT',
@@ -138,15 +143,22 @@ describe('logPersistenceMiddleware 日志持久化唯一入口', () => {
         event: 'ORDER_POLL_START',
         message: '长轮询重试超限告警',
       }));
+      store.dispatch(addLog({
+        level: 'ERROR',
+        event: 'AUTH_TOKEN_REFRESH',
+        message: '[Auth] 平台访问凭证 (AccessToken) 自动续期失败: invalid_grant',
+      }));
 
       await logger.flushStorage();
 
-      // 严密断言：异常心跳被 100% 坚决落库
+      // 严密断言：异常事件被 100% 坚决落库
       expect(saveSpy).toHaveBeenCalledTimes(1);
       const saved = saveSpy.mock.calls[0][0];
-      expect(saved).toHaveLength(2);
+      expect(saved).toHaveLength(3);
       expect(saved[0].level).toBe('ERROR');
       expect(saved[1].level).toBe('WARN');
+      expect(saved[2].level).toBe('ERROR');
+      expect(saved[2].event).toBe('AUTH_TOKEN_REFRESH');
     });
 
     it('关键自愈事件 (DUTY_ACTUAL_STATE_REPORT_RECOVERED) 与启停里程碑坚决落库形成闭环审计', async () => {
