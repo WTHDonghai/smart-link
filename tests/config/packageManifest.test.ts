@@ -13,6 +13,6 @@ describe('desktop package manifest', () => {
   });
 
   it('uses a version newer than the legacy 1.0.4 client for upgrade compatibility', () => {
-    expect(packageManifest.version).toBe('2.0.1');
+    expect(packageManifest.version).toBe('2.1.0');
   });
 });
