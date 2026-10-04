@@ -3,6 +3,7 @@ import type { SystemLogEntry, LogLevel, LogModule, TaskActionStage, LogFilterPar
 import { formatLogTimestamp, parseDateBounds, matchesLogFilter } from '../../services/logStorage';
 import { logger } from '../../services/logger';
 import { generateLogId } from '../../utils/logId';
+import { getTodayDateString } from '../../utils/logDate';
 
 export interface SystemLogState {
   logs: SystemLogEntry[];
@@ -17,36 +18,39 @@ export interface SystemLogState {
   isAutoScroll: boolean;
 }
 
+const initialToday = getTodayDateString();
+
 const initialState: SystemLogState = {
   logs: [],
   historicalLogs: null,
   isQuerying: false,
   filterLevel: 'ALL',
   filterModule: 'ALL',
-  filterStartDate: '',
-  filterEndDate: '',
+  filterStartDate: initialToday,
+  filterEndDate: initialToday,
   filterTaskStage: 'ALL',
   filterSearch: '',
   isAutoScroll: true,
 };
 
 /**
- * 启动时从浏览器 IndexedDB 异步水合最近 7 天内的真实持久化日志
+ * 启动时从浏览器 IndexedDB 异步水合今日的真实持久化日志（无条数上限）
  */
 export const hydrateLogsFromStorage = createAsyncThunk(
   'systemLog/hydrateLogsFromStorage',
   async () => {
-    return logger.queryLogs(undefined, { limit: 300 });
+    const today = getTodayDateString();
+    return logger.queryLogs({ startDate: today, endDate: today });
   }
 );
 
 /**
- * 按多维过滤条件从浏览器 IndexedDB 持久化存储查询完整的历史日志
+ * 按多维过滤条件从浏览器 IndexedDB 持久化存储查询完整的历史日志（无条数上限）
  */
 export const queryLogsFromStorage = createAsyncThunk(
   'systemLog/queryLogsFromStorage',
   async (filterParams: LogFilterParams | undefined) => {
-    return logger.queryLogs(filterParams, { limit: 500 });
+    return logger.queryLogs(filterParams);
   }
 );
 
@@ -64,15 +68,22 @@ function matchesActiveFilter(
   entry: SystemLogEntry,
   state: SystemLogState
 ): boolean {
+  const today = getTodayDateString();
+  const hasCustomDate = Boolean(
+    (state.filterStartDate && state.filterStartDate !== today) ||
+    (state.filterEndDate && state.filterEndDate !== today)
+  );
   const filterParams: LogFilterParams = {
     level: state.filterLevel,
     module: state.filterModule,
-    startDate: state.filterStartDate,
-    endDate: state.filterEndDate,
+    startDate: hasCustomDate ? state.filterStartDate : undefined,
+    endDate: hasCustomDate ? state.filterEndDate : undefined,
     taskActionStage: state.filterTaskStage,
     search: state.filterSearch,
   };
-  const bounds = parseDateBounds(state.filterStartDate, state.filterEndDate);
+  const bounds = hasCustomDate
+    ? parseDateBounds(state.filterStartDate, state.filterEndDate)
+    : { startMs: null, endMs: null };
   return matchesLogFilter(entry, filterParams, bounds);
 }
 
@@ -100,8 +111,9 @@ export const systemLogSlice = createSlice({
       state.filterEndDate = action.payload.endDate;
     },
     resetDateFilter: (state) => {
-      state.filterStartDate = '';
-      state.filterEndDate = '';
+      const today = getTodayDateString();
+      state.filterStartDate = today;
+      state.filterEndDate = today;
       const hasOtherFilters =
         state.filterLevel !== 'ALL' ||
         state.filterModule !== 'ALL' ||
@@ -115,10 +127,11 @@ export const systemLogSlice = createSlice({
       state.filterTaskStage = action.payload;
     },
     resetLogFilters: (state) => {
+      const today = getTodayDateString();
       state.filterLevel = 'ALL';
       state.filterModule = 'ALL';
-      state.filterStartDate = '';
-      state.filterEndDate = '';
+      state.filterStartDate = today;
+      state.filterEndDate = today;
       state.filterTaskStage = 'ALL';
       state.filterSearch = '';
       state.historicalLogs = null;
@@ -142,18 +155,15 @@ export const systemLogSlice = createSlice({
 
         state.logs.unshift(entry);
 
-        // 实时流内存保留最多 500 条
+        // 实时流内存保留最多 500 条滑动窗口，防止前端内存泄漏
         if (state.logs.length > 500) {
           state.logs.pop();
         }
 
-        // 若当前处于历史持久化查询模式，且新到达日志匹配当前筛选条件，实时同步注入历史视图
+        // 若当前处于历史持久化查询模式，且新到达日志匹配当前筛选条件，实时同步注入历史视图（无条数上限）
         if (state.historicalLogs !== null && matchesActiveFilter(entry, state)) {
           if (!state.historicalLogs.some((l) => l.id === entry.id)) {
             state.historicalLogs.unshift(entry);
-            if (state.historicalLogs.length > 500) {
-              state.historicalLogs.pop();
-            }
           }
         }
       },
@@ -208,9 +218,7 @@ export const systemLogSlice = createSlice({
         );
         if (matching.length > 0) {
           state.historicalLogs.unshift(...matching);
-          if (state.historicalLogs.length > 500) {
-            state.historicalLogs.splice(500);
-          }
+          // historicalLogs 去除 500 条限制，按天全量保留无遗漏
         }
       }
     },

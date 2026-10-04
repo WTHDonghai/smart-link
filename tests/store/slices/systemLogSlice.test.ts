@@ -19,6 +19,7 @@ import systemLogReducer, {
   setHistoricalLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import type { SystemLogEntry, TaskActionStage } from '../../../src/types';
+import { getTodayDateString } from '../../../src/utils/logDate';
 
 function createInitialState() {
   return systemLogReducer(undefined, { type: '@@INIT' });
@@ -31,8 +32,8 @@ describe('systemLogSlice', () => {
     expect(state.logs).toEqual([]);
     expect(state.filterLevel).toBe('ALL');
     expect(state.filterModule).toBe('ALL');
-    expect(state.filterStartDate).toBe('');
-    expect(state.filterEndDate).toBe('');
+    expect(state.filterStartDate).toBe(getTodayDateString());
+    expect(state.filterEndDate).toBe(getTodayDateString());
     expect(state.filterTaskStage).toBe('ALL');
     expect(state.filterSearch).toBe('');
     expect(state.isAutoScroll).toBe(true);
@@ -82,8 +83,8 @@ describe('systemLogSlice', () => {
       expect(endOnly.filterEndDate).toBe('2026-09-20');
 
       const dateReset = systemLogReducer(endOnly, resetDateFilter());
-      expect(dateReset.filterStartDate).toBe('');
-      expect(dateReset.filterEndDate).toBe('');
+      expect(dateReset.filterStartDate).toBe(getTodayDateString());
+      expect(dateReset.filterEndDate).toBe(getTodayDateString());
     });
 
     it('updates keyword search query', () => {
@@ -111,8 +112,8 @@ describe('systemLogSlice', () => {
 
       expect(reset.filterLevel).toBe('ALL');
       expect(reset.filterModule).toBe('ALL');
-      expect(reset.filterStartDate).toBe('');
-      expect(reset.filterEndDate).toBe('');
+      expect(reset.filterStartDate).toBe(getTodayDateString());
+      expect(reset.filterEndDate).toBe(getTodayDateString());
       expect(reset.filterTaskStage).toBe('ALL');
       expect(reset.filterSearch).toBe('');
       expect(reset.isAutoScroll).toBe(withStage.isAutoScroll);

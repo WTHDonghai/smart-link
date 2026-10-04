@@ -8,11 +8,13 @@ import {
   setFilterModule, 
   setFilterSearch,
   setFilterDateRange,
+  resetDateFilter,
   setFilterTaskStage,
   resetLogFilters,
   setHistoricalLogs,
 } from '../../../src/store/slices/systemLogSlice';
 import type { SystemLogEntry } from '../../../src/types';
+import { getTodayDateString, getPastDateString } from '../../../src/utils/logDate';
 
 describe('SystemLogsView 系统运行日志与任务调度视图', () => {
   it('正确渲染模块过滤筛选组与日志级别选项', () => {
@@ -322,11 +324,11 @@ describe('SystemLogsView 系统运行日志与任务调度视图', () => {
     // 验证合二为一的统一专业日志搜索框 (支持自由文本、单号与专业查询语句)
     expect(html).toContain('搜索日志关键词，或查询语句');
 
-    // 验证日期过滤与快捷预设
+    // 验证日期过滤与按天快捷预设 (今天、昨天、前天)
     expect(html).toContain('日期:');
     expect(html).toContain('今天');
-    expect(html).toContain('近3天');
-    expect(html).toContain('近7天');
+    expect(html).toContain('昨天');
+    expect(html).toContain('前天');
   });
 
   it('支持按日期区间 (filterStartDate & filterEndDate) 过滤视图中的日志', () => {
@@ -912,4 +914,41 @@ describe('SystemLogsView 系统运行日志与任务调度视图', () => {
     expect(html).toContain('订单号: MT-OLD-99999');
     expect(html).toContain('筛选命中 <span class="font-mono font-medium text-[#0b1c30]">1</span> 条历史记录');
   });
+
+  it('验证按天查询特性：默认绑定今天、切到历史日期显示返回今天按钮、重置后恢复今天', () => {
+    const store = createAppStore();
+    const today = getTodayDateString();
+    const yesterday = getPastDateString(1);
+
+    // 1. 初始渲染：日期初始未设或在今天，均不应突兀出现「返回今天」按钮
+    const initialHtml = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+    expect(initialHtml).not.toContain('title="返回今天"');
+
+    // 2. 切换到昨天：输入框更新，并呈现「返回今天」按钮
+    store.dispatch(setFilterDateRange({ startDate: yesterday, endDate: yesterday }));
+    const yesterdayHtml = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+    expect(store.getState().systemLog.filterStartDate).toBe(yesterday);
+    expect(yesterdayHtml).toContain(`value="${yesterday}"`);
+    expect(yesterdayHtml).toContain('title="返回今天"');
+
+    // 3. 派发 resetDateFilter：重置回今天，「返回今天」按钮自动消失
+    store.dispatch(resetDateFilter());
+    const resetHtml = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+    expect(store.getState().systemLog.filterStartDate).toBe(today);
+    expect(resetHtml).toContain(`value="${today}"`);
+    expect(resetHtml).not.toContain('title="返回今天"');
+  });
 });
+

@@ -72,16 +72,114 @@ describe('logPersistenceMiddleware 日志持久化唯一入口', () => {
     expect(saveSpy.mock.calls[0][0][0].id).toBe(storedEntry.id);
   });
 
-  it('本地埋点经 logger.track 产生的日志只入队一次', async () => {
+  it('本地埋点经 logger.track 产生的真实业务日志只入队一次', async () => {
     const saveSpy = vi.spyOn(logStorage, 'saveLogs').mockResolvedValue(undefined);
     const store = createAppStore();
     const unsubscribe = logger.subscribe((entry) => store.dispatch(addLog(entry)));
 
-    logger.track('ORDER_POLL_SUCCESS', { module: 'ORDER', message: '轮询完成' });
+    logger.track('AUTH_LOGIN_SUCCESS', { module: 'AUTH', message: '文旅平台登录成功' });
     await logger.flushStorage();
     unsubscribe();
 
     expect(saveSpy).toHaveBeenCalledTimes(1);
     expect(saveSpy.mock.calls[0][0]).toHaveLength(1);
+    expect(saveSpy.mock.calls[0][0][0].event).toBe('AUTH_LOGIN_SUCCESS');
+  });
+
+  describe('心跳与轮询噪声过滤规则 (shouldPersist)', () => {
+    it('常规高频轮询与状态报告 (INFO 级别) 被拦截，不写入存储', async () => {
+      const saveSpy = vi.spyOn(logStorage, 'saveLogs').mockResolvedValue(undefined);
+      const store = createAppStore();
+
+      // 派发常规高频心跳与轮询事件
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'ORDER_POLL_START',
+        message: '开始长轮询任务认领',
+      }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'ORDER_POLL_SUCCESS',
+        message: '轮询未认领到新任务',
+      }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'DUTY_ACTUAL_STATE_REPORT',
+        taskActionStage: 'report',
+        message: '工位 actual-state/report 上报正常',
+      }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'PLAYWRIGHT_HEARTBEAT',
+        message: '前台浏览器探活正常',
+      }));
+
+      await logger.flushStorage();
+
+      // 严密断言：上述 4 条常规噪声均未进入持久化存储
+      expect(saveSpy).not.toHaveBeenCalled();
+      // 但内存实时流中仍正常存在以供值守控制台观察
+      expect(store.getState().systemLog.logs).toHaveLength(4);
+    });
+
+    it('心跳发生 WARN 或 ERROR 异常时坚决落库，绝不掩盖系统故障', async () => {
+      const saveSpy = vi.spyOn(logStorage, 'saveLogs').mockResolvedValue(undefined);
+      const store = createAppStore();
+
+      // 派发带有心跳事件名但级别为 ERROR 和 WARN 的异常
+      store.dispatch(addLog({
+        level: 'ERROR',
+        event: 'DUTY_ACTUAL_STATE_REPORT',
+        taskActionStage: 'report',
+        message: '[值守心跳] actual-state/report 上报异常: 网络超时',
+      }));
+      store.dispatch(addLog({
+        level: 'WARN',
+        event: 'ORDER_POLL_START',
+        message: '长轮询重试超限告警',
+      }));
+
+      await logger.flushStorage();
+
+      // 严密断言：异常心跳被 100% 坚决落库
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      const saved = saveSpy.mock.calls[0][0];
+      expect(saved).toHaveLength(2);
+      expect(saved[0].level).toBe('ERROR');
+      expect(saved[1].level).toBe('WARN');
+    });
+
+    it('关键自愈事件 (DUTY_ACTUAL_STATE_REPORT_RECOVERED) 与启停里程碑坚决落库形成闭环审计', async () => {
+      const saveSpy = vi.spyOn(logStorage, 'saveLogs').mockResolvedValue(undefined);
+      const store = createAppStore();
+
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'DUTY_HEARTBEAT_STARTED',
+        message: '[值守心跳] 心跳服务已启动',
+      }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'DUTY_ACTUAL_STATE_REPORT_RECOVERED',
+        message: '[值守心跳] 网络恢复，工位状态上报恢复正常',
+      }));
+      store.dispatch(addLog({
+        level: 'INFO',
+        event: 'DUTY_HEARTBEAT_STOPPED',
+        message: '[值守心跳] 心跳服务已停止',
+      }));
+
+      await logger.flushStorage();
+
+      // 严密断言：自愈与启停 3 个关键里程碑全量落库
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      const saved = saveSpy.mock.calls[0][0];
+      expect(saved).toHaveLength(3);
+      expect(saved.map((s) => s.event)).toEqual([
+        'DUTY_HEARTBEAT_STARTED',
+        'DUTY_ACTUAL_STATE_REPORT_RECOVERED',
+        'DUTY_HEARTBEAT_STOPPED',
+      ]);
+    });
   });
 });

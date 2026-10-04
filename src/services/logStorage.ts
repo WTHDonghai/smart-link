@@ -288,7 +288,7 @@ class MemoryLogStorage {
     this.logs = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  async queryLogs(filter?: LogFilterParams, options?: { limit?: number; offset?: number }): Promise<SystemLogEntry[]> {
+  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
     let result = [...this.logs];
 
     if (filter) {
@@ -311,9 +311,7 @@ class MemoryLogStorage {
 
     result.sort((a, b) => b.createdAt - a.createdAt);
 
-    const offset = options?.offset || 0;
-    const limit = options?.limit !== undefined ? options.limit : result.length;
-    return result.slice(offset, offset + limit);
+    return result.slice(0, 5000);
   }
 
   async purgeLogsBefore(cutoffTimestamp: number): Promise<number> {
@@ -423,7 +421,7 @@ export class LogStorageService {
   /**
    * 多维查询日志
    */
-  async queryLogs(filter?: LogFilterParams, options?: { limit?: number; offset?: number }): Promise<SystemLogEntry[]> {
+  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
     const bounds = resolveQueryBounds(filter);
     if (bounds.hasInvalidInput) {
       return [];
@@ -431,7 +429,7 @@ export class LogStorageService {
 
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      return this.memoryFallback.queryLogs(filter, options);
+      return this.memoryFallback.queryLogs(filter);
     }
 
     const queryId = ++this.activeQueryId;
@@ -469,8 +467,8 @@ export class LogStorageService {
         const searchTrimmed = filter?.search?.trim();
         const hasAdvanced = Boolean(searchTrimmed && isAdvancedSearchSyntax(searchTrimmed));
         const precompiled = hasAdvanced ? compileLogQuery(filter!, activeBounds) : undefined;
-        let scannedCount = 0;
-        const maxScan = 10000;
+
+        const MAX_SAFE_QUERY_LIMIT = 5000;
 
         cursorRequest.onsuccess = (event) => {
           // 若在此期间有更新的查询到达，即刻中止当前陈旧查询，释放游标与内存
@@ -480,27 +478,18 @@ export class LogStorageService {
           }
 
           const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
-          if (cursor && scannedCount < maxScan) {
-            scannedCount++;
+          if (cursor) {
             const entry = cursor.value as SystemLogEntry;
-
             if (matchesLogFilter(entry, filter, activeBounds, precompiled)) {
               results.push(entry);
+              if (results.length >= MAX_SAFE_QUERY_LIMIT) {
+                resolve(results);
+                return;
+              }
             }
-
-            const targetLimit = options?.limit ? (options.offset || 0) + options.limit : undefined;
-            if (targetLimit && results.length >= targetLimit) {
-              const offset = options?.offset || 0;
-              const limit = options?.limit || results.length;
-              resolve(results.slice(offset, offset + limit));
-              return;
-            }
-
             cursor.continue();
           } else {
-            const offset = options?.offset || 0;
-            const limit = options?.limit !== undefined ? options.limit : results.length;
-            resolve(results.slice(offset, offset + limit));
+            resolve(results);
           }
         };
 

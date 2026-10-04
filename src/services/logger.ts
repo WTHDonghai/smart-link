@@ -99,13 +99,7 @@ export class LoggerService {
         if (options?.autoPurge7Days !== false) {
           const purgedCount = await logStorage.purgeLogsOlderThan7Days();
           if (purgedCount > 0) {
-            this.track('SYS_STORAGE_PURGE', {
-              module: 'SYSTEM',
-              level: 'INFO',
-              message: `[System] 启动时自动清理 7 天前历史日志完成`,
-              details: `已清理 ${purgedCount} 条过期记录`,
-              meta: { purgedCount },
-            });
+            console.info(`[LoggerService] 启动时自动清理 7 天前历史日志完成，已清理 ${purgedCount} 条过期记录`);
           }
         }
       } catch (error) {
@@ -323,7 +317,13 @@ export class LoggerService {
     }
 
     this.notifyListeners(entry);
-    this.queueForStorage(entry);
+
+    // 核心架构规范（AGENTS.md 1.3）：当存在日志流监听器（桌面端由 AppBootstrap 注册，流转至 Redux），
+    // 落库与过滤裁决 100% 由 logPersistenceMiddleware 唯一管辖，绝不双路直写；
+    // 仅在无任何监听器的独立运行环境（如独立无 UI 单元测试隔离）下执行直接入队。
+    if (this.listeners.size === 0) {
+      this.queueForStorage(entry);
+    }
 
     return entry;
   }
@@ -398,11 +398,11 @@ export class LoggerService {
   /**
    * 多维查询持久化日志
    */
-  async queryLogs(filter?: LogFilterParams, options?: { limit?: number; offset?: number }): Promise<SystemLogEntry[]> {
+  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
     if (!this.ownsPersistentStorage) return [];
 
     await this.flushStorage();
-    return logStorage.queryLogs(filter, options);
+    return logStorage.queryLogs(filter);
   }
 
   /**

@@ -4,8 +4,6 @@ import {
   setFilterLevel,
   setFilterModule,
   setFilterSearch,
-  setFilterStartDate,
-  setFilterEndDate,
   setFilterDateRange,
   resetDateFilter,
   setFilterTaskStage,
@@ -110,21 +108,25 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  const today = getTodayDateString();
+  const hasCustomDate = Boolean(
+    (filterStartDate && filterStartDate !== today) ||
+    (filterEndDate && filterEndDate !== today)
+  );
+
   const isFilterActive = useMemo(() => {
     return (
       filterLevel !== 'ALL' ||
       filterModule !== 'ALL' ||
       Boolean(filterSearch && filterSearch.trim()) ||
-      Boolean(filterStartDate && filterStartDate.trim()) ||
-      Boolean(filterEndDate && filterEndDate.trim()) ||
+      hasCustomDate ||
       filterTaskStage !== 'ALL'
     );
   }, [
     filterLevel,
     filterModule,
     filterSearch,
-    filterStartDate,
-    filterEndDate,
+    hasCustomDate,
     filterTaskStage,
   ]);
 
@@ -135,7 +137,10 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     }
 
     // 2. 实时流模式或内存/单测同步过滤模式
-    const bounds = parseDateBounds(filterStartDate, filterEndDate);
+    const bounds = hasCustomDate
+      ? parseDateBounds(filterStartDate, filterEndDate)
+      : { startMs: null, endMs: null };
+
     if (bounds.startMs !== null && bounds.endMs !== null && bounds.startMs > bounds.endMs) {
       return [];
     }
@@ -143,8 +148,8 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     const filterParams: LogFilterParams = {
       level: filterLevel,
       module: filterModule,
-      startDate: filterStartDate,
-      endDate: filterEndDate,
+      startDate: hasCustomDate ? filterStartDate : undefined,
+      endDate: hasCustomDate ? filterEndDate : undefined,
       taskActionStage: filterTaskStage,
       search: filterSearch,
     };
@@ -154,6 +159,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     isFilterActive,
     historicalLogs,
     logs,
+    hasCustomDate,
     filterLevel,
     filterModule,
     filterTaskStage,
@@ -378,36 +384,24 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
             )}
           </div>
 
-          {/* 日期过滤组合：预设胶囊 + 自定义起止日期 */}
+          {/* 日期过滤组合：按天切换胶囊 + 自定义单日选择器 */}
           <div className="flex items-center gap-1.5 flex-wrap shrink-0">
             <span className="text-xs text-[#737686] font-medium mr-0.5 select-none inline-flex items-center gap-1">
               <Calendar className="w-3.5 h-3.5 text-[#004ac6]" />
               <span>日期:</span>
             </span>
 
-            {/* 预设胶囊按钮组 */}
+            {/* 预设胶囊按钮组：按天快捷切换 */}
             {(() => {
               const todayStr = getTodayDateString();
-              const past3DaysStr = getPastDateString(2);
-              const past7DaysStr = getPastDateString(6);
+              const yesterdayStr = getPastDateString(1);
+              const beforeYesterdayStr = getPastDateString(2);
               const isToday = filterStartDate === todayStr && filterEndDate === todayStr;
-              const is3Days = filterStartDate === past3DaysStr && filterEndDate === todayStr;
-              const is7Days = filterStartDate === past7DaysStr && filterEndDate === todayStr;
-              const isAllDate = !filterStartDate && !filterEndDate;
+              const isYesterday = filterStartDate === yesterdayStr && filterEndDate === yesterdayStr;
+              const isBeforeYesterday = filterStartDate === beforeYesterdayStr && filterEndDate === beforeYesterdayStr;
 
               return (
                 <div className="inline-flex rounded-lg border border-[#dce9ff] p-0.5 bg-[#f8faff] gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => dispatch(resetDateFilter())}
-                    className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
-                      isAllDate
-                        ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
-                        : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
-                    }`}
-                  >
-                    全部
-                  </button>
                   <button
                     type="button"
                     onClick={() => dispatch(setFilterDateRange({ startDate: todayStr, endDate: todayStr }))}
@@ -421,67 +415,61 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => dispatch(setFilterDateRange({ startDate: past3DaysStr, endDate: todayStr }))}
+                    onClick={() => dispatch(setFilterDateRange({ startDate: yesterdayStr, endDate: yesterdayStr }))}
                     className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
-                      is3Days
+                      isYesterday
                         ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
                         : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
                     }`}
                   >
-                    近3天
+                    昨天
                   </button>
                   <button
                     type="button"
-                    onClick={() => dispatch(setFilterDateRange({ startDate: past7DaysStr, endDate: todayStr }))}
+                    onClick={() => dispatch(setFilterDateRange({ startDate: beforeYesterdayStr, endDate: beforeYesterdayStr }))}
                     className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
-                      is7Days
+                      isBeforeYesterday
                         ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
                         : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
                     }`}
                   >
-                    近7天
+                    前天
                   </button>
                 </div>
               );
             })()}
 
-            {/* 日期范围选择器 (h-8 统一高度) */}
+            {/* 单日日期选择器 (h-8 统一高度) */}
             <div className="flex items-center gap-1">
               <input
                 type="date"
                 value={filterStartDate}
-                onChange={(e) => dispatch(setFilterStartDate(e.target.value))}
-                aria-label="日志开始日期"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val) {
+                    dispatch(setFilterDateRange({ startDate: val, endDate: val }));
+                  } else {
+                    dispatch(resetDateFilter());
+                  }
+                }}
+                aria-label="日志查询日期"
                 className="h-8 px-2 bg-white border border-[#dce9ff] focus:border-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden cursor-pointer"
               />
-              <span className="text-xs text-[#737686]">至</span>
-              <input
-                type="date"
-                value={filterEndDate}
-                onChange={(e) => dispatch(setFilterEndDate(e.target.value))}
-                aria-label="日志结束日期"
-                className="h-8 px-2 bg-white border border-[#dce9ff] focus:border-[#004ac6] rounded-lg text-xs font-mono text-[#0b1c30] outline-hidden cursor-pointer"
-              />
-              {(filterStartDate || filterEndDate) && (
+              {hasCustomDate && (
                 <button
                   type="button"
                   onClick={() => dispatch(resetDateFilter())}
-                  className="text-[#94a3b8] hover:text-[#0b1c30] p-1 cursor-pointer"
-                  title="清除日期筛选"
+                  className="text-[#94a3b8] hover:text-[#004ac6] p-1 cursor-pointer"
+                  title="返回今天"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           </div>
 
           {/* 重置所有筛选按钮 */}
-          {(filterLevel !== 'ALL' ||
-            filterModule !== 'ALL' ||
-            !!filterSearch ||
-            !!filterStartDate ||
-            !!filterEndDate ||
-            filterTaskStage !== 'ALL') && (
+          {isFilterActive && (
             <button
               type="button"
               onClick={() => dispatch(resetLogFilters())}
@@ -606,12 +594,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
               ) : (
                 <>
                   <p className="text-xs">暂无匹配的系统运行日志</p>
-                  {(filterLevel !== 'ALL' ||
-                    filterModule !== 'ALL' ||
-                    !!filterSearch ||
-                    !!filterStartDate ||
-                    !!filterEndDate ||
-                    filterTaskStage !== 'ALL') && (
+                  {isFilterActive && (
                     <button
                       type="button"
                       onClick={() => dispatch(resetLogFilters())}
