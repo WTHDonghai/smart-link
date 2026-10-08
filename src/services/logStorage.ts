@@ -1,4 +1,9 @@
-import { SystemLogEntry, LogFilterParams } from '../types';
+import {
+  SystemLogEntry,
+  LogFilterParams,
+  LogQueryResult,
+  LogQueryOptions,
+} from '../types';
 import { compileLogQuery, evaluateLogQuery, LogDateBounds } from '../utils/logQuery';
 import { resolveTaskActionStage } from '../utils/taskStage';
 
@@ -7,10 +12,12 @@ export const LOG_STORE_NAME = 'logs';
 export const LOG_DB_VERSION = 1;
 export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-const TIME_RANGE_DURATION_MS: Record<'1D' | '3D' | '7D', number> = {
+const TIME_RANGE_DURATION_MS: Record<'1H' | '6H' | '1D' | '24H' | '3D', number> = {
+  '1H': 1 * 60 * 60 * 1000,
+  '6H': 6 * 60 * 60 * 1000,
   '1D': 24 * 60 * 60 * 1000,
+  '24H': 24 * 60 * 60 * 1000,
   '3D': 3 * 24 * 60 * 60 * 1000,
-  '7D': 7 * 24 * 60 * 60 * 1000,
 };
 
 interface ParsedDateBounds extends LogDateBounds {
@@ -145,9 +152,16 @@ export function resolveQueryBounds(filter?: LogFilterParams): ParsedDateBounds {
   let startBound = bounds.startMs;
   const endBound = bounds.endMs;
 
-  if (filter?.timeRange && filter.timeRange !== 'ALL') {
-    const cutoff = Date.now() - TIME_RANGE_DURATION_MS[filter.timeRange];
-    startBound = startBound !== null ? Math.max(startBound, cutoff) : cutoff;
+  // 关键保护：仅当未指定明确的绝对日期时，才应用相对时间跨度（1H, 24H 等）
+  // 避免自定义日期（如前天）被 24H 的 cutoff (昨天) 截断产生 startBound > endBound
+  const hasExplicitDate = Boolean(filter?.startDate || filter?.endDate || filter?.date);
+
+  if (!hasExplicitDate && filter?.timeRange) {
+    const duration = TIME_RANGE_DURATION_MS[filter.timeRange];
+    if (duration) {
+      const cutoff = Date.now() - duration;
+      startBound = startBound !== null ? Math.max(startBound, cutoff) : cutoff;
+    }
   }
 
   return { startMs: startBound, endMs: endBound, hasInvalidInput: false };
@@ -288,14 +302,17 @@ class MemoryLogStorage {
     this.logs = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
+  async queryLogs(
+    filter?: LogFilterParams,
+    options?: LogQueryOptions
+  ): Promise<LogQueryResult> {
     let result = [...this.logs];
 
     if (filter) {
       const activeBounds = resolveQueryBounds(filter);
 
       if (activeBounds.hasInvalidInput) {
-        return [];
+        return { items: [], hasMore: false, totalScanned: 0 };
       }
 
       if (
@@ -303,15 +320,50 @@ class MemoryLogStorage {
         activeBounds.endMs !== null &&
         activeBounds.startMs > activeBounds.endMs
       ) {
-        return [];
+        return { items: [], hasMore: false, totalScanned: 0 };
       }
 
       result = result.filter((l) => matchesLogFilter(l, filter, activeBounds));
     }
 
-    result.sort((a, b) => b.createdAt - a.createdAt);
+    result.sort((a, b) => {
+      if (b.createdAt !== a.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
 
-    return result.slice(0, 5000);
+    const totalScanned = result.length;
+
+    if (options?.cursor) {
+      const cursor = options.cursor;
+      const cursorIndex = result.findIndex(
+        (l) => l.createdAt === cursor.createdAt && l.id === cursor.id
+      );
+      if (cursorIndex >= 0) {
+        result = result.slice(cursorIndex + 1);
+      } else {
+        result = result.filter((l) => l.createdAt < cursor.createdAt);
+      }
+    } else if (options?.offset) {
+      result = result.slice(options.offset);
+    }
+
+    const pageSize = options?.pageSize || options?.limit || 200;
+    const hasMore = result.length > pageSize;
+    const items = result.slice(0, pageSize);
+    const lastItem = items[items.length - 1];
+    const nextCursor =
+      hasMore && lastItem
+        ? { createdAt: lastItem.createdAt, id: lastItem.id }
+        : undefined;
+
+    return {
+      items,
+      hasMore,
+      nextCursor,
+      totalScanned,
+    };
   }
 
   async purgeLogsBefore(cutoffTimestamp: number): Promise<number> {
@@ -329,14 +381,22 @@ class MemoryLogStorage {
   }
 }
 
+export interface LogStorageOptions {
+  allowMemoryFallback?: boolean;
+}
+
 export class LogStorageService {
   private dbInstance: IDBDatabase | null = null;
   private memoryFallback: MemoryLogStorage = new MemoryLogStorage();
   private isIndexedDBAvailable: boolean;
+  private allowMemoryFallback: boolean;
   private activeQueryId = 0;
 
-  constructor() {
+  constructor(options: LogStorageOptions = {}) {
     this.isIndexedDBAvailable = typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
+    const isTestEnv = typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
+    // 生产桌面运行时（非单测环境）绝不降级；仅在测试环境且未显式指定时允许单测内存兜底
+    this.allowMemoryFallback = options.allowMemoryFallback ?? isTestEnv;
   }
 
   /**
@@ -344,14 +404,17 @@ export class LogStorageService {
    */
   async initDB(): Promise<IDBDatabase | null> {
     if (!this.isIndexedDBAvailable) {
-      return null;
+      if (this.allowMemoryFallback) {
+        return null;
+      }
+      throw new Error('[LogStorage] 运行环境缺少 window.indexedDB，违反唯一数据源规范');
     }
 
     if (this.dbInstance) {
       return this.dbInstance;
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       try {
         const request = window.indexedDB.open(LOG_DB_NAME, LOG_DB_VERSION);
 
@@ -376,13 +439,21 @@ export class LogStorageService {
 
         request.onerror = (event) => {
           this.isIndexedDBAvailable = false;
-          reportIndexedDBOperationError('initDB', readIndexedDBEventError(event));
-          resolve(null);
+          const err = reportIndexedDBOperationError('initDB', readIndexedDBEventError(event));
+          if (this.allowMemoryFallback) {
+            resolve(null);
+          } else {
+            reject(err);
+          }
         };
       } catch (error: unknown) {
         this.isIndexedDBAvailable = false;
-        reportIndexedDBOperationError('initDB', error);
-        resolve(null);
+        const err = reportIndexedDBOperationError('initDB', error);
+        if (this.allowMemoryFallback) {
+          resolve(null);
+        } else {
+          reject(err);
+        }
       }
     });
   }
@@ -395,8 +466,11 @@ export class LogStorageService {
 
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      await this.memoryFallback.saveLogs(entries);
-      return;
+      if (this.allowMemoryFallback) {
+        await this.memoryFallback.saveLogs(entries);
+        return;
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法持久化系统日志');
     }
 
     return new Promise((resolve, reject) => {
@@ -419,17 +493,23 @@ export class LogStorageService {
   }
 
   /**
-   * 多维查询日志
+   * 多维查询日志（支持游标流式分页与完整历史遍历）
    */
-  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
+  async queryLogs(
+    filter?: LogFilterParams,
+    options?: LogQueryOptions
+  ): Promise<LogQueryResult> {
     const bounds = resolveQueryBounds(filter);
     if (bounds.hasInvalidInput) {
-      return [];
+      return { items: [], hasMore: false, totalScanned: 0 };
     }
 
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      return this.memoryFallback.queryLogs(filter);
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.queryLogs(filter, options);
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法查询系统日志');
     }
 
     const queryId = ++this.activeQueryId;
@@ -442,15 +522,23 @@ export class LogStorageService {
 
         const results: SystemLogEntry[] = [];
 
-        let keyRange: IDBKeyRange | null = null;
-        const startBound = bounds.startMs;
-        const endBound = bounds.endMs;
+        let startBound = bounds.startMs;
+        let endBound = bounds.endMs;
+
+        // 若指定了游标，游标所在时间戳即为接下来的扫描上界
+        if (options?.cursor) {
+          endBound =
+            endBound !== null
+              ? Math.min(endBound, options.cursor.createdAt)
+              : options.cursor.createdAt;
+        }
 
         // 边界保护：若起始边界大于截止边界，直接返回空结果，避免 IndexedDB IDBKeyRange.bound 抛出 DataError
         if (startBound !== null && endBound !== null && startBound > endBound) {
-          return resolve([]);
+          return resolve({ items: [], hasMore: false, totalScanned: 0 });
         }
 
+        let keyRange: IDBKeyRange | null = null;
         if (startBound !== null && endBound !== null) {
           keyRange = IDBKeyRange.bound(startBound, endBound);
         } else if (startBound !== null) {
@@ -468,29 +556,69 @@ export class LogStorageService {
         const hasAdvanced = Boolean(searchTrimmed && isAdvancedSearchSyntax(searchTrimmed));
         const precompiled = hasAdvanced ? compileLogQuery(filter!, activeBounds) : undefined;
 
-        const MAX_SAFE_QUERY_LIMIT = 5000;
+        let scannedCount = 0;
+        let passedCursor = !options?.cursor;
+        const targetPageSize = options?.pageSize || options?.limit || 200;
 
         cursorRequest.onsuccess = (event) => {
           // 若在此期间有更新的查询到达，即刻中止当前陈旧查询，释放游标与内存
           if (queryId !== this.activeQueryId) {
-            resolve([]);
+            resolve({ items: [], hasMore: false, totalScanned: scannedCount });
             return;
           }
 
           const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
-          if (cursor) {
-            const entry = cursor.value as SystemLogEntry;
-            if (matchesLogFilter(entry, filter, activeBounds, precompiled)) {
-              results.push(entry);
-              if (results.length >= MAX_SAFE_QUERY_LIMIT) {
-                resolve(results);
+          if (!cursor) {
+            resolve({
+              items: results,
+              hasMore: false,
+              nextCursor: undefined,
+              totalScanned: scannedCount,
+            });
+            return;
+          }
+
+          const entry = cursor.value as SystemLogEntry;
+
+          if (!passedCursor) {
+            const cursorTarget = options!.cursor!;
+            if (entry.createdAt > cursorTarget.createdAt) {
+              cursor.continue();
+              return;
+            }
+            if (entry.createdAt === cursorTarget.createdAt) {
+              if (entry.id === cursorTarget.id) {
+                passedCursor = true;
+                cursor.continue();
                 return;
               }
+              // 同毫秒且在游标目标之前被扫描到的条目，跳过
+              cursor.continue();
+              return;
             }
-            cursor.continue();
-          } else {
-            resolve(results);
+            // 时间戳已小于 cursorTarget.createdAt，跨过上一页断点
+            passedCursor = true;
           }
+
+          scannedCount++;
+          if (matchesLogFilter(entry, filter, activeBounds, precompiled)) {
+            if (results.length < targetPageSize) {
+              results.push(entry);
+            } else {
+              // 此时已收集满 targetPageSize 条，且当前 entry 是第 (targetPageSize + 1) 条匹配项
+              // 确证存在更多匹配记录
+              const lastEntry = results[results.length - 1];
+              resolve({
+                items: results,
+                hasMore: true,
+                nextCursor: { createdAt: lastEntry.createdAt, id: lastEntry.id },
+                totalScanned: scannedCount,
+              });
+              return;
+            }
+          }
+
+          cursor.continue();
         };
 
         tx.onerror = (event) => {
@@ -520,7 +648,10 @@ export class LogStorageService {
   async purgeLogsBefore(cutoffTimestamp: number): Promise<number> {
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      return this.memoryFallback.purgeLogsBefore(cutoffTimestamp);
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.purgeLogsBefore(cutoffTimestamp);
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法清理过期日志');
     }
 
     return new Promise((resolve, reject) => {
@@ -571,7 +702,10 @@ export class LogStorageService {
   async countLogs(): Promise<number> {
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      return this.memoryFallback.countLogs();
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.countLogs();
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法统计系统日志');
     }
 
     return new Promise((resolve, reject) => {
@@ -598,7 +732,10 @@ export class LogStorageService {
   async clearAllStoredLogs(): Promise<void> {
     const db = await this.initDB();
     if (!db || !this.isIndexedDBAvailable) {
-      return this.memoryFallback.clearAll();
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.clearAll();
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法清空系统日志');
     }
 
     return new Promise((resolve, reject) => {

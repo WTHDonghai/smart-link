@@ -5,6 +5,7 @@ import { createAppStore } from '../../../src/store';
 import { SystemLogsView } from '../../../src/components/logs/SystemLogsView';
 import { 
   addLogs, 
+  setFilterLevel,
   setFilterModule, 
   setFilterSearch,
   setFilterDateRange,
@@ -12,6 +13,7 @@ import {
   setFilterTaskStage,
   resetLogFilters,
   setHistoricalLogs,
+  queryLogsFromStorage,
 } from '../../../src/store/slices/systemLogSlice';
 import type { SystemLogEntry } from '../../../src/types';
 import { getTodayDateString, getPastDateString } from '../../../src/utils/logDate';
@@ -949,6 +951,48 @@ describe('SystemLogsView 系统运行日志与任务调度视图', () => {
     expect(store.getState().systemLog.filterStartDate).toBe(today);
     expect(resetHtml).toContain(`value="${today}"`);
     expect(resetHtml).not.toContain('title="返回今天"');
+  });
+
+  it('在历史检索进行中展示加载动效与状态，避免白屏或显示旧数据', () => {
+    const store = createAppStore();
+    store.dispatch(setFilterLevel('ERROR'));
+    store.dispatch({
+      type: queryLogsFromStorage.pending.type,
+      meta: { requestId: 'req-loading-test' },
+    });
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+
+    expect(html).toContain('正在检索历史持久化记录...');
+    expect(html).toContain('● 正在检索历史存储...');
+  });
+
+  it('在历史检索失败时展示友好错误卡片与重新查询入口', () => {
+    const store = createAppStore();
+    store.dispatch(setFilterLevel('ERROR'));
+    store.dispatch({
+      type: queryLogsFromStorage.pending.type,
+      meta: { requestId: 'req-err-test' },
+    });
+    store.dispatch({
+      type: queryLogsFromStorage.rejected.type,
+      meta: { requestId: 'req-err-test' },
+      error: { message: 'IndexedDB read error' },
+    });
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SystemLogsView />
+      </Provider>
+    );
+
+    expect(html).toContain('检索历史存储失败: IndexedDB read error');
+    expect(html).toContain('重新查询');
+    expect(html).toContain('● 存储检索异常');
   });
 });
 

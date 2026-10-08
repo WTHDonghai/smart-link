@@ -37,11 +37,15 @@ export const FriendlyErrorAlert: React.FC<FriendlyErrorAlertProps> = ({
       `[技术详情] ${error.rawMessage}`,
     ].join('\n');
 
-    const success = await copyToClipboard(diagnosticInfo);
-    if (success) {
-      setCopied(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), 2000);
+    try {
+      const success = await copyToClipboard(diagnosticInfo);
+      if (success) {
+        setCopied(true);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setCopied(false), 2000);
+      }
+    } catch {
+      // 剪贴板失败静默降级或保持未复制状态
     }
   }, [error]);
 

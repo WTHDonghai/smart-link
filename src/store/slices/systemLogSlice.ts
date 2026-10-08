@@ -1,6 +1,14 @@
 import { createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
-import type { SystemLogEntry, LogLevel, LogModule, TaskActionStage, LogFilterParams } from '../../types';
-import { formatLogTimestamp, parseDateBounds, matchesLogFilter } from '../../services/logStorage';
+import type {
+  SystemLogEntry,
+  LogLevel,
+  LogModule,
+  TaskActionStage,
+  LogFilterParams,
+  LogQueryCursor,
+  LogTimeRange,
+} from '../../types';
+import { formatLogTimestamp, resolveQueryBounds, matchesLogFilter } from '../../services/logStorage';
 import { logger } from '../../services/logger';
 import { generateLogId } from '../../utils/logId';
 import { getTodayDateString } from '../../utils/logDate';
@@ -9,10 +17,16 @@ export interface SystemLogState {
   logs: SystemLogEntry[];
   historicalLogs: SystemLogEntry[] | null;
   isQuerying: boolean;
+  isQueryingMore: boolean;
+  hasMoreHistorical: boolean;
+  nextQueryCursor?: LogQueryCursor;
+  activeRequestId: string | null;
+  queryError: string | null;
   filterLevel: 'ALL' | LogLevel;
   filterModule: 'ALL' | LogModule;
   filterStartDate: string;
   filterEndDate: string;
+  filterTimeRange: LogTimeRange;
   filterTaskStage: 'ALL' | TaskActionStage;
   filterSearch: string;
   isAutoScroll: boolean;
@@ -24,33 +38,71 @@ const initialState: SystemLogState = {
   logs: [],
   historicalLogs: null,
   isQuerying: false,
+  isQueryingMore: false,
+  hasMoreHistorical: false,
+  nextQueryCursor: undefined,
+  activeRequestId: null,
+  queryError: null,
   filterLevel: 'ALL',
   filterModule: 'ALL',
   filterStartDate: initialToday,
   filterEndDate: initialToday,
+  filterTimeRange: '24H',
   filterTaskStage: 'ALL',
   filterSearch: '',
   isAutoScroll: true,
 };
 
 /**
- * 启动时从浏览器 IndexedDB 异步水合今日的真实持久化日志（无条数上限）
+ * 启动时从浏览器 IndexedDB 异步水合今日的真实持久化日志（默认加载前 500 条）
  */
 export const hydrateLogsFromStorage = createAsyncThunk(
   'systemLog/hydrateLogsFromStorage',
   async () => {
     const today = getTodayDateString();
-    return logger.queryLogs({ startDate: today, endDate: today });
+    const result = await logger.queryLogs({ startDate: today, endDate: today }, { pageSize: 500 });
+    return result.items;
   }
 );
 
 /**
- * 按多维过滤条件从浏览器 IndexedDB 持久化存储查询完整的历史日志（无条数上限）
+ * 按多维过滤条件从浏览器 IndexedDB 持久化存储查询历史日志（支持游标流式分页）
  */
 export const queryLogsFromStorage = createAsyncThunk(
   'systemLog/queryLogsFromStorage',
   async (filterParams: LogFilterParams | undefined) => {
-    return logger.queryLogs(filterParams);
+    return logger.queryLogs(filterParams, { pageSize: 200 });
+  }
+);
+
+/**
+ * 加载更多历史持久化日志（根据 nextQueryCursor 增量游标继续遍历）
+ */
+export const loadMoreHistoricalLogs = createAsyncThunk(
+  'systemLog/loadMoreHistoricalLogs',
+  async (_, { getState }) => {
+    const state = (getState() as { systemLog: SystemLogState }).systemLog;
+    if (!state.nextQueryCursor || state.isQueryingMore) {
+      return null;
+    }
+    const today = getTodayDateString();
+    const hasCustomDate = Boolean(
+      (state.filterStartDate && state.filterStartDate !== today) ||
+      (state.filterEndDate && state.filterEndDate !== today)
+    );
+    const filterParams: LogFilterParams = {
+      level: state.filterLevel,
+      module: state.filterModule,
+      startDate: hasCustomDate ? state.filterStartDate : undefined,
+      endDate: hasCustomDate ? state.filterEndDate : undefined,
+      timeRange: hasCustomDate ? undefined : state.filterTimeRange,
+      taskActionStage: state.filterTaskStage,
+      search: state.filterSearch,
+    };
+    return logger.queryLogs(filterParams, {
+      pageSize: 200,
+      cursor: state.nextQueryCursor,
+    });
   }
 );
 
@@ -78,13 +130,19 @@ function matchesActiveFilter(
     module: state.filterModule,
     startDate: hasCustomDate ? state.filterStartDate : undefined,
     endDate: hasCustomDate ? state.filterEndDate : undefined,
+    timeRange: hasCustomDate ? undefined : state.filterTimeRange,
     taskActionStage: state.filterTaskStage,
     search: state.filterSearch,
   };
-  const bounds = hasCustomDate
-    ? parseDateBounds(state.filterStartDate, state.filterEndDate)
-    : { startMs: null, endMs: null };
+  const bounds = resolveQueryBounds(filterParams);
   return matchesLogFilter(entry, filterParams, bounds);
+}
+
+function invalidateHistoricalLogs(state: SystemLogState): void {
+  state.historicalLogs = null;
+  state.hasMoreHistorical = false;
+  state.nextQueryCursor = undefined;
+  state.queryError = null;
 }
 
 export const systemLogSlice = createSlice({
@@ -93,15 +151,19 @@ export const systemLogSlice = createSlice({
   reducers: {
     setFilterLevel: (state, action: PayloadAction<'ALL' | LogLevel>) => {
       state.filterLevel = action.payload;
+      invalidateHistoricalLogs(state);
     },
     setFilterModule: (state, action: PayloadAction<'ALL' | LogModule>) => {
       state.filterModule = action.payload;
+      invalidateHistoricalLogs(state);
     },
     setFilterStartDate: (state, action: PayloadAction<string>) => {
       state.filterStartDate = action.payload;
+      invalidateHistoricalLogs(state);
     },
     setFilterEndDate: (state, action: PayloadAction<string>) => {
       state.filterEndDate = action.payload;
+      invalidateHistoricalLogs(state);
     },
     setFilterDateRange: (
       state,
@@ -109,22 +171,21 @@ export const systemLogSlice = createSlice({
     ) => {
       state.filterStartDate = action.payload.startDate;
       state.filterEndDate = action.payload.endDate;
+      invalidateHistoricalLogs(state);
     },
     resetDateFilter: (state) => {
       const today = getTodayDateString();
       state.filterStartDate = today;
       state.filterEndDate = today;
-      const hasOtherFilters =
-        state.filterLevel !== 'ALL' ||
-        state.filterModule !== 'ALL' ||
-        Boolean(state.filterSearch && state.filterSearch.trim()) ||
-        state.filterTaskStage !== 'ALL';
-      if (!hasOtherFilters) {
-        state.historicalLogs = null;
-      }
+      invalidateHistoricalLogs(state);
     },
     setFilterTaskStage: (state, action: PayloadAction<'ALL' | TaskActionStage>) => {
       state.filterTaskStage = action.payload;
+      invalidateHistoricalLogs(state);
+    },
+    setFilterTimeRange: (state, action: PayloadAction<LogTimeRange>) => {
+      state.filterTimeRange = action.payload;
+      invalidateHistoricalLogs(state);
     },
     resetLogFilters: (state) => {
       const today = getTodayDateString();
@@ -132,15 +193,17 @@ export const systemLogSlice = createSlice({
       state.filterModule = 'ALL';
       state.filterStartDate = today;
       state.filterEndDate = today;
+      state.filterTimeRange = '24H';
       state.filterTaskStage = 'ALL';
       state.filterSearch = '';
-      state.historicalLogs = null;
+      invalidateHistoricalLogs(state);
     },
     setHistoricalLogs: (state, action: PayloadAction<SystemLogEntry[] | null>) => {
       state.historicalLogs = action.payload;
     },
     setFilterSearch: (state, action: PayloadAction<string>) => {
       state.filterSearch = action.payload;
+      invalidateHistoricalLogs(state);
     },
     toggleAutoScroll: (state) => {
       state.isAutoScroll = !state.isAutoScroll;
@@ -224,7 +287,7 @@ export const systemLogSlice = createSlice({
     },
     clearLogs: (state) => {
       state.logs = [];
-      state.historicalLogs = null;
+      invalidateHistoricalLogs(state);
     },
   },
   extraReducers: (builder) => {
@@ -232,23 +295,71 @@ export const systemLogSlice = createSlice({
       .addCase(hydrateLogsFromStorage.fulfilled, (state, action) => {
         state.logs = action.payload;
       })
-      .addCase(queryLogsFromStorage.pending, (state) => {
+      .addCase(queryLogsFromStorage.pending, (state, action) => {
         state.isQuerying = true;
+        state.activeRequestId = action.meta?.requestId ?? null;
+        state.queryError = null;
       })
       .addCase(queryLogsFromStorage.fulfilled, (state, action) => {
-        state.historicalLogs = action.payload;
-        state.isQuerying = false;
+        const reqId = action.meta?.requestId;
+        const isCurrentRequest = reqId
+          ? state.activeRequestId === reqId
+          : !state.activeRequestId;
+
+        if (isCurrentRequest) {
+          if (Array.isArray(action.payload)) {
+            state.historicalLogs = action.payload;
+            state.hasMoreHistorical = false;
+            state.nextQueryCursor = undefined;
+          } else if (action.payload) {
+            state.historicalLogs = action.payload.items;
+            state.hasMoreHistorical = action.payload.hasMore;
+            state.nextQueryCursor = action.payload.nextCursor;
+          }
+          state.isQuerying = false;
+          state.activeRequestId = null;
+          state.queryError = null;
+        }
       })
-      .addCase(queryLogsFromStorage.rejected, (state) => {
-        state.isQuerying = false;
+      .addCase(queryLogsFromStorage.rejected, (state, action) => {
+        const reqId = action.meta?.requestId;
+        const isCurrentRequest = reqId
+          ? state.activeRequestId === reqId
+          : !state.activeRequestId;
+
+        if (isCurrentRequest) {
+          state.isQuerying = false;
+          state.activeRequestId = null;
+          state.historicalLogs = [];
+          state.queryError = action.error?.message || '查询历史日志失败';
+        }
+      })
+      .addCase(loadMoreHistoricalLogs.pending, (state) => {
+        state.isQueryingMore = true;
+        state.queryError = null;
+      })
+      .addCase(loadMoreHistoricalLogs.fulfilled, (state, action) => {
+        state.isQueryingMore = false;
+        if (action.payload) {
+          const current = state.historicalLogs ?? [];
+          const existingIds = new Set(current.map((l) => l.id));
+          const newItems = action.payload.items.filter((l) => !existingIds.has(l.id));
+          state.historicalLogs = [...current, ...newItems];
+          state.hasMoreHistorical = action.payload.hasMore;
+          state.nextQueryCursor = action.payload.nextCursor;
+        }
+      })
+      .addCase(loadMoreHistoricalLogs.rejected, (state, action) => {
+        state.isQueryingMore = false;
+        state.queryError = action.error.message || '加载更多历史日志失败';
       })
       .addCase(clearAllLogs.pending, (state) => {
         state.logs = [];
-        state.historicalLogs = null;
+        invalidateHistoricalLogs(state);
       })
       .addCase(clearAllLogs.fulfilled, (state) => {
         state.logs = [];
-        state.historicalLogs = null;
+        invalidateHistoricalLogs(state);
       });
   },
 });
@@ -260,6 +371,7 @@ export const {
   setFilterEndDate,
   setFilterDateRange,
   resetDateFilter,
+  setFilterTimeRange,
   setFilterTaskStage,
   resetLogFilters,
   setHistoricalLogs,

@@ -16,10 +16,13 @@ import systemLogReducer, {
   clearAllLogs,
   hydrateLogsFromStorage,
   queryLogsFromStorage,
+  loadMoreHistoricalLogs,
+  setFilterTimeRange,
   setHistoricalLogs,
 } from '../../../src/store/slices/systemLogSlice';
-import type { SystemLogEntry, TaskActionStage } from '../../../src/types';
+import type { SystemLogEntry, TaskActionStage, LogQueryResult } from '../../../src/types';
 import { getTodayDateString } from '../../../src/utils/logDate';
+import { formatLogTimestamp } from '../../../src/services/logStorage';
 
 function createInitialState() {
   return systemLogReducer(undefined, { type: '@@INIT' });
@@ -404,11 +407,109 @@ describe('systemLogSlice', () => {
       });
       expect(fulfilled.isQuerying).toBe(false);
       expect(fulfilled.historicalLogs).toEqual(mockResults);
+    });
+
+    it('handles request race conditions by discarding stale responses', () => {
+      const initialState = createInitialState();
+
+      // 请求 1 发起
+      const pendingReq1 = systemLogReducer(initialState, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-1' },
+      });
+      expect(pendingReq1.isQuerying).toBe(true);
+      expect(pendingReq1.activeRequestId).toBe('req-1');
+
+      // 请求 2 紧接着发起 (覆盖 activeRequestId)
+      const pendingReq2 = systemLogReducer(pendingReq1, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-2' },
+      });
+      expect(pendingReq2.activeRequestId).toBe('req-2');
+
+      const mockResultsReq1: SystemLogEntry[] = [
+        {
+          id: 'hist-old-1',
+          timestamp: '2026-09-10 10:00:00.000',
+          createdAt: 1000,
+          level: 'INFO',
+          message: '陈旧请求 1 结果',
+        },
+      ];
+      const mockResultsReq2: SystemLogEntry[] = [
+        {
+          id: 'hist-new-2',
+          timestamp: '2026-09-10 11:00:00.000',
+          createdAt: 2000,
+          level: 'INFO',
+          message: '最新请求 2 结果',
+        },
+      ];
+
+      // 陈旧请求 1 较晚返回，应被丢弃
+      const staleResponseState = systemLogReducer(pendingReq2, {
+        type: queryLogsFromStorage.fulfilled.type,
+        payload: mockResultsReq1,
+        meta: { requestId: 'req-1' },
+      });
+      expect(staleResponseState.historicalLogs).toBeNull();
+      expect(staleResponseState.isQuerying).toBe(true);
+      expect(staleResponseState.activeRequestId).toBe('req-2');
+
+      // 最新请求 2 返回，正常采纳
+      const freshResponseState = systemLogReducer(staleResponseState, {
+        type: queryLogsFromStorage.fulfilled.type,
+        payload: mockResultsReq2,
+        meta: { requestId: 'req-2' },
+      });
+      expect(freshResponseState.historicalLogs).toEqual(mockResultsReq2);
+      expect(freshResponseState.isQuerying).toBe(false);
+      expect(freshResponseState.activeRequestId).toBeNull();
+    });
+
+    it('captures queryError on rejected query and clears error on new pending', () => {
+      const initialState = createInitialState();
+      const pending = systemLogReducer(initialState, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-err' },
+      });
+      expect(pending.queryError).toBeNull();
 
       const rejected = systemLogReducer(pending, {
         type: queryLogsFromStorage.rejected.type,
+        meta: { requestId: 'req-err' },
+        error: { message: 'IndexedDB transaction aborted' },
       });
       expect(rejected.isQuerying).toBe(false);
+      expect(rejected.queryError).toBe('IndexedDB transaction aborted');
+      expect(rejected.historicalLogs).toEqual([]);
+
+      const nextPending = systemLogReducer(rejected, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-retry' },
+      });
+      expect(nextPending.queryError).toBeNull();
+      expect(nextPending.isQuerying).toBe(true);
+    });
+
+    it('invalidates historicalLogs immediately when filter criteria changes during pending query', () => {
+      const stateWithOldLogs = {
+        ...createInitialState(),
+        historicalLogs: [
+          {
+            id: 'hist-old',
+            timestamp: '2026-09-10 10:00:00.000',
+            createdAt: 1000,
+            level: 'INFO' as const,
+            message: '旧筛选结果',
+          },
+        ],
+        filterLevel: 'INFO' as const,
+      };
+
+      const updated = systemLogReducer(stateWithOldLogs, setFilterLevel('ERROR'));
+      expect(updated.historicalLogs).toBeNull();
+      expect(updated.filterLevel).toBe('ERROR');
     });
 
     it('clears historicalLogs when resetLogFilters or resetDateFilter without other filters is dispatched', () => {
@@ -476,6 +577,42 @@ describe('systemLogSlice', () => {
       expect(nextUnmatched.historicalLogs?.length).toBe(2);
     });
 
+    it('does not inject older logs outside of filterTimeRange into historicalLogs', () => {
+      const now = Date.now();
+      const stateWith1HFilter = {
+        ...createInitialState(),
+        filterTimeRange: '1H' as const,
+        historicalLogs: [
+          {
+            id: 'hist-recent-1',
+            timestamp: formatLogTimestamp(new Date(now - 1000)),
+            createdAt: now - 1000,
+            level: 'INFO' as const,
+            message: '近 1 小时内的日志',
+          },
+        ],
+      };
+
+      // 产生一条 2 小时前的日志（例如补发或积压日志）
+      const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+      const nextState = systemLogReducer(
+        stateWith1HFilter,
+        addLog({
+          id: 'old-backlog-log',
+          createdAt: twoHoursAgo,
+          timestamp: formatLogTimestamp(new Date(twoHoursAgo)),
+          level: 'INFO',
+          message: '2小时前的积压日志',
+        })
+      );
+
+      // 该日志会进入全局 logs 流
+      expect(nextState.logs[0].id).toBe('old-backlog-log');
+      // 但绝不应混入当前限制为 1H 的 historicalLogs
+      expect(nextState.historicalLogs?.some((l) => l.id === 'old-backlog-log')).toBe(false);
+      expect(nextState.historicalLogs?.length).toBe(1);
+    });
+
     it('clears both logs and historicalLogs when clearLogs or clearAllLogs is executed', () => {
       const stateWithData = {
         ...createInitialState(),
@@ -508,6 +645,147 @@ describe('systemLogSlice', () => {
       });
       expect(allCleared.logs).toEqual([]);
       expect(allCleared.historicalLogs).toBeNull();
+    });
+
+    it('handles streaming pagination lifecycle with loadMoreHistoricalLogs and updates nextQueryCursor', () => {
+      const state = createInitialState();
+
+      // 第一页 fulfilled
+      const firstPageResult: LogQueryResult = {
+        items: [
+          {
+            id: 'log-page1-01',
+            timestamp: '2026-09-29 10:00:00.000',
+            createdAt: 2000,
+            level: 'INFO',
+            message: '第一页日志 1',
+          },
+          {
+            id: 'log-page1-02',
+            timestamp: '2026-09-29 09:59:00.000',
+            createdAt: 1900,
+            level: 'INFO',
+            message: '第一页日志 2',
+          },
+        ],
+        hasMore: true,
+        nextCursor: { createdAt: 1900, id: 'log-page1-02' },
+        totalScanned: 2,
+      };
+
+      const withPage1 = systemLogReducer(state, {
+        type: queryLogsFromStorage.fulfilled.type,
+        payload: firstPageResult,
+      });
+      expect(withPage1.historicalLogs?.length).toBe(2);
+      expect(withPage1.hasMoreHistorical).toBe(true);
+      expect(withPage1.nextQueryCursor).toEqual({ createdAt: 1900, id: 'log-page1-02' });
+
+      // 加载更多 pending
+      const loadingMore = systemLogReducer(withPage1, {
+        type: loadMoreHistoricalLogs.pending.type,
+      });
+      expect(loadingMore.isQueryingMore).toBe(true);
+
+      // 加载更多 fulfilled
+      const secondPageResult: LogQueryResult = {
+        items: [
+          {
+            id: 'log-page2-01',
+            timestamp: '2026-09-29 09:58:00.000',
+            createdAt: 1800,
+            level: 'INFO',
+            message: '第二页日志 1',
+          },
+        ],
+        hasMore: false,
+        nextCursor: undefined,
+        totalScanned: 1,
+      };
+
+      const withPage2 = systemLogReducer(loadingMore, {
+        type: loadMoreHistoricalLogs.fulfilled.type,
+        payload: secondPageResult,
+      });
+      expect(withPage2.isQueryingMore).toBe(false);
+      expect(withPage2.historicalLogs?.length).toBe(3);
+      expect(withPage2.hasMoreHistorical).toBe(false);
+      expect(withPage2.nextQueryCursor).toBeUndefined();
+    });
+
+    it('discards stale responses that arrive after a newer request has already fulfilled and cleared activeRequestId', () => {
+      const state = createInitialState();
+
+      // 1. 发起请求 1 (req-1)
+      const stateReq1 = systemLogReducer(state, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-1' },
+      });
+      expect(stateReq1.activeRequestId).toBe('req-1');
+
+      // 2. 用户快速切换条件，发起请求 2 (req-2)
+      const stateReq2 = systemLogReducer(stateReq1, {
+        type: queryLogsFromStorage.pending.type,
+        meta: { requestId: 'req-2' },
+      });
+      expect(stateReq2.activeRequestId).toBe('req-2');
+
+      // 3. 请求 2 较快返回 fulfilled，写入最新结果
+      const stateFulfilled2 = systemLogReducer(stateReq2, {
+        type: queryLogsFromStorage.fulfilled.type,
+        meta: { requestId: 'req-2' },
+        payload: {
+          items: [
+            {
+              id: 'log-req2-01',
+              timestamp: '2026-10-01 10:00:00.000',
+              createdAt: 2000,
+              level: 'INFO',
+              message: '新请求 2 结果',
+            },
+          ],
+          hasMore: false,
+          totalScanned: 1,
+        },
+      });
+      expect(stateFulfilled2.historicalLogs?.[0].id).toBe('log-req2-01');
+      expect(stateFulfilled2.activeRequestId).toBeNull();
+
+      // 4. 迟到的请求 1 返回 fulfilled，携带陈旧数据
+      const stateStaleFulfilled1 = systemLogReducer(stateFulfilled2, {
+        type: queryLogsFromStorage.fulfilled.type,
+        meta: { requestId: 'req-1' },
+        payload: {
+          items: [
+            {
+              id: 'log-req1-01',
+              timestamp: '2026-10-01 09:00:00.000',
+              createdAt: 1000,
+              level: 'WARN',
+              message: '陈旧请求 1 结果',
+            },
+          ],
+          hasMore: false,
+          totalScanned: 1,
+        },
+      });
+
+      // 严格断言：请求 1 的陈旧结果必须被丢弃，保留请求 2 的结果
+      expect(stateStaleFulfilled1.historicalLogs?.[0].id).toBe('log-req2-01');
+      expect(stateStaleFulfilled1.historicalLogs?.[0].message).toBe('新请求 2 结果');
+    });
+
+    it('updates and resets filterTimeRange cleanly', () => {
+      const state = createInitialState();
+      expect(state.filterTimeRange).toBe('24H');
+
+      const updated = systemLogReducer(state, setFilterTimeRange('3D'));
+      expect(updated.filterTimeRange).toBe('3D');
+
+      const reset = systemLogReducer(updated, resetLogFilters());
+      expect(reset.filterTimeRange).toBe('24H');
+      expect(reset.hasMoreHistorical).toBe(false);
+      expect(reset.nextQueryCursor).toBeUndefined();
     });
   });
 });

@@ -136,8 +136,8 @@ describe('LoggerService (Telemetry & Structured Logging)', () => {
       await logger.flushStorage();
 
       const results = await logger.queryLogs({ orderNo: 'DY-999' });
-      expect(results.length).toBe(1);
-      expect(results[0].orderNo).toBe('DY-999');
+      expect(results.items.length).toBe(1);
+      expect(results.items[0].orderNo).toBe('DY-999');
     });
   });
 
@@ -213,6 +213,69 @@ describe('LoggerService (Telemetry & Structured Logging)', () => {
       await logger.flushStorage();
 
       expect(saveSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('clearAll awaits active flushPromise and clears storage cleanly without race condition resurrection', async () => {
+      let resolveSave: () => void = () => undefined;
+      const savePromise = new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      });
+
+      const clearSpy = vi.spyOn(logStorage, 'clearAllStoredLogs').mockResolvedValue(undefined);
+      vi.spyOn(logStorage, 'saveLogs').mockReturnValue(savePromise);
+
+      logger.info('即将持久化的日志');
+      const flushAction = logger.flushStorage();
+
+      // 在 flush 处于挂起阶段时调用 clearAll
+      let clearCompleted = false;
+      const clearAction = logger.clearAll().then(() => {
+        clearCompleted = true;
+      });
+
+      // 验证 clearAll 并未立即完成，而是在等待 flushPromise
+      await Promise.resolve();
+      expect(clearCompleted).toBe(false);
+
+      // 释放 savePromise
+      resolveSave();
+      await flushAction;
+      await clearAction;
+
+      expect(clearCompleted).toBe(true);
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('tracks dropped logs when retry buffer exceeds MAX_RETRY_BUFFER_SIZE', async () => {
+      vi.spyOn(logStorage, 'saveLogs').mockRejectedValue(new Error('磁盘已满'));
+
+      // 注入 2050 条日志（超过 2000 上限）
+      for (let i = 0; i < 2050; i++) {
+        logger.info(`测试过载日志 ${i}`);
+      }
+
+      await logger.flushStorage();
+
+      // 验证超出部分被统计并可查，不再静默丢弃
+      expect(logger.getDroppedLogCount()).toBeGreaterThanOrEqual(50);
+    });
+
+    it('prepareForShutdown flushes all remaining buffer entries immediately', async () => {
+      const saved: SystemLogEntry[][] = [];
+      vi.spyOn(logStorage, 'saveLogs').mockImplementation(async (entries) => {
+        saved.push([...entries]);
+      });
+
+      logger.info('退出前待保存日志 1');
+      logger.info('退出前待保存日志 2');
+
+      await logger.prepareForShutdown();
+
+      expect(saved.length).toBe(1);
+      expect(saved[0].map((e) => e.message)).toEqual([
+        '退出前待保存日志 1',
+        '退出前待保存日志 2',
+      ]);
     });
   });
 });

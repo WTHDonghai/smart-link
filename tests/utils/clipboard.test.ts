@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { copyToClipboard, readFromClipboard } from '../../src/utils/clipboard';
 
-describe('clipboard utils - 跨宿主剪贴板工具', () => {
+describe('clipboard utils - Electron-Only 原生剪贴板工具', () => {
   const originalHost = window.host;
-  const originalClipboard = navigator.clipboard;
 
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -11,11 +10,6 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
 
   afterEach(() => {
     window.host = originalHost;
-    Object.defineProperty(navigator, 'clipboard', {
-      value: originalClipboard,
-      configurable: true,
-      writable: true,
-    });
   });
 
   describe('copyToClipboard', () => {
@@ -25,9 +19,8 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
       expect(await copyToClipboard(undefined as unknown as string)).toBe(false);
     });
 
-    it('第一优先级：当存在 Electron 桌面原生通道时，优先调用 window.host.clipboard.writeText', async () => {
+    it('必须使用 Electron 桌面原生通道 window.host.clipboard.writeText', async () => {
       const mockHostWrite = vi.fn().mockResolvedValue(true);
-      const mockNavWrite = vi.fn().mockResolvedValue(undefined);
 
       window.host = {
         ...window.host,
@@ -36,23 +29,23 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
           readText: vi.fn(),
         },
       } as unknown as typeof window.host;
-
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockNavWrite },
-        configurable: true,
-        writable: true,
-      });
 
       const result = await copyToClipboard('MT-20261001-999');
 
       expect(result).toBe(true);
       expect(mockHostWrite).toHaveBeenCalledWith('MT-20261001-999');
-      expect(mockNavWrite).not.toHaveBeenCalled();
     });
 
-    it('当 Electron 原生通道抛错时，平滑降级至 navigator.clipboard.writeText', async () => {
+    it('当缺失 window.host.clipboard 时严格抛错 Fail-Fast，绝不回退 navigator.clipboard', async () => {
+      window.host = undefined;
+
+      await expect(copyToClipboard('MT-FAIL-FAST')).rejects.toThrow(
+        '缺失 Electron 原生剪贴板通道，严禁 Web API 降级'
+      );
+    });
+
+    it('当 Electron 原生通道抛错时，如实暴露异常，不隐式降级吞没', async () => {
       const mockHostWrite = vi.fn().mockRejectedValue(new Error('IPC Disconnected'));
-      const mockNavWrite = vi.fn().mockResolvedValue(undefined);
 
       window.host = {
         ...window.host,
@@ -62,79 +55,14 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
         },
       } as unknown as typeof window.host;
 
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockNavWrite },
-        configurable: true,
-        writable: true,
-      });
-
-      const result = await copyToClipboard('MT-FALLBACK-1');
-
-      expect(result).toBe(true);
-      expect(mockHostWrite).toHaveBeenCalledWith('MT-FALLBACK-1');
-      expect(mockNavWrite).toHaveBeenCalledWith('MT-FALLBACK-1');
-    });
-
-    it('当 Electron 原生通道返回 false 时，平滑降级至 navigator.clipboard.writeText', async () => {
-      const mockHostWrite = vi.fn().mockResolvedValue(false);
-      const mockNavWrite = vi.fn().mockResolvedValue(undefined);
-
-      window.host = {
-        ...window.host,
-        clipboard: {
-          writeText: mockHostWrite,
-          readText: vi.fn(),
-        },
-      } as unknown as typeof window.host;
-
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockNavWrite },
-        configurable: true,
-        writable: true,
-      });
-
-      const result = await copyToClipboard('MT-HOST-FALSE-FALLBACK');
-
-      expect(result).toBe(true);
-      expect(mockHostWrite).toHaveBeenCalledWith('MT-HOST-FALSE-FALLBACK');
-      expect(mockNavWrite).toHaveBeenCalledWith('MT-HOST-FALSE-FALLBACK');
-    });
-
-    it('当无 window.host 时，使用 navigator.clipboard.writeText 成功写入', async () => {
-      window.host = undefined;
-      const mockNavWrite = vi.fn().mockResolvedValue(undefined);
-
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockNavWrite },
-        configurable: true,
-        writable: true,
-      });
-
-      const result = await copyToClipboard('MT-NAV-OK');
-
-      expect(result).toBe(true);
-      expect(mockNavWrite).toHaveBeenCalledWith('MT-NAV-OK');
-    });
-
-    it('当所有通道均不可用或抛错时返回 false', async () => {
-      window.host = undefined;
-      Object.defineProperty(navigator, 'clipboard', {
-        value: {
-          writeText: vi.fn().mockRejectedValue(new Error('Permission denied')),
-        },
-        configurable: true,
-        writable: true,
-      });
-
-      const result = await copyToClipboard('MT-FAIL');
-      expect(result).toBe(false);
+      await expect(copyToClipboard('MT-IPC-ERROR')).rejects.toThrow('IPC Disconnected');
+      expect(mockHostWrite).toHaveBeenCalledWith('MT-IPC-ERROR');
     });
   });
 
   describe('readFromClipboard', () => {
-    it('第一优先级：当存在 Electron 桌面原生通道时，优先调用 window.host.clipboard.readText', async () => {
+    it('必须使用 Electron 桌面原生通道 window.host.clipboard.readText 读取文本', async () => {
       const mockHostRead = vi.fn().mockResolvedValue('HOST-CLIPBOARD-TEXT');
-      const mockNavRead = vi.fn().mockResolvedValue('NAV-CLIPBOARD-TEXT');
 
       window.host = {
         ...window.host,
@@ -143,22 +71,22 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
           readText: mockHostRead,
         },
       } as unknown as typeof window.host;
-
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { readText: mockNavRead },
-        configurable: true,
-        writable: true,
-      });
 
       const text = await readFromClipboard();
       expect(text).toBe('HOST-CLIPBOARD-TEXT');
-      expect(mockHostRead).toHaveBeenCalled();
-      expect(mockNavRead).not.toHaveBeenCalled();
+      expect(mockHostRead).toHaveBeenCalledTimes(1);
     });
 
-    it('当 Electron 原生通道抛错时，平滑降级至 navigator.clipboard.readText', async () => {
-      const mockHostRead = vi.fn().mockRejectedValue(new Error('IPC error'));
-      const mockNavRead = vi.fn().mockResolvedValue('FALLBACK-NAV-TEXT');
+    it('当缺失 window.host.clipboard 时严格抛错 Fail-Fast，绝不回退 navigator.clipboard', async () => {
+      window.host = undefined;
+
+      await expect(readFromClipboard()).rejects.toThrow(
+        '缺失 Electron 原生剪贴板通道，严禁 Web API 降级'
+      );
+    });
+
+    it('当原生通道抛错时如实暴露异常', async () => {
+      const mockHostRead = vi.fn().mockRejectedValue(new Error('System Pasteboard Locked'));
 
       window.host = {
         ...window.host,
@@ -168,45 +96,7 @@ describe('clipboard utils - 跨宿主剪贴板工具', () => {
         },
       } as unknown as typeof window.host;
 
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { readText: mockNavRead },
-        configurable: true,
-        writable: true,
-      });
-
-      const text = await readFromClipboard();
-      expect(text).toBe('FALLBACK-NAV-TEXT');
-      expect(mockHostRead).toHaveBeenCalled();
-      expect(mockNavRead).toHaveBeenCalled();
-    });
-
-    it('当无 window.host 时，使用 navigator.clipboard.readText 读取成功', async () => {
-      window.host = undefined;
-      const mockNavRead = vi.fn().mockResolvedValue('WEB-STANDALONE-TEXT');
-
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { readText: mockNavRead },
-        configurable: true,
-        writable: true,
-      });
-
-      const text = await readFromClipboard();
-      expect(text).toBe('WEB-STANDALONE-TEXT');
-      expect(mockNavRead).toHaveBeenCalled();
-    });
-
-    it('当所有通道均失败或抛错时安全返回空字符串', async () => {
-      window.host = undefined;
-      Object.defineProperty(navigator, 'clipboard', {
-        value: {
-          readText: vi.fn().mockRejectedValue(new Error('Permission denied')),
-        },
-        configurable: true,
-        writable: true,
-      });
-
-      const text = await readFromClipboard();
-      expect(text).toBe('');
+      await expect(readFromClipboard()).rejects.toThrow('System Pasteboard Locked');
     });
   });
 });

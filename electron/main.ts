@@ -532,20 +532,12 @@ export function registerDutyIpcHandlers(): void {
  */
 export function registerClipboardIpcHandlers(): void {
   ipcMain.handle('clipboard:write-text', async (_event, text: string) => {
-    try {
-      clipboard.writeText(String(text ?? ''));
-      return true;
-    } catch {
-      return false;
-    }
+    clipboard.writeText(String(text ?? ''));
+    return true;
   });
 
   ipcMain.handle('clipboard:read-text', async () => {
-    try {
-      return clipboard.readText();
-    } catch {
-      return '';
-    }
+    return clipboard.readText();
   });
 }
 

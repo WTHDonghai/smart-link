@@ -85,9 +85,10 @@ export class StationCoordinator {
         }
       }
     } catch (e) {
+      const isFirstFailure = !this.lastReportFailed;
       this.lastReportFailed = true;
-      const errMsg = e instanceof Error ? e.message : String(e);
-      if (this.onLog) {
+      if (isFirstFailure && this.onLog) {
+        const errMsg = e instanceof Error ? e.message : String(e);
         this.onLog({
           level: 'WARN',
           event: 'DUTY_ACTUAL_STATE_REPORT_FAILED',

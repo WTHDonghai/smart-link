@@ -86,16 +86,21 @@ export const OrderTable: React.FC<OrderTableProps> = ({
 
   const handleCopy = async (text: string) => {
     if (!text) return;
-    const success = await copyToClipboard(text);
-    if (success) {
-      setCopiedId(text);
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
+    let success = false;
+    try {
+      success = await copyToClipboard(text);
+      if (success) {
+        setCopiedId(text);
+        if (copyTimerRef.current) {
+          clearTimeout(copyTimerRef.current);
+        }
+        copyTimerRef.current = setTimeout(() => {
+          setCopiedId(null);
+          copyTimerRef.current = null;
+        }, 1500);
       }
-      copyTimerRef.current = setTimeout(() => {
-        setCopiedId(null);
-        copyTimerRef.current = null;
-      }, 1500);
+    } catch {
+      success = false;
     }
     onCopy?.(text, success);
   };

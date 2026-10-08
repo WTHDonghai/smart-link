@@ -398,6 +398,7 @@ export const syncDutyStatusThunk = createAsyncThunk(
   'orderGuardian/syncStatus',
   async (_, { getState, dispatch }) => {
     await ensureInitialConfirmImportSynced();
+    // 主进程采用 >= sinceTime 闭区间匹配，配合 Redux addLogs 的 ID 幂等去重，彻底消除同毫秒日志遗漏缺陷
     const res = await queryDutyStatus(lastSyncedDutyLogTime);
     if (res.logs && res.logs.length > 0) {
       for (const log of res.logs) {

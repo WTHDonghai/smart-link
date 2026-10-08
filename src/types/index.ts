@@ -335,6 +335,27 @@ export interface SystemLogEntry {
   httpStatus?: number;   // HTTP 状态码
 }
 
+export type LogTimeRange = '1H' | '6H' | '1D' | '24H' | '3D';
+
+export interface LogQueryCursor {
+  createdAt: number;
+  id: string;
+}
+
+export interface LogQueryResult {
+  items: SystemLogEntry[];
+  hasMore: boolean;
+  nextCursor?: LogQueryCursor;
+  totalScanned: number;
+}
+
+export interface LogQueryOptions {
+  pageSize?: number;
+  cursor?: LogQueryCursor;
+  limit?: number;
+  offset?: number;
+}
+
 export interface LogFilterParams {
   level?: 'ALL' | LogLevel;
   module?: 'ALL' | LogModule;
@@ -346,7 +367,7 @@ export interface LogFilterParams {
   date?: string;
   startDate?: string;
   endDate?: string;
-  timeRange?: 'ALL' | '1D' | '3D' | '7D';
+  timeRange?: LogTimeRange;
   onlyErrors?: boolean;
   search?: string;
 }

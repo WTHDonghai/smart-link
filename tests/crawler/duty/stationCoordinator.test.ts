@@ -91,6 +91,24 @@ describe('StationCoordinator', () => {
     expect(logs[0].message).toContain('Network timeout');
   });
 
+  it('should suppress repeated failure logs during consecutive heartbeat failures', async () => {
+    await coordinator.ensureIdentity();
+    vi.spyOn(dutyRuntimeApi, 'reportDutyActualState').mockRejectedValue(new Error('Connection refused'));
+
+    const logs: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+    coordinator.setLogCallback((entry) => logs.push(entry));
+
+    // 连续 5 次上报失败
+    for (let i = 0; i < 5; i++) {
+      await coordinator.reportActualState(['MEITUAN']);
+    }
+
+    // 严格断言：连续失败只产生一条告警日志，杜绝高频日志轰炸
+    expect(logs).toHaveLength(1);
+    expect(logs[0].level).toBe('WARN');
+    expect(logs[0].event).toBe('DUTY_ACTUAL_STATE_REPORT_FAILED');
+  });
+
   it('should emit DUTY_ACTUAL_STATE_REPORT_RECOVERED when report succeeds after previous failure', async () => {
     await coordinator.ensureIdentity();
     const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');

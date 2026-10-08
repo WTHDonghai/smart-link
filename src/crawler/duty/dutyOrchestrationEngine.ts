@@ -188,7 +188,7 @@ export class DutyOrchestrationEngine {
 
   public getRecentDutyLogs(sinceTime = 0): SystemLogEntry[] {
     if (sinceTime <= 0) return [...this.recentLogs];
-    return this.recentLogs.filter((l) => l.createdAt > sinceTime);
+    return this.recentLogs.filter((l) => l.createdAt >= sinceTime);
   }
 
   public appendDutyLogDirect(entry: SystemLogEntry): void {

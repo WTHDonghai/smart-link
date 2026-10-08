@@ -338,7 +338,7 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(writeSpy).toHaveBeenCalledWith('MT-987654321');
     });
 
-    it('当 clipboard.writeText 抛出系统级错误时捕获异常并返回 false', async () => {
+    it('当 clipboard.writeText 抛出系统级错误时如实向上传播异常', async () => {
       registerClipboardIpcHandlers();
 
       const handler = ipcHandlers.get('clipboard:write-text')!;
@@ -347,8 +347,9 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
         throw new Error('System pasteboard locked');
       });
 
-      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MT-FAIL');
-      expect(result).toBe(false);
+      await expect(
+        handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MT-FAIL')
+      ).rejects.toThrow('System pasteboard locked');
     });
 
     it('正确注册 clipboard:read-text 处理器并在调用时读取剪贴板内容', async () => {
@@ -364,7 +365,7 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(result).toBe('COPIED_ORDER_TEXT');
     });
 
-    it('当 clipboard.readText 抛错时捕获并安全返回空字符串', async () => {
+    it('当 clipboard.readText 抛错时如实向上传播异常', async () => {
       registerClipboardIpcHandlers();
 
       const handler = ipcHandlers.get('clipboard:read-text')!;
@@ -373,8 +374,9 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
         throw new Error('Access denied');
       });
 
-      const result = await handler(undefined as unknown as Electron.IpcMainInvokeEvent);
-      expect(result).toBe('');
+      await expect(
+        handler(undefined as unknown as Electron.IpcMainInvokeEvent)
+      ).rejects.toThrow('Access denied');
     });
   });
 });

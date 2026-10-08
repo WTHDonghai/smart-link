@@ -29,6 +29,6 @@ export async function mountApplication(
     return 'blocked';
   }
 
-  startApp(root);
+  await startApp(root);
   return 'started';
 }

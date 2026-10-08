@@ -6,6 +6,7 @@ import {
   isAdvancedSearchSyntax,
   matchesLogFilter,
   parseDateBounds,
+  resolveQueryBounds,
 } from '../../src/services/logStorage';
 import { SystemLogEntry } from '../../src/types';
 
@@ -74,8 +75,25 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
   let storage: LogStorageService;
 
   beforeEach(async () => {
-    storage = new LogStorageService();
+    storage = new LogStorageService({ allowMemoryFallback: true });
     await storage.clearAllStoredLogs();
+  });
+
+  it('fails fast and throws error when indexedDB is missing in default production mode', async () => {
+    const prodStorage = new LogStorageService({ allowMemoryFallback: false });
+    await expect(prodStorage.initDB()).rejects.toThrow('运行环境缺少 window.indexedDB');
+    await expect(prodStorage.saveLogs([])).resolves.toBeUndefined();
+    await expect(
+      prodStorage.saveLogs([
+        {
+          id: 'test',
+          timestamp: '2026-09-10 10:00:00.000',
+          createdAt: 1000,
+          level: 'INFO',
+          message: 'fail-fast test',
+        },
+      ])
+    ).rejects.toThrow('运行环境缺少 window.indexedDB');
   });
 
   it('formats timestamp as readable standard string YYYY-MM-DD HH:mm:ss.SSS', () => {
@@ -130,11 +148,31 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       const bounds = parseDateBounds('2026-02-31');
 
       expect(matchesLogFilter(entry, undefined, bounds)).toBe(false);
-      await expect(storage.queryLogs({ startDate: '2026-02-31' })).resolves.toEqual([]);
+      await expect(storage.queryLogs({ startDate: '2026-02-31' })).resolves.toEqual({
+        items: [],
+        hasMore: false,
+        totalScanned: 0,
+      });
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         '[LogStorage] 日期筛选值非法，必须为有效的 YYYY-MM-DD:',
         '2026-02-31'
       );
+    });
+
+    it('does not clamp explicit historical date ranges with relative timeRange', () => {
+      const bounds = resolveQueryBounds({
+        startDate: '2026-10-05',
+        endDate: '2026-10-05',
+        timeRange: '24H',
+      });
+
+      const expectedStart = new Date(2026, 9, 5, 0, 0, 0, 0).getTime();
+      const expectedEnd = new Date(2026, 9, 5, 23, 59, 59, 999).getTime();
+
+      expect(bounds.startMs).toBe(expectedStart);
+      expect(bounds.endMs).toBe(expectedEnd);
+      expect(bounds.hasInvalidInput).toBe(false);
+      expect(bounds.startMs!).toBeLessThan(bounds.endMs!);
     });
   });
 
@@ -190,10 +228,10 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
     expect(count).toBe(1);
 
     const queried = await storage.queryLogs();
-    expect(queried.length).toBe(1);
-    expect(queried[0].id).toBe('log-test-1');
-    expect(queried[0].module).toBe('AUTH');
-    expect(queried[0].event).toBe('AUTH_LOGIN_SUCCESS');
+    expect(queried.items.length).toBe(1);
+    expect(queried.items[0].id).toBe('log-test-1');
+    expect(queried.items[0].module).toBe('AUTH');
+    expect(queried.items[0].event).toBe('AUTH_LOGIN_SUCCESS');
   });
 
   describe('Multi-dimensional faceted query', () => {
@@ -239,45 +277,45 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
     });
 
     it('filters by module accurately', async () => {
-      const orderLogs = await storage.queryLogs({ module: 'ORDER' });
+      const { items: orderLogs } = await storage.queryLogs({ module: 'ORDER' });
       expect(orderLogs.length).toBe(2);
       expect(orderLogs.every((l) => l.module === 'ORDER')).toBe(true);
 
-      const playwrightLogs = await storage.queryLogs({ module: 'PLAYWRIGHT' });
+      const { items: playwrightLogs } = await storage.queryLogs({ module: 'PLAYWRIGHT' });
       expect(playwrightLogs.length).toBe(1);
       expect(playwrightLogs[0].id).toBe('log-3');
     });
 
     it('filters by level accurately', async () => {
-      const errorLogs = await storage.queryLogs({ level: 'ERROR' });
+      const { items: errorLogs } = await storage.queryLogs({ level: 'ERROR' });
       expect(errorLogs.length).toBe(1);
       expect(errorLogs[0].id).toBe('log-1');
     });
 
     it('filters by channelId accurately (case-insensitive)', async () => {
-      const meituanLogs = await storage.queryLogs({ channelId: 'meituan' });
+      const { items: meituanLogs } = await storage.queryLogs({ channelId: 'meituan' });
       expect(meituanLogs.length).toBe(1);
       expect(meituanLogs[0].orderNo).toBe('MT-20260916-001');
 
       // 验证大写查询依然命中存储为小写的 channelId
-      const upperMeituan = await storage.queryLogs({ channelId: 'MEITUAN' });
+      const { items: upperMeituan } = await storage.queryLogs({ channelId: 'MEITUAN' });
       expect(upperMeituan.length).toBe(1);
       expect(upperMeituan[0].id).toBe('log-1');
 
       // 验证混合大小写查询
-      const mixedDouyin = await storage.queryLogs({ channelId: 'DouYin' });
+      const { items: mixedDouyin } = await storage.queryLogs({ channelId: 'DouYin' });
       expect(mixedDouyin.length).toBe(1);
       expect(mixedDouyin[0].id).toBe('log-2');
     });
 
     it('filters by event accurately', async () => {
-      const failedEvents = await storage.queryLogs({ event: 'ORDER_TRANSFER_PMS_FAILED' });
+      const { items: failedEvents } = await storage.queryLogs({ event: 'ORDER_TRANSFER_PMS_FAILED' });
       expect(failedEvents.length).toBe(1);
       expect(failedEvents[0].id).toBe('log-1');
     });
 
     it('filters by onlyErrors flag', async () => {
-      const errAndWarn = await storage.queryLogs({ onlyErrors: true });
+      const { items: errAndWarn } = await storage.queryLogs({ onlyErrors: true });
       expect(errAndWarn.length).toBe(2);
       expect(errAndWarn.some((l) => l.id === 'log-1')).toBe(true); // ERROR
       expect(errAndWarn.some((l) => l.id === 'log-3')).toBe(true); // WARN
@@ -285,25 +323,25 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
     });
 
     it('searches by keyword across orderNo, message, and details', async () => {
-      const byOrder = await storage.queryLogs({ search: 'MT-20260916-001' });
+      const { items: byOrder } = await storage.queryLogs({ search: 'MT-20260916-001' });
       expect(byOrder.length).toBe(1);
       expect(byOrder[0].id).toBe('log-1');
 
-      const byDetails = await storage.queryLogs({ search: 'PMS-ATL-K01' });
+      const { items: byDetails } = await storage.queryLogs({ search: 'PMS-ATL-K01' });
       expect(byDetails.length).toBe(1);
       expect(byDetails[0].id).toBe('log-1');
     });
 
     it('filters by exact orderNo with case-insensitive substring match', async () => {
-      const exact = await storage.queryLogs({ orderNo: 'MT-20260916-001' });
+      const { items: exact } = await storage.queryLogs({ orderNo: 'MT-20260916-001' });
       expect(exact.length).toBe(1);
       expect(exact[0].id).toBe('log-1');
 
-      const partialLower = await storage.queryLogs({ orderNo: 'mt-20260916' });
+      const { items: partialLower } = await storage.queryLogs({ orderNo: 'mt-20260916' });
       expect(partialLower.length).toBe(1);
       expect(partialLower[0].id).toBe('log-1');
 
-      const nonExistent = await storage.queryLogs({ orderNo: 'NON_EXISTENT' });
+      const { items: nonExistent } = await storage.queryLogs({ orderNo: 'NON_EXISTENT' });
       expect(nonExistent.length).toBe(0);
     });
 
@@ -338,20 +376,20 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
 
       const date2Local = new Date(d2);
       const date2Str = `${date2Local.getFullYear()}-${String(date2Local.getMonth() + 1).padStart(2, '0')}-${String(date2Local.getDate()).padStart(2, '0')}`;
-      const singleDateRes = await storage.queryLogs({ date: date2Str });
+      const { items: singleDateRes } = await storage.queryLogs({ date: date2Str });
       expect(singleDateRes.some((l) => l.id === 'log-d2')).toBe(true);
       expect(singleDateRes.some((l) => l.id === 'log-d1')).toBe(false);
       expect(singleDateRes.some((l) => l.id === 'log-d3')).toBe(false);
 
       const date1Local = new Date(d1);
       const date1Str = `${date1Local.getFullYear()}-${String(date1Local.getMonth() + 1).padStart(2, '0')}-${String(date1Local.getDate()).padStart(2, '0')}`;
-      const rangeRes = await storage.queryLogs({ startDate: date1Str, endDate: date2Str });
+      const { items: rangeRes } = await storage.queryLogs({ startDate: date1Str, endDate: date2Str });
       expect(rangeRes.some((l) => l.id === 'log-d1')).toBe(true);
       expect(rangeRes.some((l) => l.id === 'log-d2')).toBe(true);
       expect(rangeRes.some((l) => l.id === 'log-d3')).toBe(false);
 
       // 验证平滑兼容非补零日期字符串与斜杠格式 (如 2026-9-15 与 2026/09/15)
-      const slashDateRes = await storage.queryLogs({
+      const { items: slashDateRes } = await storage.queryLogs({
         startDate: `${date1Local.getFullYear()}/${date1Local.getMonth() + 1}/${date1Local.getDate()}`,
         endDate: `${date2Local.getFullYear()}/${date2Local.getMonth() + 1}/${date2Local.getDate()}`,
       });
@@ -389,15 +427,15 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         },
       ]);
 
-      const claimRes = await storage.queryLogs({ taskActionStage: 'claim' });
+      const { items: claimRes } = await storage.queryLogs({ taskActionStage: 'claim' });
       expect(claimRes.some((l) => l.id === 'log-stage-claim')).toBe(true);
       expect(claimRes.some((l) => l.id === 'log-stage-import')).toBe(false);
 
-      const importRes = await storage.queryLogs({ taskActionStage: 'ORDER_IMPORT_SUBMIT' });
+      const { items: importRes } = await storage.queryLogs({ taskActionStage: 'ORDER_IMPORT_SUBMIT' });
       expect(importRes.some((l) => l.id === 'log-stage-import')).toBe(true);
       expect(importRes.some((l) => l.id === 'log-stage-claim')).toBe(false);
 
-      const resultRes = await storage.queryLogs({ taskActionStage: 'result' });
+      const { items: resultRes } = await storage.queryLogs({ taskActionStage: 'result' });
       expect(resultRes.some((l) => l.id === 'log-stage-result')).toBe(true);
       expect(resultRes.some((l) => l.id === 'log-stage-import')).toBe(false);
     });
@@ -407,7 +445,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         startDate: '2026-09-30',
         endDate: '2026-09-01',
       });
-      expect(res).toEqual([]);
+      expect(res.items).toEqual([]);
     });
 
     it('searches by keyword across apiUrl, apiParams, apiResponse, and msgType', async () => {
@@ -428,16 +466,16 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         },
       ]);
 
-      const byUrl = await storage.queryLogs({ search: 'orders/import' });
+      const { items: byUrl } = await storage.queryLogs({ search: 'orders/import' });
       expect(byUrl.some((l) => l.id === 'log-api-search')).toBe(true);
 
-      const byParam = await storage.queryLogs({ search: 'SECRET_PARAM_VAL' });
+      const { items: byParam } = await storage.queryLogs({ search: 'SECRET_PARAM_VAL' });
       expect(byParam.some((l) => l.id === 'log-api-search')).toBe(true);
 
-      const byResp = await storage.queryLogs({ search: 'PMS_RESP_888' });
+      const { items: byResp } = await storage.queryLogs({ search: 'PMS_RESP_888' });
       expect(byResp.some((l) => l.id === 'log-api-search')).toBe(true);
 
-      const byMsgType = await storage.queryLogs({ search: 'OTA_IMPORT_ORDER' });
+      const { items: byMsgType } = await storage.queryLogs({ search: 'OTA_IMPORT_ORDER' });
       expect(byMsgType.some((l) => l.id === 'log-api-search')).toBe(true);
     });
 
@@ -453,7 +491,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         },
       ]);
 
-      const res = await storage.queryLogs({ orderNo: 'MT-99887766' });
+      const { items: res } = await storage.queryLogs({ orderNo: 'MT-99887766' });
       expect(res.some((l) => l.id === 'log-ord-in-msg')).toBe(true);
     });
 
@@ -479,7 +517,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         },
       ]);
 
-      const res = await storage.queryLogs({ module: 'API' });
+      const { items: res } = await storage.queryLogs({ module: 'API' });
       expect(res.some((l) => l.id === 'log-api-sniffed')).toBe(true);
       expect(res.some((l) => l.id === 'log-plain-order')).toBe(false);
     });
@@ -516,7 +554,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
         },
       ]);
 
-      const res = await storage.queryLogs({ module: 'ORDER', taskActionStage: 'claim' });
+      const { items: res } = await storage.queryLogs({ module: 'ORDER', taskActionStage: 'claim' });
       expect(res.map((l) => l.id)).toEqual(['log-order-claim']);
     });
   });
@@ -571,7 +609,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       // 严谨断言：恰好删除了 2 条超过 7 天的记录
       expect(purgedCount).toBe(2);
 
-      const remainingLogs = await storage.queryLogs();
+      const { items: remainingLogs } = await storage.queryLogs();
       expect(remainingLogs.length).toBe(2);
 
       // 严谨断言：过期的 2 条日志已彻底不存在
@@ -599,7 +637,7 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
 
       await storage.clearAllStoredLogs();
       expect(await storage.countLogs()).toBe(0);
-      expect(await storage.queryLogs()).toEqual([]);
+      expect((await storage.queryLogs()).items).toEqual([]);
     });
   });
 
@@ -655,6 +693,153 @@ describe('LogStorageService (IndexedDB & Memory Dual-Engine)', () => {
       // 组合条件：模块与级别匹配
       expect(matchesLogFilter(sampleEntry, { module: 'ORDER', level: 'INFO', search: '王五' })).toBe(true);
       expect(matchesLogFilter(sampleEntry, { module: 'AUTH', level: 'INFO' })).toBe(false);
+    });
+  });
+
+  describe('Cursor-based streaming pagination', () => {
+    it('paginates sequentially across batches using nextCursor without missing or duplicating records', async () => {
+      const baseTime = Date.now();
+      const entries: SystemLogEntry[] = [];
+      for (let i = 0; i < 50; i++) {
+        entries.push({
+          id: `log-page-${String(i).padStart(3, '0')}`,
+          timestamp: formatLogTimestamp(new Date(baseTime + i * 100)),
+          createdAt: baseTime + i * 100,
+          level: 'INFO',
+          module: 'ORDER',
+          message: `分页批次测试日志 #${i}`,
+        });
+      }
+      await storage.saveLogs(entries);
+
+      // 第一页：pageSize = 20
+      const page1 = await storage.queryLogs(undefined, { pageSize: 20 });
+      expect(page1.items.length).toBe(20);
+      expect(page1.hasMore).toBe(true);
+      expect(page1.nextCursor).toBeDefined();
+      expect(page1.nextCursor?.id).toBe(page1.items[19].id);
+
+      // 第二页：继续从 page1.nextCursor 分页
+      const page2 = await storage.queryLogs(undefined, {
+        pageSize: 20,
+        cursor: page1.nextCursor,
+      });
+      expect(page2.items.length).toBe(20);
+      expect(page2.hasMore).toBe(true);
+      expect(page2.nextCursor).toBeDefined();
+      expect(page2.nextCursor?.id).toBe(page2.items[19].id);
+
+      // 第三页：剩余 10 条
+      const page3 = await storage.queryLogs(undefined, {
+        pageSize: 20,
+        cursor: page2.nextCursor,
+      });
+      expect(page3.items.length).toBe(10);
+      expect(page3.hasMore).toBe(false);
+      expect(page3.nextCursor).toBeUndefined();
+
+      // 验证 3 页数据完整遍历全部 50 条，无重复、无遗漏
+      const allIds = [
+        ...page1.items.map((l) => l.id),
+        ...page2.items.map((l) => l.id),
+        ...page3.items.map((l) => l.id),
+      ];
+      expect(allIds.length).toBe(50);
+      expect(new Set(allIds).size).toBe(50);
+    });
+
+    it('returns hasMore as false when matching records count exactly equals pageSize', async () => {
+      const baseTime = Date.now();
+      const entries: SystemLogEntry[] = [];
+      for (let i = 0; i < 20; i++) {
+        entries.push({
+          id: `log-exact-${String(i).padStart(2, '0')}`,
+          timestamp: formatLogTimestamp(new Date(baseTime + i * 100)),
+          createdAt: baseTime + i * 100,
+          level: 'INFO',
+          module: 'ORDER',
+          message: `恰好满页测试 #${i}`,
+        });
+      }
+      await storage.saveLogs(entries);
+
+      const result = await storage.queryLogs(undefined, { pageSize: 20 });
+      expect(result.items.length).toBe(20);
+      expect(result.hasMore).toBe(false);
+      expect(result.nextCursor).toBeUndefined();
+    });
+
+    it('accurately navigates across multiple entries sharing the exact same millisecond timestamp', async () => {
+      const fixedTime = 1727575200000;
+      const sameMsEntries: SystemLogEntry[] = [
+        {
+          id: 'log-same-ms-01',
+          timestamp: '2026-09-29 10:00:00.000',
+          createdAt: fixedTime,
+          level: 'INFO',
+          message: '同毫秒日志 1',
+        },
+        {
+          id: 'log-same-ms-02',
+          timestamp: '2026-09-29 10:00:00.000',
+          createdAt: fixedTime,
+          level: 'INFO',
+          message: '同毫秒日志 2',
+        },
+        {
+          id: 'log-same-ms-03',
+          timestamp: '2026-09-29 10:00:00.000',
+          createdAt: fixedTime,
+          level: 'INFO',
+          message: '同毫秒日志 3',
+        },
+        {
+          id: 'log-same-ms-04',
+          timestamp: '2026-09-29 10:00:00.000',
+          createdAt: fixedTime,
+          level: 'INFO',
+          message: '同毫秒日志 4',
+        },
+        {
+          id: 'log-same-ms-05',
+          timestamp: '2026-09-29 10:00:00.000',
+          createdAt: fixedTime,
+          level: 'INFO',
+          message: '同毫秒日志 5',
+        },
+      ];
+      await storage.saveLogs(sameMsEntries);
+
+      // 第一页拉取 2 条
+      const page1 = await storage.queryLogs(undefined, { pageSize: 2 });
+      expect(page1.items.length).toBe(2);
+      expect(page1.hasMore).toBe(true);
+      expect(page1.nextCursor).toBeDefined();
+
+      // 第二页从游标继续拉取 2 条
+      const page2 = await storage.queryLogs(undefined, {
+        pageSize: 2,
+        cursor: page1.nextCursor,
+      });
+      expect(page2.items.length).toBe(2);
+      expect(page2.hasMore).toBe(true);
+      expect(page2.nextCursor).toBeDefined();
+
+      // 第三页拉取最后 1 条
+      const page3 = await storage.queryLogs(undefined, {
+        pageSize: 2,
+        cursor: page2.nextCursor,
+      });
+      expect(page3.items.length).toBe(1);
+      expect(page3.hasMore).toBe(false);
+
+      const allIds = [
+        ...page1.items.map((l) => l.id),
+        ...page2.items.map((l) => l.id),
+        ...page3.items.map((l) => l.id),
+      ];
+      expect(allIds.length).toBe(5);
+      expect(new Set(allIds).size).toBe(5);
     });
   });
 });

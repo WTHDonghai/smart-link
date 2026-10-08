@@ -6,12 +6,14 @@ import {
   setFilterSearch,
   setFilterDateRange,
   resetDateFilter,
+  setFilterTimeRange,
   setFilterTaskStage,
   resetLogFilters,
   toggleAutoScroll,
   clearLogs,
   clearAllLogs,
   queryLogsFromStorage,
+  loadMoreHistoricalLogs,
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
@@ -31,6 +33,7 @@ import {
   Code2,
   Calendar,
   RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
 import { LogTaskMetaChips } from './LogTaskMetaChips';
@@ -49,6 +52,10 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   const logs = useAppSelector((state) => state.systemLog.logs);
   const historicalLogs = useAppSelector((state) => state.systemLog.historicalLogs);
   const isQuerying = useAppSelector((state) => state.systemLog.isQuerying);
+  const queryError = useAppSelector((state) => state.systemLog.queryError);
+  const isQueryingMore = useAppSelector((state) => state.systemLog.isQueryingMore);
+  const hasMoreHistorical = useAppSelector((state) => state.systemLog.hasMoreHistorical);
+  const filterTimeRange = useAppSelector((state) => state.systemLog.filterTimeRange);
   const filterLevel = useAppSelector((state) => state.systemLog.filterLevel);
   const filterModule = useAppSelector((state) => state.systemLog.filterModule);
   const filterSearch = useAppSelector((state) => state.systemLog.filterSearch);
@@ -90,19 +97,24 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   }, []);
 
   const handleCopyText = async (key: string, text: string) => {
-    const success = await copyToClipboard(text);
-    if (success) {
-      setCopiedKey(key);
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
+    try {
+      const success = await copyToClipboard(text);
+      if (success) {
+        setCopiedKey(key);
+        if (copyTimerRef.current) {
+          clearTimeout(copyTimerRef.current);
+        }
+        copyTimerRef.current = setTimeout(() => {
+          setCopiedKey((curr) => (curr === key ? null : curr));
+          copyTimerRef.current = null;
+        }, 1500);
+        dispatch(showToast({ type: 'success', title: '已复制到剪贴板' }));
+      } else {
+        dispatch(showToast({ type: 'error', title: '复制失败，请手动选择复制' }));
       }
-      copyTimerRef.current = setTimeout(() => {
-        setCopiedKey((curr) => (curr === key ? null : curr));
-        copyTimerRef.current = null;
-      }, 1500);
-      dispatch(showToast({ type: 'success', title: '已复制到剪贴板' }));
-    } else {
-      dispatch(showToast({ type: 'error', title: '复制失败，请手动选择复制' }));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : '剪贴板访问受限';
+      dispatch(showToast({ type: 'error', title: '复制失败', description: msg }));
     }
   };
 
@@ -120,6 +132,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       filterModule !== 'ALL' ||
       Boolean(filterSearch && filterSearch.trim()) ||
       hasCustomDate ||
+      filterTimeRange !== '24H' ||
       filterTaskStage !== 'ALL'
     );
   }, [
@@ -127,6 +140,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     filterModule,
     filterSearch,
     hasCustomDate,
+    filterTimeRange,
     filterTaskStage,
   ]);
 
@@ -136,7 +150,12 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       return historicalLogs;
     }
 
-    // 2. 实时流模式或内存/单测同步过滤模式
+    // 2. 若当前正在异步检索历史存储或查询报错，不展示不完整的内存临时结果
+    if (isFilterActive && (isQuerying || queryError)) {
+      return [];
+    }
+
+    // 3. 实时流模式或内存/单测同步过滤模式
     const bounds = hasCustomDate
       ? parseDateBounds(filterStartDate, filterEndDate)
       : { startMs: null, endMs: null };
@@ -150,6 +169,7 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
       module: filterModule,
       startDate: hasCustomDate ? filterStartDate : undefined,
       endDate: hasCustomDate ? filterEndDate : undefined,
+      timeRange: filterTimeRange,
       taskActionStage: filterTaskStage,
       search: filterSearch,
     };
@@ -158,10 +178,13 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   }, [
     isFilterActive,
     historicalLogs,
+    isQuerying,
+    queryError,
     logs,
     hasCustomDate,
     filterLevel,
     filterModule,
+    filterTimeRange,
     filterTaskStage,
     filterStartDate,
     filterEndDate,
@@ -177,8 +200,9 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     const filterParams: LogFilterParams = {
       level: filterLevel,
       module: filterModule,
-      startDate: filterStartDate,
-      endDate: filterEndDate,
+      startDate: hasCustomDate ? filterStartDate : undefined,
+      endDate: hasCustomDate ? filterEndDate : undefined,
+      timeRange: hasCustomDate ? undefined : filterTimeRange,
       taskActionStage: filterTaskStage,
       search: filterSearch,
     };
@@ -191,10 +215,12 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   }, [
     dispatch,
     isFilterActive,
+    hasCustomDate,
     filterLevel,
     filterModule,
     filterStartDate,
     filterEndDate,
+    filterTimeRange,
     filterTaskStage,
     filterSearch,
   ]);
@@ -251,6 +277,19 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
     );
   };
 
+  const handleRetryQuery = () => {
+    const filterParams: LogFilterParams = {
+      level: filterLevel,
+      module: filterModule,
+      startDate: hasCustomDate ? filterStartDate : undefined,
+      endDate: hasCustomDate ? filterEndDate : undefined,
+      timeRange: hasCustomDate ? undefined : filterTimeRange,
+      taskActionStage: filterTaskStage,
+      search: filterSearch,
+    };
+    void dispatch(queryLogsFromStorage(filterParams));
+  };
+
   const renderLevelBadge = (level: LogLevel) => {
     switch (level) {
       case 'PLAYWRIGHT':
@@ -279,6 +318,9 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
             {isFilterActive ? (
               <>
                 筛选命中 <span className="font-mono font-medium text-[#0b1c30]">{filteredLogs.length}</span> 条历史记录
+                {hasMoreHistorical && (
+                  <span className="text-amber-700 ml-1 font-normal">（可继续加载）</span>
+                )}
               </>
             ) : (
               <>
@@ -468,6 +510,34 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
             </div>
           </div>
 
+          {/* 时间跨度快捷选择 */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-xs text-[#737686] font-medium mr-0.5 select-none shrink-0">时间范围:</span>
+            <div className="inline-flex rounded-lg border border-[#dce9ff] p-0.5 bg-[#f8faff] gap-0.5">
+              {(
+                [
+                  { key: '1H', label: '近1小时' },
+                  { key: '6H', label: '近6小时' },
+                  { key: '24H', label: '近24小时' },
+                  { key: '3D', label: '近3天' },
+                ] as const
+              ).map((range) => (
+                <button
+                  key={range.key}
+                  type="button"
+                  onClick={() => dispatch(setFilterTimeRange(range.key))}
+                  className={`h-7 px-2 rounded text-xs font-medium transition-colors cursor-pointer select-none ${
+                    filterTimeRange === range.key
+                      ? 'bg-[#004ac6] text-white font-semibold shadow-2xs'
+                      : 'text-[#434655] hover:bg-white hover:text-[#0b1c30]'
+                  }`}
+                >
+                  {range.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* 重置所有筛选按钮 */}
           {isFilterActive && (
             <button
@@ -573,6 +643,8 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
           <div className="flex items-center gap-3 text-[11px]">
             {isQuerying ? (
               <span className="text-amber-400 animate-pulse">● 正在检索历史存储...</span>
+            ) : queryError ? (
+              <span className="text-rose-400">● 存储检索异常</span>
             ) : isFilterActive ? (
               <span className="text-cyan-400">● 历史持久化过滤中</span>
             ) : (
@@ -587,24 +659,38 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
           ref={scrollContainerRef}
           className="flex-1 min-h-0 p-4 font-mono text-xs overflow-y-auto space-y-2.5 select-text"
         >
-          {filteredLogs.length === 0 ? (
+          {isQuerying && historicalLogs === null ? (
+            <div className="py-16 flex flex-col items-center justify-center gap-3 text-gray-400 select-none">
+              <div className="w-6 h-6 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+              <p className="text-xs text-cyan-300 font-mono">正在检索历史持久化记录...</p>
+            </div>
+          ) : queryError ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-3 select-none">
+              <div className="flex items-center gap-2 text-rose-400 text-xs font-mono">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>检索历史存储失败: {queryError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRetryQuery}
+                className="px-3 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-700/60 text-rose-200 rounded text-xs font-medium cursor-pointer inline-flex items-center gap-1 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>重新查询</span>
+              </button>
+            </div>
+          ) : filteredLogs.length === 0 ? (
             <div className="py-12 flex flex-col items-center justify-center gap-2.5 text-gray-400 select-none">
-              {isQuerying ? (
-                <p className="text-xs text-amber-400 animate-pulse">正在检索历史持久化记录...</p>
-              ) : (
-                <>
-                  <p className="text-xs">暂无匹配的系统运行日志</p>
-                  {isFilterActive && (
-                    <button
-                      type="button"
-                      onClick={() => dispatch(resetLogFilters())}
-                      className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-600 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>清空所有筛选条件</span>
-                    </button>
-                  )}
-                </>
+              <p className="text-xs">暂无匹配的系统运行日志</p>
+              {isFilterActive && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(resetLogFilters())}
+                  className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-600 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>清空所有筛选条件</span>
+                </button>
               )}
             </div>
           ) : (
@@ -656,6 +742,33 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
                 </div>
               </div>
             ))
+          )}
+
+          {/* 历史日志分页加载底栏 */}
+          {isFilterActive && historicalLogs !== null && historicalLogs.length > 0 && (
+            <div className="flex items-center justify-center p-3 mt-2 border-t border-[#e2e8f0]/40">
+              {hasMoreHistorical ? (
+                <button
+                  type="button"
+                  disabled={isQueryingMore}
+                  onClick={() => dispatch(loadMoreHistoricalLogs())}
+                  className="h-8 px-4 bg-[#004ac6] hover:bg-[#003da6] disabled:opacity-60 text-white rounded-lg text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none inline-flex items-center gap-1.5"
+                >
+                  {isQueryingMore ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>加载中...</span>
+                    </>
+                  ) : (
+                    <span>加载更多历史日志（已载入 {historicalLogs.length} 条）</span>
+                  )}
+                </button>
+              ) : (
+                <span className="text-xs text-[#94a3b8] select-none font-mono">
+                  已加载全部匹配历史记录（共 {historicalLogs.length} 条）
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>

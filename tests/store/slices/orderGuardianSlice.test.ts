@@ -511,5 +511,54 @@ describe('orderGuardianSlice reducer', () => {
       const addLogsDispatched = dispatch.mock.calls.some((call) => call[0]?.type === 'systemLog/addLogs');
       expect(addLogsDispatched).toBe(false);
     });
+
+    it('syncDutyStatusThunk 能够正确同步同一毫秒产生的新增日志', async () => {
+      const { queryDutyStatus } = await import('../../../src/services/dutyBridge');
+      resetDutyLogSyncCursor();
+      const mockQuery = vi.mocked(queryDutyStatus);
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: {
+          channelDuty: {},
+        },
+      });
+
+      // 第一次轮询：在毫秒 500 收到 log-a
+      mockQuery.mockResolvedValueOnce({
+        channels: {},
+        coordinatorStatus: 'IDLE',
+        confirmImportEnabled: true,
+        logs: [
+          { id: 'log-a', createdAt: 500, timestamp: '500', level: 'INFO', module: 'DUTY_TASK', message: 'Task A' },
+        ],
+      });
+
+      await syncDutyStatusThunk()(dispatch, getState, undefined);
+      dispatch.mockClear();
+
+      // 第二次轮询：在同一毫秒 500 又产生了 log-b，宿主以 >= 500 返回两条记录
+      mockQuery.mockResolvedValueOnce({
+        channels: {},
+        coordinatorStatus: 'IDLE',
+        confirmImportEnabled: true,
+        logs: [
+          { id: 'log-a', createdAt: 500, timestamp: '500', level: 'INFO', module: 'DUTY_TASK', message: 'Task A' },
+          { id: 'log-b', createdAt: 500, timestamp: '500', level: 'INFO', module: 'DUTY_TASK', message: 'Task B' },
+        ],
+      });
+
+      await syncDutyStatusThunk()(dispatch, getState, undefined);
+      expect(mockQuery).toHaveBeenLastCalledWith(500);
+
+      // 验证第二次分发包含了同毫秒的 log-b
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'systemLog/addLogs',
+          payload: expect.arrayContaining([
+            expect.objectContaining({ id: 'log-b' }),
+          ]),
+        })
+      );
+    });
   });
 });

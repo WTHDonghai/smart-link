@@ -6,6 +6,8 @@ import {
   LogFilterParams,
   DutyTaskMessageType,
   TaskActionStage,
+  LogQueryResult,
+  LogQueryOptions,
 } from '../types';
 import { logStorage, formatLogTimestamp } from './logStorage';
 import { resolveTaskActionStage } from '../utils/taskStage';
@@ -55,6 +57,7 @@ export class LoggerService {
   private isInitialized = false;
   private queuedEntryIds: Set<string> = new Set();
   private flushPromise: Promise<void> | null = null;
+  private droppedLogCount = 0;
   private tsLogger: TsLogger<SystemLogEntry>;
 
   constructor() {
@@ -66,7 +69,7 @@ export class LoggerService {
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       window.addEventListener('beforeunload', () => {
-        void this.flushStorage();
+        void this.prepareForShutdown();
       });
     }
   }
@@ -225,10 +228,17 @@ export class LoggerService {
       } catch (error) {
         // 持久化失败时回填待写入条目，等待下一次刷新重试，避免日志静默丢失；设置容量上限防止内存膨胀
         this.writeBuffer = [...entriesToSave, ...this.writeBuffer];
-        if (this.writeBuffer.length > MAX_RETRY_BUFFER_SIZE) {
+        const overflow = this.writeBuffer.length - MAX_RETRY_BUFFER_SIZE;
+        if (overflow > 0) {
+          this.droppedLogCount += overflow;
           this.writeBuffer = this.writeBuffer.slice(-MAX_RETRY_BUFFER_SIZE);
+          console.error(
+            `[LoggerService] 日志持久化失败且重试队列溢出，已丢弃 ${overflow} 条最旧日志（累计丢弃: ${this.droppedLogCount} 条）:`,
+            error
+          );
+        } else {
+          console.error('[LoggerService] 日志持久化失败，已保留待重试:', error);
         }
-        console.error('[LoggerService] 日志持久化失败，已保留待重试:', error);
       } finally {
         this.flushPromise = null;
       }
@@ -396,13 +406,18 @@ export class LoggerService {
   }
 
   /**
-   * 多维查询持久化日志
+   * 多维查询持久化日志（支持游标流式分页）
    */
-  async queryLogs(filter?: LogFilterParams): Promise<SystemLogEntry[]> {
-    if (!this.ownsPersistentStorage) return [];
+  async queryLogs(
+    filter?: LogFilterParams,
+    options?: LogQueryOptions
+  ): Promise<LogQueryResult> {
+    if (!this.ownsPersistentStorage) {
+      return { items: [], hasMore: false, totalScanned: 0 };
+    }
 
     await this.flushStorage();
-    return logStorage.queryLogs(filter);
+    return logStorage.queryLogs(filter, options);
   }
 
   /**
@@ -414,18 +429,57 @@ export class LoggerService {
   }
 
   /**
-   * 清空所有持久化日志
+   * 清空所有持久化日志（串行化保障，等待可能正在进行的 flush 完成，避免清库后旧 flush 写回脏数据）
    */
   async clearAll(): Promise<void> {
     if (!this.ownsPersistentStorage) return;
 
-    this.writeBuffer = [];
-    this.queuedEntryIds.clear();
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+
+    // 关键：必须等待当前可能正在执行的写盘操作结束，防止清库后旧事务写回脏数据
+    if (this.flushPromise) {
+      await this.flushPromise.catch(() => {});
+    }
+
+    this.writeBuffer = [];
+    this.queuedEntryIds.clear();
     await logStorage.clearAllStoredLogs();
+  }
+
+  /**
+   * 应用程序退出前的排空握手，确保所有待写入日志完全持久化
+   */
+  async prepareForShutdown(): Promise<void> {
+    if (!this.ownsPersistentStorage) return;
+
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    if (this.flushPromise) {
+      await this.flushPromise.catch(() => {});
+    }
+
+    if (this.writeBuffer.length > 0) {
+      const entriesToSave = [...this.writeBuffer];
+      this.writeBuffer = [];
+      try {
+        await logStorage.saveLogs(entriesToSave);
+      } catch (err) {
+        console.error('[LoggerService] 应用关闭前排空日志失败:', err);
+      }
+    }
+  }
+
+  /**
+   * 获取因持久化故障及重试缓冲区溢出而丢弃的日志总数
+   */
+  getDroppedLogCount(): number {
+    return this.droppedLogCount;
   }
 
   /**
