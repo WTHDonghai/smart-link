@@ -11,10 +11,8 @@ import {
   DouyinDutyErrorCode,
   DutyExecutionError,
 } from './douyinDutyContracts';
-import {
-  DutyOrderStatus,
-  type ParsedDutyTaskContext,
-} from '../../dutyTaskContext';
+import { DutyOrderStatus } from '../../dutyTaskContext';
+import type { DutyTaskLogSink } from '../../dutyTaskLogger';
 import { getDouyinOrderUrl } from '@/src/config/otaUrls';
 import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import {
@@ -154,34 +152,20 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
   }
 
   /**
-   * 解析上下文或参数得到确切的订单状态枚举 (DutyOrderStatus)
-   * 优先复用外层统一解析的 context.orderStatus，避免重复解析
-   */
-  private resolveDutyOrderStatus(
-    context?: ParsedDutyTaskContext | DutyOrderStatus
-  ): DutyOrderStatus {
-    if (!context) {
-      return DutyOrderStatus.NEW;
-    }
-    if (typeof context === 'string') {
-      return context;
-    }
-    return context.orderStatus;
-  }
-
-  /**
    * 页面操作：刷新抖音待处理列表并返回待处理订单概要（权威网络响应为唯一源，带防抖补偿与请求合并）
+   * orderStatus 指定目标状态 Tab（新订/取消），缺省采集新订
    */
   public async collectUnhandledOrders(
-    context?: ParsedDutyTaskContext | DutyOrderStatus
+    orderStatus: DutyOrderStatus = DutyOrderStatus.NEW,
+    audit?: DutyTaskLogSink
   ): Promise<DutyUnhandledOrderSummary[]> {
     const page = this.getActivePage('采集待处理订单');
-    const orderStatus = this.resolveDutyOrderStatus(context);
     return this.listCollector.collectUnhandledOrders(
       page,
       orderStatus,
       (fn) => this.runWithMutex(fn),
-      (p, s) => this.refreshOrderList(p, s)
+      (p, s) => this.refreshOrderList(p, s),
+      audit
     );
   }
 

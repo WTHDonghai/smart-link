@@ -300,6 +300,7 @@ export type LogEventType =
 
 export type TaskActionStage =
   | 'claim'
+  | 'collect-order'
   | 'execute'
   | 'result'
   | 'report'

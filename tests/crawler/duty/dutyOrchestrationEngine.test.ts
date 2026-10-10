@@ -365,6 +365,10 @@ describe('dutyOrchestrationEngine', () => {
             expect.objectContaining({
               msgType: 'OTA_CANCEL_ORDER',
               businessId: 'ORD-102',
+              data: {
+                channelCode: 'MOCK_OTA',
+                reason: '待处理取消订单',
+              },
             }),
           ],
         })
@@ -601,15 +605,20 @@ describe('dutyOrchestrationEngine', () => {
       );
     });
 
-    it('当中台下发 OTA_CANCEL_ORDER 任务时，阻断执行并向中台提交 TASK_TYPE_UNSUPPORTED 且 retryable=false', async () => {
+    it('当中台下发 OTA_CANCEL_ORDER 任务时，应路由渠道执行器并提交 SUCCESS 回执', async () => {
       const task: DutyClaimedTask = {
-        id: 'task-cancel-unsupported',
+        id: 'task-cancel-order-1',
         businessId: 'ORD-CANCEL-001',
         businessType: 'OTA_MIGRATION',
         msgType: 'OTA_CANCEL_ORDER',
         stationId: 'st-unit-test-1',
         leaseToken: 'lease-tok-cancel-1',
-        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+        data: Buffer.from(JSON.stringify({ channelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      mockRunner.executeResult = {
+        status: 'SUCCEEDED',
+        result: { acknowledged: true },
       };
 
       vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
@@ -621,17 +630,18 @@ describe('dutyOrchestrationEngine', () => {
       await engine.startDuty('MOCK_OTA');
       await new Promise((resolve) => setTimeout(resolve, 60));
 
-      expect(mockRunner.executedTasks).toHaveLength(0);
+      expect(mockRunner.executedTasks).toEqual([task]);
       expect(submitSpy).toHaveBeenCalledWith(
-        'task-cancel-unsupported',
+        'task-cancel-order-1',
         expect.objectContaining({
-          status: 'FAIL',
-          retryable: false,
-          errorMessage: expect.stringContaining('OTA_CANCEL_ORDER'),
+          status: 'SUCCESS',
+          businessId: 'ORD-CANCEL-001',
+          msgType: 'OTA_CANCEL_ORDER',
           details: [
             expect.objectContaining({
-              status: 'FAIL',
-              ackData: Buffer.from(JSON.stringify({ errorCode: 'TASK_TYPE_UNSUPPORTED' }), 'utf-8').toString('base64'),
+              status: 'SUCCESS',
+              businessId: 'ORD-CANCEL-001',
+              ackData: Buffer.from(JSON.stringify({ result: { acknowledged: true } }), 'utf-8').toString('base64'),
             }),
           ],
         })

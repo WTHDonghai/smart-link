@@ -8,6 +8,7 @@ import {
 import {
   DutyOrderStatus,
 } from '../../dutyTaskContext';
+import { emitDutyTaskLog, type DutyTaskLogSink } from '../../dutyTaskLogger';
 import {
   isDouyinBookOrderListUrl,
   isDouyinRefundOrderListUrl,
@@ -188,7 +189,8 @@ export class DouyinListCollector {
     page: Page,
     orderStatus: DutyOrderStatus = DutyOrderStatus.NEW,
     runWithMutex: <T>(action: () => Promise<T>) => Promise<T>,
-    refreshFn: (page: Page, status: DutyOrderStatus) => Promise<Response> = (p, s) => this.refreshOrderList(p, s)
+    refreshFn: (page: Page, status: DutyOrderStatus) => Promise<Response> = (p, s) => this.refreshOrderList(p, s),
+    audit?: DutyTaskLogSink
   ): Promise<DutyUnhandledOrderSummary[]> {
     await assertNoDouyinPageRisk(page);
 
@@ -232,6 +234,14 @@ export class DouyinListCollector {
         const orders = orderStatus === DutyOrderStatus.CANCEL
           ? parseDouyinRefundOrderListResponse(parsedPayload)
           : parseDouyinBookOrderListResponse(parsedPayload);
+
+        emitDutyTaskLog('DOUYIN', audit, {
+          level: 'INFO',
+          event: 'DOUYIN_ORDER_COLLECT_RESULT',
+          message: `[抖音订单采集] 「${tabLabel}」列表刷新完成，解析到 ${orders.length} 笔待处理订单`,
+          taskActionStage: 'collect-order',
+          meta: { orderStatus, tabLabel, orderCount: orders.length },
+        });
 
         await updateVisualTrackerStatus(
           page,

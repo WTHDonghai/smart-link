@@ -30,6 +30,12 @@ const STAGE_CHIP_CONFIG: Record<TaskActionStage, StageChipConfig> = {
     getInactiveClass: () =>
       'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/40 hover:text-indigo-200',
   },
+  'collect-order': {
+    cancelName: '订单采集',
+    activeClass: 'bg-blue-600 text-white border border-blue-400 shadow-2xs',
+    getInactiveClass: () =>
+      'bg-blue-500/25 text-blue-300 border border-blue-500/40 hover:bg-blue-500/40 hover:text-blue-200',
+  },
   execute: {
     cancelName: '执行',
     activeClass: 'bg-blue-600 text-white border border-blue-400 shadow-2xs',

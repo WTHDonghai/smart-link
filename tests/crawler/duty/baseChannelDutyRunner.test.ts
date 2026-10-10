@@ -49,6 +49,7 @@ describe('BaseChannelDutyRunner 抽象基类与能力矩阵', () => {
       'OTA_IMPORT_ORDER',
       'OTA_CONFIRM_IMPORT',
       'OTA_CONFIRM_CANCEL',
+      'OTA_CANCEL_ORDER',
     ]);
   });
 

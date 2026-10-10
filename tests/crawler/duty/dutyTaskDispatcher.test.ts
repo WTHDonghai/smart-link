@@ -11,7 +11,9 @@ import {
 import {
   BaseChannelDutyRunner,
   type ChannelDutyRunner,
-} from '../../../src/crawler/duty/dutyContracts';
+  type DutyUnhandledOrderSummary,
+} from '@/src/crawler/duty/dutyContracts';
+import type { DutyTaskLogSink } from '@/src/crawler/duty/dutyTaskLogger';
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import * as channelApi from '../../../src/services/channelApi';
@@ -38,6 +40,7 @@ class MockDutyRunner extends BaseChannelDutyRunner {
   };
 
   public collectCalls = 0;
+  public collectAudits: Array<DutyTaskLogSink | undefined> = [];
   public inspectCalls: string[] = [];
   public confirmImportCalls: Array<{ confirmNo: string; otaOrderId: string }> = [];
   public confirmCancelCalls: string[] = [];
@@ -51,8 +54,12 @@ class MockDutyRunner extends BaseChannelDutyRunner {
   public async stop(): Promise<void> {
     this.running = false;
   }
-  public async collectUnhandledOrders() {
+  public async collectUnhandledOrders(
+    _orderStatus?: unknown,
+    audit?: DutyTaskLogSink
+  ): Promise<DutyUnhandledOrderSummary[]> {
     this.collectCalls++;
+    this.collectAudits.push(audit);
     return this.unhandledOrdersResult;
   }
   public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
@@ -106,12 +113,27 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
         data: '',
       };
 
-      const result = await dispatchDutyTask(task, runner);
+      const auditEntries: Array<Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>> = [];
+      const result = await dispatchDutyTask(task, runner, (entry) => auditEntries.push(entry));
+
       expect(result.status).toBe('SUCCEEDED');
       expect(runner.collectCalls).toBe(1);
       expect(result.result?.otaChannelCode).toBe('MEITUAN');
       expect(result.result?.recordCount).toBe(1);
       expect(result.result?.orders).toEqual(runner.unhandledOrdersResult);
+      const collectAudit = runner.collectAudits[0];
+      expect(collectAudit).toBeDefined();
+      collectAudit?.({
+        level: 'WARN',
+        message: '采集审计日志测试',
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]).toMatchObject({
+        taskId: 'task-coll-1',
+        msgType: 'OTA_COLLECT_ORDER',
+        channelId: 'MEITUAN',
+        module: 'DUTY_TASK',
+      });
     });
 
     it('should return COLLECT_FAILED when runner.collectUnhandledOrders throws', async () => {
@@ -649,6 +671,32 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('SUCCEEDED');
       expect(result.result?.acknowledged).toBe(true);
       expect(runner.confirmCancelCalls).toEqual(['ORD-CANCEL-1']);
+    });
+
+    it('should route OTA_CANCEL_ORDER to runner.confirmCancel using channelCode contract', async () => {
+      const taskPayload = {
+        channelCode: 'MEITUAN',
+        otaOrderId: 'ORD-CANCEL-2',
+        reason: '待处理取消订单',
+      };
+      const task: DutyClaimedTask = {
+        id: 'task-cancel-order-1',
+        businessId: 'ORD-CANCEL-2',
+        businessType: 'ORDER',
+        msgType: 'OTA_CANCEL_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('SUCCEEDED');
+      expect(result.result).toEqual({
+        acknowledged: true,
+        orderId: 'ORD-CANCEL-2',
+        otaOrderId: 'ORD-CANCEL-2',
+      });
+      expect(runner.confirmCancelCalls).toEqual(['ORD-CANCEL-2']);
     });
 
     it('should fail fast with ORDER_ID_MISSING when orderId is empty in OTA_CONFIRM_CANCEL', async () => {

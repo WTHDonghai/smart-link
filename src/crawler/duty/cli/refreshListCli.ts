@@ -57,7 +57,7 @@ async function main() {
     await runner.start();
     try {
       const orders = isDouyin
-        ? await (runner as DouyinDutyRunner).collectUnhandledOrders(tab || DutyOrderStatus.NEW)
+        ? await runner.collectUnhandledOrders(tab || DutyOrderStatus.NEW)
         : await runner.collectUnhandledOrders();
       console.log(`[DutyRefreshList:CLI] ${channelLabel}订单列表接口已返回并通过业务解析。`);
       console.log(`[DutyRefreshList:CLI] 待处理订单数量: ${orders.length}`);

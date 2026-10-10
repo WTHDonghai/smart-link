@@ -5,6 +5,7 @@ import type { SystemLogEntry } from '../../src/types';
 describe('resolveTaskActionStage 任务操作阶段推导与解析纯函数', () => {
   it('优先使用显式声明的 taskActionStage 字段并做标准化转换', () => {
     expect(resolveTaskActionStage({ taskActionStage: 'CLAIM' })).toBe('claim');
+    expect(resolveTaskActionStage({ taskActionStage: 'COLLECT_ORDER' })).toBe('collect-order');
     expect(resolveTaskActionStage({ taskActionStage: 'claim' })).toBe('claim');
     expect(resolveTaskActionStage({ taskActionStage: 'ORDER_IMPORT_SUBMIT' })).toBe('order-import-submit');
     expect(resolveTaskActionStage({ taskActionStage: 'order-import-submit' })).toBe('order-import-submit');
@@ -88,6 +89,8 @@ describe('resolveTaskActionStage 任务操作阶段推导与解析纯函数', ()
     const keys = TASK_STAGES.map((s) => s.key);
     expect(keys).toContain('ALL');
     expect(keys).toContain('claim');
+    expect(keys).toContain('collect-order');
+    expect(TASK_STAGES.find((stage) => stage.key === 'collect-order')?.label).toBe('订单采集');
     expect(keys).toContain('order-import-submit');
     expect(keys).toContain('result');
     expect(keys).toContain('execute');

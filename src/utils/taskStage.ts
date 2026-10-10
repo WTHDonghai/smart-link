@@ -10,6 +10,7 @@ export interface TaskStageItem {
 export const TASK_STAGES: TaskStageItem[] = [
   { key: 'ALL', label: '全部' },
   { key: 'claim', label: '认领 claim' },
+  { key: 'collect-order', label: '订单采集' },
   { key: 'order-import-submit', label: '入单提交 order-import-submit' },
   { key: 'result', label: '结果 result' },
   { key: 'execute', label: '执行 execute' },
@@ -36,6 +37,7 @@ export function resolveTaskActionStage(
     ) {
       return 'order-import-submit';
     }
+    if (raw === 'collect-order') return 'collect-order';
     if (raw === 'result' || raw.includes('result')) return 'result';
     if (raw === 'execute' || raw.includes('execute')) return 'execute';
     if (raw === 'downstream-create' || raw.includes('downstream')) return 'downstream-create';

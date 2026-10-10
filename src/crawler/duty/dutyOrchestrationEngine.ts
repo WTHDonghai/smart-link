@@ -601,7 +601,7 @@ export class DutyOrchestrationEngine {
             businessType: 'OTA_MIGRATION',
             businessId: o.orderId,
             data: {
-              channel: channelCode,
+              channelCode: targetChannel.toUpperCase(),
               reason: '待处理取消订单',
             },
           };

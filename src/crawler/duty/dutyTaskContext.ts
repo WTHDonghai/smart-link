@@ -98,6 +98,7 @@ export function extractTaskChannelCode(
 
     case 'OTA_CONFIRM_IMPORT':
     case 'OTA_CONFIRM_CANCEL':
+    case 'OTA_CANCEL_ORDER':
       // 确认接单/取消确认任务线缆协议固定字段: channelCode
       return sanitizeChannelCode(payload.channelCode);
 

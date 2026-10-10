@@ -1,4 +1,5 @@
 import type { DutyClaimedTask, SystemLogEntry } from '../../types';
+import { logger } from '@/src/services/logger';
 
 export type DutyTaskLogSink = (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void;
 
@@ -22,6 +23,35 @@ export interface DutyTaskLogger {
   context: DutyTaskLoggerContext;
   log(entry: DutyTaskLogPayload): void;
   updateContext(partialContext: Partial<DutyTaskLoggerContext>): void;
+}
+
+/** 值守任务日志条目契约（event 必填，其余与 DutyTaskLogSink 入参一致） */
+export type DutyTaskLogEntry = Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'> & {
+  event: string;
+};
+
+/**
+ * 统一值守采集日志发射：优先走任务日志通道 (taskId 绑定)；CLI 等无任务上下文场景回退全局 logger。
+ */
+export function emitDutyTaskLog(
+  channelId: string,
+  audit: DutyTaskLogSink | undefined,
+  entry: DutyTaskLogEntry
+): void {
+  if (audit) {
+    audit(entry);
+    return;
+  }
+  logger.track(entry.event, {
+    level: entry.level,
+    message: entry.message,
+    module: 'DUTY_TASK',
+    channelId,
+    orderNo: entry.orderNo,
+    msgType: 'OTA_COLLECT_ORDER',
+    taskActionStage: entry.taskActionStage,
+    meta: entry.meta,
+  });
 }
 
 /**

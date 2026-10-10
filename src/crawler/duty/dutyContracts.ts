@@ -3,7 +3,7 @@ import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src
 import type { BrowserSession } from '@/src/crawler/browserManager';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
-import type { ParsedDutyTaskContext, DutyOrderStatus } from './dutyTaskContext';
+import type { DutyOrderStatus } from './dutyTaskContext';
 
 /**
  * 客户端自动化执行器支持的任务消息类型白名单
@@ -13,6 +13,7 @@ export const SUPPORTED_DUTY_TASK_TYPES = [
   'OTA_IMPORT_ORDER',
   'OTA_CONFIRM_IMPORT',
   'OTA_CONFIRM_CANCEL',
+  'OTA_CANCEL_ORDER',
 ] as const satisfies readonly DutyTaskMessageType[];
 
 export type SupportedDutyTaskType = (typeof SUPPORTED_DUTY_TASK_TYPES)[number];
@@ -41,6 +42,7 @@ export interface DutyUnhandledOrderSummary {
   orderDisplayLabel?: string;
 }
 
+import type { DutyTaskLogSink } from './dutyTaskLogger';
 
 export interface ExtractedOrderDetail {
   otaOrderId: string;
@@ -88,7 +90,11 @@ export interface RawMeituanDutyOrder {
   totalAmount: number;
   contacts: Array<{ name: string; phone: string }>;
   paymentType?: string;
-  cancelOrder?: boolean;
+
+  // 美团渠道特定协议字段（阶段一清洗提取）
+  status: string; 
+  rescheduledOrderId?: string;
+  reversePriceTmcOrderTag?: string;
   raw: Record<string, unknown>;
 }
 
@@ -137,8 +143,11 @@ export interface ChannelDutyRunner {
   stop(): Promise<void>;
   isRunning(): boolean;
 
-  /** 页面操作：刷新订单列表并获取当前待处理订单概要 */
-  collectUnhandledOrders(context?: ParsedDutyTaskContext | DutyOrderStatus): Promise<DutyUnhandledOrderSummary[]>;
+  /** 页面操作：刷新订单列表并获取当前待处理订单概要（orderStatus 指定目标状态 Tab，缺省新订；不支持状态区分的渠道忽略之） */
+  collectUnhandledOrders(
+    orderStatus?: DutyOrderStatus,
+    audit?: DutyTaskLogSink
+  ): Promise<DutyUnhandledOrderSummary[]>;
 
   /** 页面操作：在当前渠道后台点击打开订单详情并抓取原始数据（回写明文客人姓名） */
   inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
@@ -283,7 +292,8 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
   }
 
   public abstract collectUnhandledOrders(
-    context?: ParsedDutyTaskContext | DutyOrderStatus
+    orderStatus?: DutyOrderStatus,
+    audit?: DutyTaskLogSink
   ): Promise<DutyUnhandledOrderSummary[]>;
   public abstract inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 

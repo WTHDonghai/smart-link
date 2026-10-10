@@ -206,6 +206,70 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       expect(mockTab.click).toHaveBeenCalledTimes(1);
     });
 
+    it('应经任务日志通道输出采集结果条目（audit 透传）', async () => {
+      const collector = new DouyinListCollector();
+
+      const mockTab = {
+        waitFor: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const validPayload = {
+        status_code: 0,
+        data: {
+          data: [
+            JSON.stringify({
+              order_base_info: { order_id: '1113572432327416823' },
+              book_detail_info: { hotel_name: '日月洲度假村', book_start_time: 1790179200, book_end_time: 1790265600 },
+              sale_product_info: { physical_room_name: '豪华家庭房' },
+              guest_info: { user_list: [{ name: '吕克' }] },
+            }),
+          ],
+        },
+      };
+
+      const mockResponse = {
+        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+        status: () => 200,
+        text: vi.fn().mockResolvedValue(JSON.stringify(validPayload)),
+        request: () => ({ method: () => 'POST' }),
+      };
+
+      const mockPage = {
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+        locator: vi.fn().mockReturnValue({
+          first: () => mockTab,
+          count: vi.fn().mockResolvedValue(0),
+        }),
+        waitForResponse: vi.fn().mockResolvedValue(mockResponse),
+        on: vi.fn(),
+        off: vi.fn(),
+      } as unknown as Page;
+
+      const runWithMutex = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+      const auditEntries: Array<Record<string, unknown>> = [];
+
+      const res = await collector.collectUnhandledOrders(
+        mockPage,
+        DutyOrderStatus.NEW,
+        runWithMutex,
+        undefined,
+        (entry) => auditEntries.push(entry as unknown as Record<string, unknown>)
+      );
+
+      expect(res).toHaveLength(1);
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]).toMatchObject({
+        level: 'INFO',
+        event: 'DOUYIN_ORDER_COLLECT_RESULT',
+        message: expect.stringContaining('1 笔待处理订单'),
+        taskActionStage: 'collect-order',
+        meta: { orderStatus: DutyOrderStatus.NEW, tabLabel: TAB_TEXT_NEW, orderCount: 1 },
+      });
+    });
+
     it('should coalesce concurrent calls into a single in-flight promise', async () => {
       const collector = new DouyinListCollector();
       const mockPage = {

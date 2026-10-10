@@ -23,7 +23,7 @@ import { remarkTemplateManager } from './remarkTemplateManager';
  * 1. OTA_COLLECT_ORDER: 路由至渠道页面操作收集待处理订单 -> 返回概要供中台创建下游任务；
  * 2. OTA_IMPORT_ORDER: 解析任务入参 -> 路由至渠道执行页面查看详情并抓取字段 -> Fail-Fast 严格校验 -> 统一调用中台 importToolkitOrder -> 调度关闭详情；
  * 3. OTA_CONFIRM_IMPORT: 解析确认号 -> 路由至渠道执行页面回填；
- * 4. OTA_CONFIRM_CANCEL: 解析单号 -> 路由至渠道执行取消确认；
+ * 4. OTA_CONFIRM_CANCEL / OTA_CANCEL_ORDER: 解析单号 -> 路由至渠道执行取消确认；
  */
 
 export interface DutyTaskDispatcherOptions {
@@ -92,7 +92,10 @@ export async function dispatchDutyTask(
   switch (task.msgType) {
     case 'OTA_COLLECT_ORDER': {
       try {
-        const unhandledOrders = await runner.collectUnhandledOrders(context);
+        const unhandledOrders = await runner.collectUnhandledOrders(
+          context.orderStatus,
+          (entry) => taskLogger.log(entry)
+        );
         return {
           status: 'SUCCEEDED',
           result: {
@@ -329,13 +332,14 @@ export async function dispatchDutyTask(
       }
     }
 
+    case 'OTA_CANCEL_ORDER':
     case 'OTA_CONFIRM_CANCEL': {
       const orderId = context.orderId || '';
       if (!orderId) {
         return {
           status: 'FAILED',
           errorCode: 'ORDER_ID_MISSING',
-          errorMessage: 'OTA_CONFIRM_CANCEL 任务缺失有效的订单号 (orderId)',
+          errorMessage: `${task.msgType} 任务缺失有效的订单号 (orderId)`,
           retryable: false,
         };
       }

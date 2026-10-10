@@ -93,6 +93,13 @@ describe('dutyTaskContext', () => {
       expect(extractTaskChannelCode(task, { otaChannelCode: 'ctrip' })).toBeUndefined();
     });
 
+    it('OTA_CANCEL_ORDER 应严格从 channelCode 固定契约路径提取渠道', () => {
+      const task = createBaseTask({ msgType: 'OTA_CANCEL_ORDER' });
+      expect(extractTaskChannelCode(task, { channelCode: 'meituan' })).toBe('MEITUAN');
+      expect(extractTaskChannelCode(task, { otaChannelCode: 'ctrip' })).toBeUndefined();
+      expect(extractTaskChannelCode(task, { channel: 'fliggy' })).toBeUndefined();
+    });
+
     it('OTA_IMPORT_ORDER 应按契约路径支持 channel, otaChannelCode 与 orders[0].otaChannel 提取', () => {
       const task = createBaseTask({ msgType: 'OTA_IMPORT_ORDER' });
       expect(extractTaskChannelCode(task, { channel: 'fliggy' })).toBe('FLIGGY');
@@ -110,9 +117,13 @@ describe('dutyTaskContext', () => {
       expect(extractTaskChannelCode(confirmTask, {})).toBeUndefined();
       expect(extractTaskChannelCode(confirmTask, { channelCode: '   ' })).toBeUndefined();
 
-      const cancelTask = createBaseTask({ msgType: 'OTA_CONFIRM_CANCEL' });
-      expect(extractTaskChannelCode(cancelTask, {})).toBeUndefined();
-      expect(extractTaskChannelCode(cancelTask, { channelCode: '' })).toBeUndefined();
+      const cancelConfirmTask = createBaseTask({ msgType: 'OTA_CONFIRM_CANCEL' });
+      expect(extractTaskChannelCode(cancelConfirmTask, {})).toBeUndefined();
+      expect(extractTaskChannelCode(cancelConfirmTask, { channelCode: '' })).toBeUndefined();
+
+      const cancelOrderTask = createBaseTask({ msgType: 'OTA_CANCEL_ORDER' });
+      expect(extractTaskChannelCode(cancelOrderTask, {})).toBeUndefined();
+      expect(extractTaskChannelCode(cancelOrderTask, { channelCode: '   ' })).toBeUndefined();
 
       const importTask = createBaseTask({ msgType: 'OTA_IMPORT_ORDER' });
       expect(extractTaskChannelCode(importTask, {})).toBeUndefined();

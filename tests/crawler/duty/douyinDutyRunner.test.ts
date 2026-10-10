@@ -589,7 +589,7 @@ describe('douyinDutyRunner', () => {
       await runner.stop();
     });
 
-    it('should correctly route various task contexts to refund tab', async () => {
+    it('should route CANCEL status to refund tab', async () => {
       const runner = new DouyinDutyRunner();
       const clickedTabs: string[] = [];
 
@@ -665,27 +665,9 @@ describe('douyinDutyRunner', () => {
 
       await runner.start();
 
-      // Case 1: ParsedDutyTaskContext with orderStatus: DutyOrderStatus.CANCEL
-      await runner.collectUnhandledOrders({
-        task: {
-          id: 't1',
-          businessId: 'COLLECT:1',
-          businessType: 'OTA_MIGRATION',
-          msgType: 'OTA_COLLECT_ORDER',
-          stationId: 's1',
-          leaseToken: 'token1',
-          data: '',
-        },
-        payload: { cancelOrder: true },
-        channelCode: 'DOUYIN',
-        businessId: 'COLLECT:1',
-        orderStatus: DutyOrderStatus.CANCEL,
-      });
-
-      // Case 2: Direct DutyOrderStatus.CANCEL
       await runner.collectUnhandledOrders(DutyOrderStatus.CANCEL);
 
-      expect(clickedTabs).toEqual(['取消/退款', '取消/退款']);
+      expect(clickedTabs).toEqual(['取消/退款']);
 
       await runner.stop();
     });
