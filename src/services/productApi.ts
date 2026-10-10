@@ -1,5 +1,6 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
 import { extractDataItems } from './channelApi';
+import { isRecord } from '@/src/utils/typeGuards';
 import type {
   ProductMapping,
   SaveProductMappingPayloadItem,
@@ -201,7 +202,7 @@ export function extractProductOptionItems(body: unknown): Record<string, unknown
   }
 
   if (Array.isArray(data)) {
-    return data.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+    return data.filter(isRecord);
   }
 
   if (data && typeof data === 'object') {
@@ -219,9 +220,7 @@ export function extractProductOptionItems(body: unknown): Record<string, unknown
     ];
     for (const key of candidateKeys) {
       if (Array.isArray(obj[key])) {
-        return (obj[key] as unknown[]).filter(
-          (item): item is Record<string, unknown> => !!item && typeof item === 'object'
-        );
+        return (obj[key] as unknown[]).filter(isRecord);
       }
     }
   }

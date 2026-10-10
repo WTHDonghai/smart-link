@@ -1,10 +1,7 @@
 import type { DiscoveredProductCandidate } from '../../types';
+import { isRecord } from '@/src/utils/typeGuards';
 
 type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function firstText(...values: unknown[]): string {
   for (const value of values) {

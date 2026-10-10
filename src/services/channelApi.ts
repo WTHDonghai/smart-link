@@ -1,4 +1,5 @@
 import { requestPlatformApi, PLATFORM_MODULES, TOOLKIT_MODULE } from './platformApi';
+import { isRecord } from '@/src/utils/typeGuards';
 import {
   CulturalTourismChannel,
   OTAChannelMappingRecord,
@@ -64,7 +65,7 @@ export function extractDataItems(body: unknown): Record<string, unknown>[] {
   }
 
   if (Array.isArray(data)) {
-    return data.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+    return data.filter(isRecord);
   }
 
   if (data && typeof data === 'object') {
@@ -72,9 +73,7 @@ export function extractDataItems(body: unknown): Record<string, unknown>[] {
     const candidateKeys = ['records', 'list', 'items', 'rows', 'results'];
     for (const key of candidateKeys) {
       if (Array.isArray(obj[key])) {
-        return (obj[key] as unknown[]).filter(
-          (item): item is Record<string, unknown> => !!item && typeof item === 'object'
-        );
+        return (obj[key] as unknown[]).filter(isRecord);
       }
     }
 

@@ -1,5 +1,6 @@
 import type { DiscoveredHotelCandidate } from '../../types';
 import { getMeituanCatalogUrl } from '../../../config/otaUrls';
+import { isRecord } from '@/src/utils/typeGuards';
 
 export function getDefaultMeituanCatalogUrl(): string {
   return getMeituanCatalogUrl();
@@ -32,10 +33,6 @@ export interface RawMeituanStoreItem {
 }
 
 type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function firstString(...candidates: unknown[]): string {
   for (const item of candidates) {
