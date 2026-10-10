@@ -56,15 +56,93 @@
 
 | 美团原始字段路径 | 目标字段 (`RawMeituanDutyOrder`) | 类型 | 清洗与标准化规则 |
 | :--- | :--- | :--- | :--- |
-| `data.results[].orderId` / `otaOrderId` | `orderId` | string | 去除首尾空格，作为唯一订单主键 |
+| `data.results[].orderId` | `orderId` | string | 唯一订单主键契约：约定为 string 类型，按美团原始形态直取（仅空白规整）；不使用硬编码正则限制渠道标识，不猜测候选字段；非字符串、空白或缺失视为渠道契约违规，归因为数据提取异常 (Extraction Anomaly) |
 | `data.results[].poiId` / `hotelId` | `hotelId` | string | 酒店/门店唯一 ID |
 | `data.results[].poiName` / `hotelName` | `hotelName` | string | 门店名称 |
 | `data.results[].checkInDateString` | `checkInDate` | string | 经 `fmtDate()` 统一转为 `YYYY-MM-DD` |
 | `data.results[].checkOutDateString` | `checkOutDate` | string | 经 `fmtDate()` 统一转为 `YYYY-MM-DD` |
 | `data.results[].nights` | `nights` | number | 间夜数（缺失时通过入离日期差值自动派生，保底为 1） |
-| `data.results[].totalFee` / `price` | `totalAmount` | number | 若含 `totalFee` 或大于 1000 则判定为**分**，统一换算为**元** |
-| `data.results[].orderDisplayLabel` | `orderDisplayLabel` | string | 状态展示文本（如 `新订`、`待处理`） |
-| `data.results[].cancelOrder` | `cancelOrder` | boolean | 为 `true` 或状态包含 `CANCEL` 时标记为取消单 |
+| `data.results[].totalFee` / `totalPrice` / `price` | `totalAmount` | number | 若存在 `totalFee` 则按**分**除以 100 换算为元；否则取 `totalPrice ?? price ?? 0`。不做“大于 1000 即猜分”的启发式判断 |
+| `data.results[].orderDisplayLabel` / `statusText` / `status` | `orderDisplayLabel` | string | 状态展示文本；缺省展示为 `新订` |
+| `data.results[].status` / `statusText` / `orderDisplayLabel` | `status` / `orderDisplayLabel` | string | 取消状态不作为渠道实体 RawMeituanDutyOrder 静态字段，而是由纯函数 isMeituanCancelOrder() 以 `status === 'CANCELED'` 为**唯一判定标准**（依据真实取消样本 tests/fixtures/meituanCancelDetail.json；label/statusText 取消文案与 CANCEL/CANCEL_ORDER/CUSTOMER_CANCEL 等未经验证枚举启发式已弃用），并在生成中台通用概要 DutyUnhandledOrderSummary 时赋予其 cancelOrder |
+
+#### 列表 Envelope Fail-Fast 契约
+`resolveMeituanOrderItems()` 只接受订单数组、根级已知列表字段或 `data` 内已知列表字段。以下情况必须抛出 `LIST_BUSINESS_FAILED` 且 `retryable=false`，不得伪装为“成功采集 0 笔”：
+
+1. 响应文本不是合法 JSON（由 `MeituanListCollector` 判定）；
+2. Payload 不是数组且不是 JSON 对象；
+3. `code` 字段存在且不等于 `0`；
+4. `data` 存在但不是对象；
+5. 已识别到的列表字段不是数组；
+6. `data` 或根级缺少全部已知列表字段（`data` 支持 `results/list/orders/orderList/items`，根级支持 `results/orders/list`）。
+
+#### 订单提取与业务分层过滤契约 (两阶段流水线)
+
+失败模型分三层，爆炸半径从严到宽：
+
+| 层 | 机制 | 语义 |
+| :--- | :--- | :--- |
+| 响应级 | `DutyExecutionError`（抛出，本轮作废） | 信封不可信（code≠0/非 JSON/结构损坏）——整体 abort，绝不降级为「空列表成功」 |
+| 条目提取级 | `MeituanOrderExtractionAnomaly`（跳过+WARN） | 信封合法但个别条目坏——跳过该条，其余订单照常处理 |
+| 条目业务级 | `OrderFilterResult` rejected（跳过+WARN） | 非错误，业务拦截决策（改签/TMC）——系统行为正确 |
+
+系统严格采用「先提取为数据源，再执行业务过滤」的两阶段流水线：
+
+##### 阶段一：数据提取解析 (Extractor / Data Source)
+`extractMeituanOrdersFromPayload()` 负责将原始网络报文解析为标准订单实体 `RawMeituanDutyOrder[]`：
+- 订单号约定为 string 类型：直取 `orderId` 原始值（仅空白规整），非字符串或空白即契约违规，归因为提取解析异常；
+- `status` 为取消/改签双判定的唯一标准，契约担保恒存在且为字符串（真实接口已确认）：非字符串或空白即条目级契约违规，归因为提取解析异常，绝不以占位值静默推进；
+- 若原始条目为空、非对象或缺失有效 `orderId`，在此阶段归因为**提取解析异常 (Extraction Anomaly)**，并通过 `MEITUAN_ORDER_EXTRACTION_ANOMALY` / `WARN` 输出结构化日志，不进入下游业务过滤；
+- 成功提取的订单作为纯净的数据源（包含确凿合法的 `orderId` 与规范化字段）输入阶段二。
+
+##### 阶段二：业务规则过滤 (Order Filter)
+`filterMeituanOrder()` 接收已提取出的订单实体，专注于业务维度的分流决策：
+
+| `action` | 语义 |
+| :--- | :--- |
+| `ALLOW` | 允许进入自动化流水线处理（由下游消费方根据 `cancelOrder` 等状态分发执行） |
+| `MANUAL_ATTENTION` | 关键分类字段契约异常，或识别为改签/改期订单，转后台人工核对 |
+| `CHANNEL_MISMATCH` | 识别为美团商旅 / 企业差旅 (TMC) 订单，当前普通散客工位跳过 |
+
+- 业务过滤跳过的记录输出 `MEITUAN_ORDER_FILTER_SKIPPED` / `WARN`，包含 `orderNo`、`meta.action`、`meta.orderType`、`meta.reason` 与 `meta.evidence`。
+- `evidence` 保留人工在美团后台核对必需的客人姓名 (`guestName`)、房型 (`roomName`) 及命中规则的特征实际值，拒绝过度技术脱敏，为前台运营排查提供清晰可读的事实上下文。
+- TMC 识别以 `reversePriceTmcOrderTag` 非空为**唯一判定标准**（企业名称 `enterpriseName`、协议标志 `signInboundTmcAgreement`、发票标志 `tmcInvoiceLabel`、标签文案等启发式已弃用）。
+- 改签识别以列表实体 `status === 'RESCHEDULED'` 为**唯一判定标准**。依据真实改签样本（`tests/fixtures/meituanRescheduleDetail.json`）调研：改签单的 `orderDisplayLabel` 仍为「新订」、`originOrRescheduled` 为 100，文案与历史枚举启发式均不可靠，已弃用。
+
+##### 过滤规则配置与表达式 DSL
+
+过滤规则以 JSON 声明，运行时按数组顺序求值，首条命中即止并返回其 `action`；`enabled: false` 的规则跳过；全部未命中则 `ALLOW`。规则字段：
+
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `id` | string | 规则唯一标识 |
+| `name` | string | 人类可读规则名（可选） |
+| `condition` | string | 表达式，对订单实体字段求值 |
+| `action` | `MANUAL_ATTENTION` \| `CHANNEL_MISMATCH` | 命中后的处置动作 |
+| `orderType` | `RESCHEDULED` \| `TMC` | 命中归因分类（可选） |
+| `reason` | string | 人类可读跳过原因，支持 `{{orderId}}` 占位符 |
+| `enabled` | boolean | 置 `false` 时禁用该规则（可选，默认启用） |
+
+`condition` 表达式 DSL（由 `src/utils/template/evaluator.ts` 纯 AST 求值，零 eval / new Function）：
+
+| 运算符 | 语义 |
+| :--- | :--- |
+| `==` / `!=` | 宽松相等（一侧为数字、另一侧为可转数字的字符串时先转换再比对） |
+| `===` / `!==` | 严格相等 |
+| `>` `>=` `<` `<=` | 数值比较 |
+| `contains` | 左侧为字符串时右侧必须为字符串（包含判断）；左侧为数组时任一元素字符串化后包含。注意 `contains` 为保留关键字，无法引用同名数据字段 |
+| `=~` | 左侧字符串匹配右侧正则字面量；任一操作数非字符串时视为不匹配（不报错）；正则字面量非法时求值异常，阻断并转 `MANUAL_ATTENTION`，绝不静默放行 |
+| `&&` `||` `!` | 逻辑与 / 或 / 非 |
+
+- 标识符即订单实体字段点路径（如 `totalAmount`、`originOrRescheduled`），支持通配符数组投影 `tags.*.title`；
+- 路径内支持多候选回退 `a.b || a.c`（取首个非空）；
+- 字面量：单/双引号字符串、数字、`true`/`false`、`null`/`undefined`。
+
+规则文件优先级与 Fail-Fast 约束：
+
+1. `<userDataDir>/filter-rules/meituan.json`（运营侧持久化定制，每轮采集前重载，修改后下一轮即生效）；
+2. 随包默认 `meituanFilterRules.json`（仅当持久化文件不存在时启用，首启场景）；
+3. 持久化文件存在但读取/解析失败或结构无效（缺 `channelId` 字符串或 `rules` 数组）时，立即抛出含文件路径的异常中断本轮采集，绝不静默回退默认规则。
 
 - **真实脱敏样例**：参考 [`samples/list-task-response.json`](./samples/list-task-response.json)
 

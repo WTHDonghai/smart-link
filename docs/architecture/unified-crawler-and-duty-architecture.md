@@ -157,3 +157,15 @@ flowchart TD
        - [`meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)：接单弹窗回填、输入读回校验、取消确认与 `dryRun` 演练；
        - [`meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts) / [`meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)：风控探测与通知弹窗自动穿透。
 
+### 3.6 值守任务类型与取消订单闭环
+
+值守任务能力由 `SUPPORTED_DUTY_TASK_TYPES` 单一契约声明：`OTA_COLLECT_ORDER`、`OTA_IMPORT_ORDER`、`OTA_CONFIRM_IMPORT`、`OTA_CONFIRM_CANCEL` 与 `OTA_CANCEL_ORDER`。
+
+取消订单本地闭环如下：
+
+1. `DutyOrchestrationEngine` 执行 `OTA_COLLECT_ORDER` 后，从权威待处理列表发现 `cancelOrder === true` 的订单；
+2. 下游统一创建 `OTA_CANCEL_ORDER`，payload 固定使用大写规范化 `channelCode` 与 `reason`，不携带渠道猜测字段；
+3. `dutyTaskContext` 对 `OTA_CANCEL_ORDER` 只从 `payload.channelCode` 提取渠道，缺失即 Fail-Fast；
+4. `dutyTaskDispatcher` 将 `OTA_CANCEL_ORDER` 与 `OTA_CONFIRM_CANCEL` 一样路由到渠道 runner 的 `confirmCancel` 能力。
+
+当前订单值守 runner 只支持普通 `MEITUAN` 与已有 `DOUYIN` 实现。`MEITUAN_BIZ` 是全局渠道身份与 UI 规划身份，不代表已存在订单值守 runner，也不应被描述为已接入订单值守闭环。
