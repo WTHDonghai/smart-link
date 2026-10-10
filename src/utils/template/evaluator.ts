@@ -162,6 +162,7 @@ export function tokenizeExpr(expr: string): Token[] {
       twoChars === '!=' ||
       twoChars === '<=' ||
       twoChars === '>=' ||
+      twoChars === '=~' ||
       twoChars === '&&' ||
       twoChars === '||'
     ) {
@@ -194,10 +195,10 @@ export function tokenizeExpr(expr: string): Token[] {
       continue;
     }
 
-    // 标识符或布尔/null关键字 (支持中文标签、英文标识符与带点属性路径如 data.floorPrice)
+    // 标识符或布尔/null关键字 (支持中文标签、英文标识符与带点属性路径如 data.floorPrice、带通配符如 tags.*.title)
     if (/[a-zA-Z_$\u4e00-\u9fa5]/.test(char)) {
       let ident = '';
-      while (i < len && /[a-zA-Z0-9_$.[\]\u4e00-\u9fa5]/.test(expr[i])) {
+      while (i < len && /[a-zA-Z0-9_*$.[\]\u4e00-\u9fa5]/.test(expr[i])) {
         ident += expr[i];
         i++;
       }
@@ -206,6 +207,8 @@ export function tokenizeExpr(expr: string): Token[] {
         tokens.push({ type: 'BOOLEAN', value: ident, raw: ident });
       } else if (ident === 'null' || ident === 'undefined') {
         tokens.push({ type: 'NULL', value: ident, raw: ident });
+      } else if (ident === 'contains') {
+        tokens.push({ type: 'OPERATOR', value: 'contains', raw: 'contains' });
       } else {
         tokens.push({ type: 'IDENTIFIER', value: ident, raw: ident });
       }
@@ -274,6 +277,8 @@ class ExpressionParser {
       this.checkOperator('!==') ||
       this.checkOperator('==') ||
       this.checkOperator('!=') ||
+      this.checkOperator('=~') ||
+      this.checkOperator('contains') ||
       this.checkOperator('>') ||
       this.checkOperator('>=') ||
       this.checkOperator('<') ||
@@ -356,6 +361,19 @@ class ExpressionParser {
         return left == right; // eslint-disable-line eqeqeq
       case '!=':
         return left != right; // eslint-disable-line eqeqeq
+      case '=~': {
+        if (typeof left !== 'string' || typeof right !== 'string') return false;
+        return new RegExp(right).test(left);
+      }
+      case 'contains': {
+        if (typeof left === 'string' && typeof right === 'string') {
+          return left.includes(right);
+        }
+        if (Array.isArray(left)) {
+          return left.some((item) => String(item).includes(String(right)));
+        }
+        return false;
+      }
       case '>':
         return (left as number) > (right as number);
       case '>=':

@@ -98,6 +98,16 @@ describe('templateEngine & filters', () => {
       expect(evaluateCondition("status !== 'CANCELLED'", ctx)).toBe(true);
     });
 
+    it('evaluates contains and regex (=~) operators', () => {
+      expect(evaluateCondition("status contains 'SUM'", ctx)).toBe(true);
+      expect(evaluateCondition("status contains 'CANCEL'", ctx)).toBe(false);
+      expect(evaluateCondition("data.items contains 2", ctx)).toBe(true);
+      expect(evaluateCondition("data.items contains 99", ctx)).toBe(false);
+      expect(evaluateCondition("status =~ '^CON.*ED$'", ctx)).toBe(true);
+      expect(evaluateCondition("status =~ '^ABC'", ctx)).toBe(false);
+      expect(() => evaluateCondition("status =~ '['", ctx)).toThrow('[Condition Evaluation Failed]');
+    });
+
     it('evaluates logical AND (&&) and OR (||)', () => {
       expect(evaluateCondition('isVip && price > 20000', ctx)).toBe(true);
       expect(evaluateCondition('isVip && hasRights', ctx)).toBe(false);
