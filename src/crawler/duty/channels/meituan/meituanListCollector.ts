@@ -1,5 +1,7 @@
 import type { Page, Request, Response } from 'playwright';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+import { emitDutyTaskLog } from '../../dutyTaskLogger';
+import type { DutyTaskLogSink } from '../../dutyTaskLogger';
 import type { DutyUnhandledOrderSummary } from '../../dutyContracts';
 import {
   MeituanDutyErrorCode,
@@ -9,7 +11,9 @@ import {
   isMeituanListUrl,
   isMeituanOrderTabListUrl,
   parseMeituanOrderListResponse,
+  type MeituanOrderExtractionAnomaly,
 } from './meituanOrderParsers';
+import { loadMeituanFilterConfig, type OrderFilterResult, type RejectedOrderFilterResult } from './meituanOrderFilter';
 import {
   ACTION_TIMEOUT,
   HUMAN_DELAY,
@@ -83,6 +87,32 @@ export async function waitForMeituanListResponse(
 /**
  * 美团订单列表采集器：负责列表 Tab 切换、网络响应监听、防抖与在途请求合并
  */
+type SkippedOrderAction = Exclude<OrderFilterResult['action'], 'ALLOW'>;
+
+type SkippedOrder = {
+  orderId: string;
+  action: SkippedOrderAction;
+  orderType?: RejectedOrderFilterResult['orderType'];
+  reason: string;
+  evidence?: Record<string, unknown>;
+};
+
+function logSkippedOrder(order: SkippedOrder, audit?: DutyTaskLogSink): void {
+  emitDutyTaskLog('MEITUAN', audit, {
+    level: 'WARN',
+    event: 'MEITUAN_ORDER_FILTER_SKIPPED',
+    message: `[美团订单采集] 单号 ${order.orderId || '无单号'} 跳过自动化处理: ${order.reason}`,
+    orderNo: order.orderId || undefined,
+    taskActionStage: 'collect-order',
+    meta: {
+      action: order.action,
+      orderType: order.orderType,
+      reason: order.reason,
+      evidence: order.evidence,
+    },
+  });
+}
+
 export class MeituanListCollector {
   private lastListRefreshTime = 0;
   private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
@@ -185,16 +215,20 @@ export class MeituanListCollector {
   public async collectUnhandledOrders(
     page: Page,
     runWithMutex: <T>(action: () => Promise<T>) => Promise<T>,
-    refreshFn: (page: Page) => Promise<Response> = (p) => this.refreshOrderList(p)
+    refreshFn: (page: Page) => Promise<Response> = (p) => this.refreshOrderList(p),
+    audit?: DutyTaskLogSink
   ): Promise<DutyUnhandledOrderSummary[]> {
-    await assertNoMeituanPageRisk(page);
-
-    // 1. 在途请求合并门禁 (Request Coalescing)：若已有正在刷新的在途 Promise，直接复用其结果
     if (this.inFlightListPromise) {
       return await this.inFlightListPromise;
     }
 
-    this.inFlightListPromise = (async () => {
+    // 每轮采集前重载持久化过滤规则：运营侧修改文件后下一轮即生效；文件损坏则 Fail-Fast 中断本轮采集
+    loadMeituanFilterConfig();
+
+    const skippedOrders: SkippedOrder[] = [];
+    const promise = (async () => {
+      await assertNoMeituanPageRisk(page);
+
       // 3 秒防抖等待补偿：若距离上次刷新不足 REFRESH_DEBOUNCE，等待补齐延迟后再触发交互，绝不直接返回空数组
       const now = performance.now();
       const elapsed = this.lastListRefreshTime > 0 ? now - this.lastListRefreshTime : Infinity;
@@ -212,29 +246,105 @@ export class MeituanListCollector {
 
         // 通过受控 Tab 切换触发刷新，并等待最终的待确认列表响应
         const listResponse = await refreshFn(page);
-        const text = await listResponse.text().catch(() => '');
+        let text: string;
+        try {
+          text = await listResponse.text();
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          throw new DutyExecutionError(
+            `美团列表响应内容读取失败: ${errorMessage}`,
+            MeituanDutyErrorCode.LIST_RESPONSE_TIMEOUT,
+            true
+          );
+        }
         let parsedPayload: unknown;
         try {
           parsedPayload = JSON.parse(text);
-        } catch {
-          throw new DutyExecutionError('美团列表响应非合法 JSON', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          throw new DutyExecutionError(
+            `美团列表响应非合法 JSON: ${errorMessage}`,
+            MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+            false
+          );
         }
-        const orders = parseMeituanOrderListResponse(parsedPayload);
+        const extractionAnomalies: MeituanOrderExtractionAnomaly[] = [];
+        const orders = parseMeituanOrderListResponse(parsedPayload, {
+          onExtractionAnomaly: (anomaly) => {
+            extractionAnomalies.push(anomaly);
+          },
+          onFilterResult: (res) => {
+            if (res.allowed) return;
+            const skippedOrder: SkippedOrder = {
+              orderId: res.orderId,
+              action: res.action,
+              orderType: res.orderType,
+              reason: res.reason,
+              evidence: res.evidence,
+            };
+            skippedOrders.push(skippedOrder);
+            logSkippedOrder(skippedOrder, audit);
+          },
+        });
 
-        await updateVisualTrackerStatus(
-          page,
-          `📥 待确认列表已刷新，权威网络接口共解析到 ${orders.length} 笔待处理订单`,
-          orders.length > 0 ? 'success' : 'info'
-        );
+        if (extractionAnomalies.length > 0) {
+          emitDutyTaskLog('MEITUAN', audit, {
+            level: 'WARN',
+            event: 'MEITUAN_ORDER_EXTRACTION_ANOMALY',
+            message: `[美团订单采集] 发现 ${extractionAnomalies.length} 笔订单数据提取异常（未提取到有效单号）`,
+            taskActionStage: 'collect-order',
+            meta: {
+              anomalyCount: extractionAnomalies.length,
+              anomalies: extractionAnomalies,
+            },
+          });
+        }
+
+        const totalSkipped = skippedOrders.length;
+        const totalAnomalies = extractionAnomalies.length;
+
+        if (totalSkipped > 0 || totalAnomalies > 0) {
+          const parts: string[] = [`待确认列表已提取 ${orders.length} 笔订单`];
+          if (totalSkipped > 0) {
+            const actionDisplayText: Record<SkippedOrderAction, string> = {
+              MANUAL_ATTENTION: '需人工核对',
+              CHANNEL_MISMATCH: '工位不匹配',
+            };
+
+            const skippedSummary = skippedOrders
+              .slice(0, 3)
+              .map((r) => `${r.orderId}(${actionDisplayText[r.action]})`)
+              .join('、') + (totalSkipped > 3 ? ` 等共 ${totalSkipped} 笔` : '');
+            parts.push(`业务跳过 ${totalSkipped} 笔（${skippedSummary}）`);
+          }
+          if (totalAnomalies > 0) {
+            parts.push(`提取异常 ${totalAnomalies} 笔`);
+          }
+
+          await updateVisualTrackerStatus(
+            page,
+            `⚠️ ${parts.join('，另')}`,
+            'info'
+          );
+        } else {
+          await updateVisualTrackerStatus(
+            page,
+            `📥 待确认列表已刷新，权威网络接口共解析到 ${orders.length} 笔待处理订单`,
+            orders.length > 0 ? 'success' : 'info'
+          );
+        }
 
         // 记录权威网络响应成功时间 (Fail-Fast: 绝无 DOM 拼接兜底！)
         this.lastListRefreshTime = performance.now();
         return orders;
       });
     })().finally(() => {
-      this.inFlightListPromise = null;
+      if (this.inFlightListPromise === promise) {
+        this.inFlightListPromise = null;
+      }
     });
 
-    return await this.inFlightListPromise;
+    this.inFlightListPromise = promise;
+    return await promise;
   }
 }

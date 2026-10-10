@@ -3,10 +3,33 @@ import type {
   ExtractedOrderDetail,
   RawMeituanDutyOrder,
 } from '../../dutyContracts';
+import {
+  filterMeituanOrder,
+  type OrderFilterResult,
+} from './meituanOrderFilter';
+import {
+  DutyExecutionError,
+  MeituanDutyErrorCode,
+} from './meituanDutyContracts';
 
 import { safeFormatDate as fmtDate } from '@/src/utils/template/filters';
+import { isRecord } from '@/src/utils/typeGuards';
 
 export { fmtDate };
+
+export interface MeituanOrderExtractionAnomaly {
+  index: number;
+  reason: string;
+  evidence?: Record<string, unknown>;
+}
+
+export interface ExtractMeituanOrdersOptions {
+  onExtractionAnomaly?: (anomaly: MeituanOrderExtractionAnomaly) => void;
+}
+
+export interface ParseMeituanOrderOptions extends ExtractMeituanOrdersOptions {
+  onFilterResult?: (result: OrderFilterResult) => void;
+}
 
 // [TODO] 后续需要迁移到env 环境变量
 export const MEITUAN_ORDER_LIST_URL_PATH = '/api/v1/ebooking/orders/task/list';
@@ -289,34 +312,135 @@ export function hasPlainMobileNumber(
 }
 
 /**
- * 从美团订单列表 API 报文中解析出 RawMeituanDutyOrder 列表
+ * 从美团订单列表 API 报文中解析出 RawMeituanDutyOrder 列表。
+ * 列表 envelope 契约失败时立即抛错，绝不把畸形响应伪装成“成功采集 0 笔”。
  */
-export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDutyOrder[] {
-  if (!payload || typeof payload !== 'object') return [];
+const MEITUAN_LIST_FIELD_PRIORITY = ['results', 'list', 'orders', 'orderList', 'items'] as const;
+const MEITUAN_ROOT_LIST_FIELD_PRIORITY = ['results', 'orders', 'list'] as const;
 
-  const root = payload as Record<string, unknown>;
-  const data = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
+/**
+ * 提取美团订单号（约定为 string 类型，按美团原始形态直取，仅做空白规整）。
+ * 缺失、非字符串或空白视为渠道契约违规，返回 null 由调用方归因为提取解析异常。
+ */
+export function extractValidOrderId(rec: unknown): string | null {
+  if (!isRecord(rec)) return null;
+  const orderId = rec.orderId;
+  return typeof orderId === 'string' && orderId.trim() !== '' ? orderId.trim() : null;
+}
 
-  const rawList: unknown[] =
-    Array.isArray(data.results) ? data.results :
-    Array.isArray(data.list) ? data.list :
-    Array.isArray(data.orders) ? data.orders :
-    Array.isArray(data.orderList) ? data.orderList :
-    Array.isArray(data.items) ? data.items :
-    Array.isArray(root.results) ? root.results :
-    Array.isArray(root.orders) ? root.orders :
-    Array.isArray(root.list) ? root.list :
-    Array.isArray(payload) ? payload : [];
+/**
+ * 信封定位与校验：从美团列表响应中定位并校验原始条目数组 (unknown[])。
+ * 只负责信封层（code/结构/列表字段），条目级提取由 extractMeituanOrdersFromPayload 负责。
+ */
+function resolveMeituanOrderItems(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!isRecord(payload)) {
+    throw new DutyExecutionError('美团列表响应必须为 JSON 对象或订单数组', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
+  }
 
+  if (payload.code !== undefined && payload.code !== 0) {
+    throw new DutyExecutionError(
+      `美团列表接口业务状态码失败 (code=${String(payload.code)})`,
+      MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+      false
+    );
+  }
+
+  const data = payload.data;
+  if (data !== undefined) {
+    if (!isRecord(data)) {
+      throw new DutyExecutionError('美团列表响应 data 字段必须为对象', MeituanDutyErrorCode.LIST_BUSINESS_FAILED, false);
+    }
+    const field = MEITUAN_LIST_FIELD_PRIORITY.find((key) => Object.hasOwn(data, key));
+    if (field) {
+      const list = data[field];
+      if (!Array.isArray(list)) {
+        throw new DutyExecutionError(
+          `美团列表响应 data.${field} 字段必须为数组 (实际: ${typeof list})`,
+          MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+          false
+        );
+      }
+      return list;
+    }
+    throw new DutyExecutionError(
+      `美团列表响应 data 缺少已知订单列表字段: ${MEITUAN_LIST_FIELD_PRIORITY.join('/')}`,
+      MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+      false
+    );
+  }
+
+  const field = MEITUAN_ROOT_LIST_FIELD_PRIORITY.find((key) => Object.hasOwn(payload, key));
+  if (field) {
+    const list = payload[field];
+    if (!Array.isArray(list)) {
+      throw new DutyExecutionError(
+        `美团列表响应 ${field} 字段必须为数组 (实际: ${typeof list})`,
+        MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+        false
+      );
+    }
+    return list;
+  }
+
+  throw new DutyExecutionError(
+    `美团列表响应缺少已知订单列表字段: ${MEITUAN_ROOT_LIST_FIELD_PRIORITY.join('/')}`,
+    MeituanDutyErrorCode.LIST_BUSINESS_FAILED,
+    false
+  );
+}
+
+/**
+ * 阶段一：纯函数订单提取解析算子 (Extractor / Data Source)
+ * 从美团原始列表中解析提取出标准订单实体 (RawMeituanDutyOrder[])。
+ * 格式损坏或缺少主键的条目在此阶段归因为提取解析异常 (Extraction Anomaly)，不进入后续业务过滤。
+ */
+export function extractMeituanOrdersFromPayload(
+  payload: unknown,
+  options?: ExtractMeituanOrdersOptions
+): RawMeituanDutyOrder[] {
+  const rawList = resolveMeituanOrderItems(payload);
   const orders: RawMeituanDutyOrder[] = [];
 
-  for (const item of rawList) {
-    if (!item || typeof item !== 'object') continue;
-    const rec = item as Record<string, unknown>;
+  for (let i = 0; i < rawList.length; i++) {
+    const item = rawList[i];
+    if (!isRecord(item)) {
+      options?.onExtractionAnomaly?.({
+        index: i,
+        reason: '订单原始载荷为空或非对象',
+      });
+      continue;
+    }
 
-    const orderId = String(rec.orderId || rec.orderID || rec.otaOrderId || rec.orderNo || '').trim();
-    if (!orderId) continue;
+    const orderId = extractValidOrderId(item);
+    if (!orderId) {
+      // 取证仅保留原始 orderId（类型/空串/缺失三态对应三种不同诊断）与可读 label，原样不筛
+      const evidence: Record<string, unknown> = {};
+      if (item.orderId !== undefined) evidence.orderId = item.orderId;
+      if (typeof item.orderDisplayLabel === 'string') evidence.orderDisplayLabel = item.orderDisplayLabel;
 
+      options?.onExtractionAnomaly?.({
+        index: i,
+        reason: '缺少有效订单号主键 (orderId)',
+        evidence,
+      });
+      continue;
+    }
+
+    // status 为取消/改签双判定的唯一标准，契约担保恒存在；非字符串或空白即条目级契约违规
+    const status = typeof item.status === 'string' ? item.status.trim() : '';
+    if (!status) {
+      const evidence: Record<string, unknown> = {};
+      if (item.status !== undefined) evidence.status = item.status;
+      options?.onExtractionAnomaly?.({
+        index: i,
+        reason: '缺少有效订单状态字段 (status)',
+        evidence,
+      });
+      continue;
+    }
+
+    const rec = item;
     const checkInDate = fmtDate(rec.checkInDateString || rec.checkInDate || rec.arrival);
     const checkOutDate = fmtDate(rec.checkOutDateString || rec.checkOutDate || rec.departure);
 
@@ -334,12 +458,11 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
 
     const contacts: Array<{ name: string; phone: string }> = [];
     const rawContacts = Array.isArray(rec.contacts) ? rec.contacts : Array.isArray(rec.guests) ? rec.guests : [];
-    for (const c of rawContacts) {
-      if (c && typeof c === 'object') {
-        const cRec = c as Record<string, unknown>;
+    for (const contact of rawContacts) {
+      if (isRecord(contact)) {
         contacts.push({
-          name: String(cRec.name || '').trim(),
-          phone: String(cRec.phone || cRec.mobile || '').trim(),
+          name: String(contact.name || '').trim(),
+          phone: String(contact.phone || contact.mobile || '').trim(),
         });
       }
     }
@@ -349,6 +472,19 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
         phone: String(rec.guestMobile || '').trim(),
       });
     }
+
+    let rescheduledOrderId: string | undefined;
+    if (typeof rec.rescheduledOrderId === 'string' && rec.rescheduledOrderId.trim()) {
+      rescheduledOrderId = rec.rescheduledOrderId.trim();
+    } else if (typeof rec.rescheduledOrderId === 'number' && Number.isSafeInteger(rec.rescheduledOrderId)) {
+      rescheduledOrderId = String(rec.rescheduledOrderId);
+    }
+
+
+    const reversePriceTmcOrderTag =
+      typeof rec.reversePriceTmcOrderTag === 'string' && rec.reversePriceTmcOrderTag.trim()
+        ? rec.reversePriceTmcOrderTag.trim()
+        : undefined;
 
     orders.push({
       orderId,
@@ -364,13 +500,9 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
       quantity: Number(rec.roomCount || rec.quantity || 1),
       totalAmount,
       contacts,
-      cancelOrder: Boolean(
-        rec.cancelOrder ||
-        rec.status === 'CANCEL' ||
-        rec.status === 'CANCELED' ||
-        rec.status === 'CANCEL_ORDER' ||
-        rec.status === 'CUSTOMER_CANCEL'
-      ),
+      status,
+      rescheduledOrderId,
+      reversePriceTmcOrderTag,
       raw: rec,
     });
   }
@@ -379,17 +511,47 @@ export function extractMeituanOrdersFromPayload(payload: unknown): RawMeituanDut
 }
 
 /**
- * 纯函数：从美团订单列表 API 报文中解析出待处理订单概要列表 (DutyUnhandledOrderSummary[])
+ * 判断美团订单是否为取消订单（status 唯一判定标准）。
+ * 依据真实取消样本 (tests/fixtures/meituanCancelDetail.json)：status === 'CANCELED'。
+ * 供阶段一概要提取使用，动态赋予 DutyUnhandledOrderSummary 的 cancelOrder 标识。
  */
-export function parseMeituanOrderListResponse(payload: unknown): DutyUnhandledOrderSummary[] {
-  const rawOrders = extractMeituanOrdersFromPayload(payload);
-  return rawOrders.map((o) => ({
-    orderId: o.orderId,
-    hotelId: o.hotelId,
-    hotelName: o.hotelName,
-    cancelOrder: o.cancelOrder,
-    orderDisplayLabel: o.orderDisplayLabel,
-  }));
+export function isMeituanCancelOrder(rec: Partial<RawMeituanDutyOrder>): boolean {
+  return !!rec && typeof rec.status === 'string' && rec.status.trim().toUpperCase() === 'CANCELED';
+}
+
+/**
+ * 完整两阶段流水线：从美团订单列表 API 报文中解析并过滤出待处理订单概要列表 (DutyUnhandledOrderSummary[])
+ * 阶段一：提取解析为 RawMeituanDutyOrder[]（数据源）
+ * 阶段二：通过 filterMeituanOrder 进行业务规则过滤（改签/商旅拦截，新订/取消放行）
+ */
+export function parseMeituanOrderListResponse(
+  payload: unknown,
+  options?: ParseMeituanOrderOptions
+): DutyUnhandledOrderSummary[] {
+  // 阶段一：数据源提取
+  const rawOrders = extractMeituanOrdersFromPayload(payload, {
+    onExtractionAnomaly: options?.onExtractionAnomaly,
+  });
+
+  // 阶段二：业务规则过滤
+  const allowedSummaries: DutyUnhandledOrderSummary[] = [];
+  for (const rawOrder of rawOrders) {
+    const filterResult = filterMeituanOrder(rawOrder);
+    options?.onFilterResult?.(filterResult);
+    if (!filterResult.allowed) {
+      continue;
+    }
+
+    allowedSummaries.push({
+      orderId: rawOrder.orderId,
+      hotelId: rawOrder.hotelId,
+      hotelName: rawOrder.hotelName,
+      cancelOrder: isMeituanCancelOrder(rawOrder),
+      orderDisplayLabel: rawOrder.orderDisplayLabel,
+    });
+  }
+
+  return allowedSummaries;
 }
 
 /**

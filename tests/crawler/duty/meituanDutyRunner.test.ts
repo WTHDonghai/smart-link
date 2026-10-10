@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { Response as PlaywrightResponse } from 'playwright';
 import { MeituanDutyRunner, humanDelay, checkMeituanPageRisk, dismissMeituanNoticeModals } from '@/src/crawler/duty/channels/meituan/meituanDutyRunner';
+import { MeituanDutyErrorCode } from '@/src/crawler/duty/channels/meituan/meituanDutyContracts';
 import {
   extractMeituanOrdersFromPayload,
   extractMeituanOrderDetailFromPayload,
   extractMeituanSensitiveDataFromPayload,
   fmtDate,
+  isMeituanCancelOrder,
   isMeituanDetailUrl,
   isMeituanListUrl,
   isMeituanSensitiveUrl,
@@ -26,11 +28,18 @@ describe('meituanDutyRunner', () => {
   });
 
   describe('extractMeituanOrdersFromPayload', () => {
-    it('should return empty array for null, undefined, or empty payload', () => {
-      expect(extractMeituanOrdersFromPayload(null)).toEqual([]);
-      expect(extractMeituanOrdersFromPayload(undefined)).toEqual([]);
-      expect(extractMeituanOrdersFromPayload({})).toEqual([]);
-      expect(extractMeituanOrdersFromPayload({ data: {} })).toEqual([]);
+    it('should return empty array only for valid empty list envelopes', () => {
+      expect(extractMeituanOrdersFromPayload([])).toEqual([]);
+      expect(extractMeituanOrdersFromPayload({ data: { list: [] } })).toEqual([]);
+      expect(extractMeituanOrdersFromPayload({ results: [] })).toEqual([]);
+    });
+
+    it('should fail fast when the list payload is not a valid envelope', () => {
+      for (const payload of [null, undefined, {}, { data: {} }]) {
+        expect(() => extractMeituanOrdersFromPayload(payload)).toThrow(
+          expect.objectContaining({ errorCode: MeituanDutyErrorCode.LIST_BUSINESS_FAILED })
+        );
+      }
     });
 
     it('should extract orders from Meituan data.list payload with cent-to-yuan conversion and contact parsing', () => {
@@ -41,6 +50,7 @@ describe('meituanDutyRunner', () => {
             {
               orderId: 'MT-8899001',
               poiId: 'poi-1001',
+              status: 'NEW_ORDER',
               poiName: '美团大酒店(外滩店)',
               orderDisplayLabel: '待处理新订',
               aptCreatTimeString: '2026-09-17 14:00:00',
@@ -80,7 +90,7 @@ describe('meituanDutyRunner', () => {
         { name: '张三', phone: '13800138000' },
         { name: '李四', phone: '13900139000' },
       ]);
-      expect(order.cancelOrder).toBe(false);
+      expect(isMeituanCancelOrder(order)).toBe(false);
     });
 
     it('should derive night count from dates when nights field is omitted', () => {
@@ -89,6 +99,7 @@ describe('meituanDutyRunner', () => {
           orders: [
             {
               orderId: 'MT-776655',
+              status: 'NEW_ORDER',
               checkInDate: '2026-10-01',
               checkOutDate: '2026-10-04',
               price: 360,
@@ -106,24 +117,25 @@ describe('meituanDutyRunner', () => {
       expect(result[0].contacts).toEqual([{ name: '王五', phone: '13700000000' }]);
     });
 
-    it('should detect cancel order when cancelOrder is true or status is CANCEL', () => {
+    it('should detect cancel order via status CANCELED as the sole standard', () => {
       const mockPayload = [
         {
           orderId: 'MT-CANCEL-1',
-          cancelOrder: true,
+          status: 'CANCELED',
+          orderDisplayLabel: '取消',
           totalPrice: 200,
         },
         {
           orderId: 'MT-CANCEL-2',
-          status: 'CANCEL',
+          status: 'CANCELED',
           totalPrice: 300,
         },
       ];
 
       const result = extractMeituanOrdersFromPayload(mockPayload);
       expect(result).toHaveLength(2);
-      expect(result[0].cancelOrder).toBe(true);
-      expect(result[1].cancelOrder).toBe(true);
+      expect(isMeituanCancelOrder(result[0])).toBe(true);
+      expect(isMeituanCancelOrder(result[1])).toBe(true);
     });
   });
 
@@ -923,6 +935,7 @@ describe('meituanDutyRunner', () => {
                     {
                       orderId: 'MT-ORD-101',
                       poiId: 'poi-101',
+                      status: 'NEW_ORDER',
                       poiName: '美团精品酒店',
                       orderDisplayLabel: '新订待处理',
                       cancelOrder: false,
@@ -980,7 +993,7 @@ describe('meituanDutyRunner', () => {
         waitForTimeout,
         waitForResponse: vi.fn().mockResolvedValue({
           status: () => 200,
-          text: () => Promise.resolve(JSON.stringify({ code: 0, data: [] })),
+          text: () => Promise.resolve(JSON.stringify({ code: 0, data: { orders: [] } })),
         }),
       };
       (runner as unknown as { session: { page: unknown } }).session = { page: mockPage };

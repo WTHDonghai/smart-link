@@ -13,7 +13,23 @@ import {
   hasPlainMobileNumber,
   isPlainPhoneNumber,
   isMeituanRiskControlText,
+  extractValidOrderId,
+  isMeituanCancelOrder,
 } from '@/src/crawler/duty/channels/meituan/meituanOrderParsers';
+import {
+  DutyExecutionError,
+  MeituanDutyErrorCode,
+} from '@/src/crawler/duty/channels/meituan/meituanDutyContracts';
+
+function captureParseError(payload: unknown): DutyExecutionError {
+  try {
+    parseMeituanOrderListResponse(payload);
+  } catch (error) {
+    if (error instanceof DutyExecutionError) return error;
+    throw new Error(`Expected DutyExecutionError, received ${String(error)}`);
+  }
+  throw new Error('Expected malformed payload to fail fast');
+}
 
 describe('meituanOrderParsers (Pure Parsing Functions)', () => {
   describe('fmtDate', () => {
@@ -129,11 +145,35 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
   });
 
   describe('parseMeituanOrderListResponse & extractMeituanOrdersFromPayload', () => {
-    it('should return empty array for empty payload or non-object', () => {
-      expect(parseMeituanOrderListResponse(null)).toEqual([]);
-      expect(parseMeituanOrderListResponse({})).toEqual([]);
+    it('合法空列表应解析为空数组', () => {
       expect(parseMeituanOrderListResponse({ data: { list: [] } })).toEqual([]);
       expect(extractMeituanOrdersFromPayload({ data: { orders: [] } })).toEqual([]);
+    });
+
+    it('畸形列表 envelope 必须 Fail-Fast，不得伪装成空列表成功', () => {
+      const malformedPayloads: Array<[unknown, string]> = [
+        [null, '美团列表响应必须为 JSON 对象或订单数组'],
+        [{}, '美团列表响应缺少已知订单列表字段'],
+        [{ data: 123 }, '美团列表响应 data 字段必须为对象'],
+        [{ data: { results: null } }, '美团列表响应 data.results 字段必须为数组'],
+        [{ data: {} }, '美团列表响应 data 缺少已知订单列表字段'],
+        [{ data: { foo: [] } }, '美团列表响应 data 缺少已知订单列表字段'],
+      ];
+
+      for (const [payload, expectedMessage] of malformedPayloads) {
+        expect(() => parseMeituanOrderListResponse(payload)).toThrow(DutyExecutionError);
+        expect(() => extractMeituanOrdersFromPayload(payload)).toThrow(DutyExecutionError);
+
+        const dutyError = captureParseError(payload);
+        expect(dutyError.errorCode).toBe(MeituanDutyErrorCode.LIST_BUSINESS_FAILED);
+        expect(dutyError.retryable).toBe(false);
+        expect(dutyError.message).toContain(expectedMessage);
+      }
+
+      const businessError = captureParseError({ code: 1, data: { results: [] } });
+      expect(businessError.errorCode).toBe(MeituanDutyErrorCode.LIST_BUSINESS_FAILED);
+      expect(businessError.retryable).toBe(false);
+      expect(businessError.message).toBe('[LIST_BUSINESS_FAILED] 美团列表接口业务状态码失败 (code=1)');
     });
 
     it('should extract orders from various nested structures', () => {
@@ -158,10 +198,10 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
               cancelOrder: false,
             },
             {
-              orderID: 'MT-1002',
+              orderId: 'MT-1002',
               poiId: 'HOTEL-1',
               hotelName: '度假酒店',
-              status: 'CANCEL',
+              status: 'CANCELED',
               roomTypeName: '双床房',
               arrival: '2026-09-21',
               departure: '2026-09-22',
@@ -186,7 +226,7 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
         hotelId: 'HOTEL-1',
         hotelName: '度假酒店',
         cancelOrder: true,
-        orderDisplayLabel: 'CANCEL',
+        orderDisplayLabel: 'CANCELED',
       });
 
       const rawOrders = extractMeituanOrdersFromPayload(payload);
@@ -575,6 +615,44 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
         },
       };
       expect(hasPlainMobileNumber(rawWithGuests, null)).toBe(true);
+    });
+  });
+
+  describe('extractValidOrderId (阶段一订单号提取，约定 string 契约)', () => {
+    it('字符串订单号按原始形态直取，支持渠道特殊标识符', () => {
+      expect(extractValidOrderId({ orderId: '5035036081700000001' })).toBe('5035036081700000001');
+      expect(extractValidOrderId({ orderId: 'MT#2026.09:001' })).toBe('MT#2026.09:001');
+      expect(extractValidOrderId({ orderId: 'ORD-999_SPECIAL' })).toBe('ORD-999_SPECIAL');
+      expect(extractValidOrderId({ orderId: ' 5035036081700000001 ' })).toBe('5035036081700000001');
+    });
+
+    it('美团协议唯一事实为 orderId，非 orderId 候选字段应返回 null', () => {
+      expect(extractValidOrderId({ orderID: 'MT_123456' })).toBeNull();
+      expect(extractValidOrderId({ otaOrderId: 'ORD-999' })).toBeNull();
+      expect(extractValidOrderId({ orderNo: 'NO-888' })).toBeNull();
+    });
+
+    it('非字符串、空白或缺失订单号视为契约违规返回 null', () => {
+      expect(extractValidOrderId({ orderId: 88990011 })).toBeNull();
+      expect(extractValidOrderId({ orderId: true })).toBeNull();
+      expect(extractValidOrderId({ orderId: {} })).toBeNull();
+      expect(extractValidOrderId({ orderId: [] })).toBeNull();
+      expect(extractValidOrderId({ orderId: '' })).toBeNull();
+      expect(extractValidOrderId({ orderId: '   ' })).toBeNull();
+      expect(extractValidOrderId(null)).toBeNull();
+      expect(extractValidOrderId(undefined)).toBeNull();
+    });
+  });
+
+  describe('isMeituanCancelOrder (阶段一取消订单状态识别)', () => {
+    it('应以 status === CANCELED 为唯一判定标准（真实样本验证值）', () => {
+      expect(isMeituanCancelOrder({ status: 'CANCELED' })).toBe(true);
+      expect(isMeituanCancelOrder({ status: 'canceled' })).toBe(true);
+    });
+
+    it('label 取消文案不再作为判定依据（status 唯一标准）', () => {
+      expect(isMeituanCancelOrder({ orderDisplayLabel: '取消' })).toBe(false);
+      expect(isMeituanCancelOrder({ orderDisplayLabel: '新订', status: 'NEW_ORDER' })).toBe(false);
     });
   });
 });

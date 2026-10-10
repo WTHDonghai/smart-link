@@ -115,13 +115,7 @@ export class MeituanDetailInspector {
             try {
               const text = await res.text();
               const parsed = JSON.parse(text);
-              const payloadOrderId = String(
-                parsed?.orderId ||
-                parsed?.data?.orderDetail?.orderId ||
-                parsed?.data?.order?.orderId ||
-                parsed?.data?.orderId ||
-                ''
-              ).trim();
+              const payloadOrderId = String(parsed?.data?.orderId || '').trim();
               if (payloadOrderId && payloadOrderId !== otaOrderId.trim()) {
                 return null;
               }

@@ -1,0 +1,827 @@
+{
+    "data": {
+        "address": "成都市长寿路6号附6号",
+        "agreementHosting": false,
+        "appointmentStatus": 1150,
+        "aptCreatTime": 1785340768000,
+        "aptCreatTimeString": "2026-07-29 23:59:28",
+        "arriveTime": 1785477600000,
+        "arriveTimeStr": "2026-07-31 14:00:00",
+        "autoAccept": 0,
+        "autoOrderConfirm": 1,
+        "bizCardCounts": 43400,
+        "bizEnterprisePrice": null,
+        "bizPromotionDetail": [
+            {
+                "additionalText": "",
+                "bizMoney": 848,
+                "bizMoneyLocal": 0,
+                "bizPromotionType": 1,
+                "hoverText": "",
+                "hoverType": 0,
+                "tagInfo": "早订多减",
+                "tagInfo4En": "Early Bird"
+            },
+            {
+                "additionalText": "",
+                "bizMoney": 1000,
+                "bizMoneyLocal": 0,
+                "bizPromotionType": 1,
+                "hoverText": "",
+                "hoverType": 0,
+                "tagInfo": "马上来财",
+                "tagInfo4En": "马上来财"
+            },
+            {
+                "additionalText": "",
+                "bizMoney": 4240,
+                "bizMoneyLocal": 0,
+                "bizPromotionType": 2,
+                "hoverText": "",
+                "hoverType": 0,
+                "tagInfo": "美团神券",
+                "tagInfo4En": "美团神券"
+            },
+            {
+                "additionalText": "",
+                "bizMoney": 12720,
+                "bizMoneyLocal": 0,
+                "bizPromotionType": 1,
+                "hoverText": "",
+                "hoverType": 0,
+                "tagInfo": "白金会员8.5折",
+                "tagInfo4En": "白金会员8.5折"
+            },
+            {
+                "additionalText": "",
+                "bizMoney": 24592,
+                "bizMoneyLocal": 0,
+                "bizPromotionType": 1,
+                "hoverText": "",
+                "hoverType": 0,
+                "tagInfo": "天天特价",
+                "tagInfo4En": "Basic Deal"
+            }
+        ],
+        "bizRefund": false,
+        "bizSmsContact": true,
+        "blackFlag": "",
+        "bookSucTime": 1785340833000,
+        "bookSucTimeString": "2026-07-30 00:00:33",
+        "booking2CancelDiffTime": 0,
+        "bookingTime": 1785340768000,
+        "bookingTimeString": "2026-07-29 23:59:28",
+        "breakfastInfo": [
+            {
+                "breakfastDate": "2026-07-31 00:00:00",
+                "breakfastDesc": "含2早",
+                "paymentUnitId": "3797049719475382882"
+            }
+        ],
+        "cancelFee": 0,
+        "cancelOrder": false,
+        "cancelRules": [],
+        "cardCounts": 7436,
+        "cards": [
+            {
+                "activeTag": null,
+                "activityId": 408088114332381500,
+                "comment": "",
+                "money": 8000,
+                "status": 1,
+                "title": "酒店神券-膨胀专享"
+            },
+            {
+                "activeTag": 2,
+                "activityId": 1342857567,
+                "comment": "本活动为津贴层活动，与同津贴层及人群层活动不可叠加，与其它基础层商促活动可叠加。每间夜立减X元。",
+                "money": 1000,
+                "status": null,
+                "title": "马上来财（满减）"
+            },
+            {
+                "activeTag": 0,
+                "activityId": 2098789727,
+                "comment": "2024C4优价最终版-2026新逻辑",
+                "money": 4336,
+                "status": null,
+                "title": "2024C4优价最终版-2026新逻辑"
+            },
+            {
+                "activeTag": 0,
+                "activityId": 1429694162,
+                "comment": "美团酒店会员尽享折扣",
+                "money": 14500,
+                "status": null,
+                "title": "会员价-安得天馨酒店-781913923-1664625157412"
+            },
+            {
+                "activeTag": 2,
+                "activityId": 72057594125729680,
+                "comment": "此活动由商家发起，活动促销费由商家承担",
+                "money": 28000,
+                "status": null,
+                "title": "天天特价"
+            },
+            {
+                "activeTag": 6,
+                "activityId": 72057594078599310,
+                "comment": "此活动由商家发起，活动促销费由商家承担",
+                "money": 1000,
+                "status": null,
+                "title": "早订多减"
+            }
+        ],
+        "channelLabel": false,
+        "checkInDate": 1785427200000,
+        "checkInDateModels": [
+            {
+                "checkInDate": 1785427200000,
+                "checkInDateString": "2026-07-31 00:00:00",
+                "pricePerRoom": 96364,
+                "refundedRoomNightsCnt": 1,
+                "roomNightsInfo": [
+                    {
+                        "checkInTimeStamp": 1785427200000,
+                        "checkInTimeStampString": "2026-07-31 00:00:00",
+                        "commission": 11564,
+                        "id": "3797049719475382882",
+                        "mtSoldPrice": 96364,
+                        "refundMoney": 0,
+                        "refundReason": null,
+                        "refunded": false,
+                        "roomType": "",
+                        "roomUser": ""
+                    }
+                ]
+            }
+        ],
+        "checkInDateString": "2026-07-31 00:00:00",
+        "checkInStatus": 8,
+        "checkInType": 0,
+        "checkOutDate": 1785513600000,
+        "checkOutDateString": "2026-08-01 00:00:00",
+        "commission": 11564,
+        "commissionDescModel": {
+            "subRatioDesc": "",
+            "wxAndLowSub": false
+        },
+        "contacts": [
+            {
+                "carLicenses": [],
+                "email": "",
+                "identity": "",
+                "name": "张**",
+                "phone": "",
+                "roomIndex": null
+            }
+        ],
+        "containerStatus": 0,
+        "continueLiveOrder": false,
+        "crsPromotionCode": "",
+        "dawnFlag": 0,
+        "deliveryOrder": 0,
+        "departure": null,
+        "discountType": 2,
+        "displayedSeparatelyOutsideList": [],
+        "distributorId": 1,
+        "donationInfo": null,
+        "dynamicCouponServicePrice": null,
+        "ebSaveOrder": false,
+        "enterpriseName": "",
+        "extensionRoomNum": "",
+        "extraPrice": -1,
+        "fixRoom": true,
+        "floorPrice": 41400,
+        "freeTip": 0,
+        "freeTipPrice": 96364,
+        "fuseInfo": null,
+        "fxFloorInvoiceInfo": null,
+        "goodsId": 1023306606,
+        "goodsInfos": [],
+        "goodsTagCode": 0,
+        "goodsType": 1,
+        "goodsVersion": 1,
+        "greenChannelMark": 0,
+        "guaranteeType": 0,
+        "guests": [
+            {
+                "carLicenses": [],
+                "email": "",
+                "identity": "",
+                "name": "张**",
+                "phone": "",
+                "roomIndex": null
+            }
+        ],
+        "hasKickOutPrice": false,
+        "hasPromotion": true,
+        "hourRoomTime": null,
+        "imMark": 0,
+        "independentDisplayPrice": [],
+        "inquiryPrice": false,
+        "insuranceClaim": 0,
+        "invDetailModel": null,
+        "invoiceDisplayInfo": {
+            "invoiceRequireDesc": "若客人索取发票，请贵酒店开具，参考开票金额：¥0.00",
+            "showDetail": false
+        },
+        "invoiceMark": 0,
+        "invoicePartyTagNewLogic": true,
+        "invoiceTagModel": {
+            "invoiceAppointment": 0,
+            "invoiceCanCreate": true,
+            "invoiceIsAppointed": false,
+            "invoiceMoney": 0,
+            "invoiceParty": 3
+        },
+        "isAdvertise": false,
+        "isCashPayChange": false,
+        "isOccupiedTransSuc": null,
+        "keyTags": [],
+        "kickOutNewPolicyOrder": false,
+        "kickOutPrice": null,
+        "longAcceptTimeMark": false,
+        "lookSensitive": false,
+        "lowerCarbon": null,
+        "memberBenefits": 1,
+        "memberBenefitsWord": [
+            "白金会员专享8.5折"
+        ],
+        "memberCommissionRiskControlMark": 0,
+        "memberDisplayMode": 1,
+        "memberLevel": 4,
+        "memberMark": 0,
+        "modifyGuest": false,
+        "newOrderId": "",
+        "nonRoomAddOnPopInfo": null,
+        "nonRoomOrder": null,
+        "occupiedMark": 0,
+        "offLine": 0,
+        "orderBasePriceModel": {
+            "amountDetailList": [],
+            "bizPromotionDetails": [
+                {
+                    "additionalText": "",
+                    "bizMoney": {
+                        "originalPrice": 1000,
+                        "originalPriceLocal": 0,
+                        "price": 1000,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "bizPromotionType": 1,
+                    "hoverText": "",
+                    "hoverType": 0,
+                    "promotionId": 1342857567,
+                    "promotionType": 0,
+                    "showPattern": 0,
+                    "tagName": {
+                        "tagInfo": "马上来财",
+                        "tagInfo4En": "马上来财"
+                    }
+                },
+                {
+                    "additionalText": "",
+                    "bizMoney": {
+                        "originalPrice": 12720,
+                        "originalPriceLocal": 0,
+                        "price": 12720,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "bizPromotionType": 1,
+                    "hoverText": "",
+                    "hoverType": 0,
+                    "promotionId": 1429694162,
+                    "promotionType": 0,
+                    "showPattern": 0,
+                    "tagName": {
+                        "tagInfo": "白金会员8.5折",
+                        "tagInfo4En": "白金会员8.5折"
+                    }
+                },
+                {
+                    "additionalText": "",
+                    "bizMoney": {
+                        "originalPrice": 4240,
+                        "originalPriceLocal": 0,
+                        "price": 4240,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "bizPromotionType": 2,
+                    "hoverText": "",
+                    "hoverType": 0,
+                    "promotionId": 1773014497,
+                    "promotionType": 0,
+                    "showPattern": 0,
+                    "tagName": {
+                        "tagInfo": "美团神券",
+                        "tagInfo4En": "美团神券"
+                    }
+                },
+                {
+                    "additionalText": "",
+                    "bizMoney": {
+                        "originalPrice": 848,
+                        "originalPriceLocal": 0,
+                        "price": 848,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "bizPromotionType": 1,
+                    "hoverText": "",
+                    "hoverType": 0,
+                    "promotionId": 72057594078599310,
+                    "promotionType": 0,
+                    "showPattern": 0,
+                    "tagName": {
+                        "tagInfo": "早订多减",
+                        "tagInfo4En": "Early Bird"
+                    }
+                },
+                {
+                    "additionalText": "",
+                    "bizMoney": {
+                        "originalPrice": 24592,
+                        "originalPriceLocal": 0,
+                        "price": 24592,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "bizPromotionType": 1,
+                    "hoverText": "",
+                    "hoverType": 0,
+                    "promotionId": 72057594125729680,
+                    "promotionType": 0,
+                    "showPattern": 0,
+                    "tagName": {
+                        "tagInfo": "天天特价",
+                        "tagInfo4En": "Basic Deal"
+                    }
+                }
+            ],
+            "commission": {
+                "originalPrice": 11564,
+                "originalPriceLocal": 0,
+                "price": 11564,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "floorAwardPrice": null,
+            "floorPrice": {
+                "originalPrice": 84800,
+                "originalPriceLocal": 0,
+                "price": 41400,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": true
+            },
+            "kickOutPrice": {
+                "originalPrice": 0,
+                "originalPriceLocal": 0,
+                "price": 0,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "preSettlementInfo": {
+                "partnerIncome": "￥0.00",
+                "refundByMoneyList": [],
+                "statementPeriod": "2026-10-05 至 2026-10-11"
+            },
+            "promotionPrice": {
+                "originalPrice": 43400,
+                "originalPriceLocal": 0,
+                "price": 43400,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "salePrice": {
+                "originalPrice": 96364,
+                "originalPriceLocal": 0,
+                "price": 52964,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": true
+            },
+            "subRatio": {
+                "originalPrice": 0,
+                "originalPriceLocal": 0,
+                "price": 0,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            }
+        },
+        "orderContacts": [],
+        "orderDisplayLabel": "新订",
+        "orderId": "5035035912543413058",
+        "orderLabel": 0,
+        "orderPassAdPrice": null,
+        "orderPricePattern": 1,
+        "orderStatusExplain": "",
+        "orderType": 4,
+        "originOrRescheduled": 100,
+        "ownerPhones": [],
+        "packageBaseInfos": [],
+        "packageMark": 0,
+        "packageRoom": 2,
+        "partRefundInfo": null,
+        "partnerId": 4536482,
+        "partnerName": "四川常寿顺顺酒店管理有限公司",
+        "payTime": 1785340794000,
+        "payTimeString": "2026-07-29 23:59:54",
+        "paymentType": 0,
+        "poiId": 781913923,
+        "poiIdStr": "781913923",
+        "poiName": "成都安得天馨Wellness Resort酒店",
+        "pointDeductionTip": "",
+        "preSettlementInfo": {
+            "partnerIncome": "0.00",
+            "refundByMoneyList": [],
+            "statementPeriod": "2026-10-05 至 2026-10-11"
+        },
+        "pretender": false,
+        "price": 52964,
+        "priceInfo": [
+            {
+                "commission": 11564,
+                "date": 1785427200000,
+                "dateString": "2026-07-31 00:00:00",
+                "floorPrice": 41400,
+                "paymentUnitId": "3797049719475382882",
+                "price": 52964,
+                "subRatio": 1200,
+                "subRatioDesc": "",
+                "wxAndLowSub": false
+            }
+        ],
+        "priceInfoConstitute": [
+            {
+                "commission": 11564,
+                "date": 1785427200000,
+                "dateString": "2026-07-31 00:00:00",
+                "floorPrice": 41400,
+                "paymentUnitId": "3797049719475382882",
+                "price": 52964,
+                "subRatio": 1200,
+                "subRatioDesc": "",
+                "wxAndLowSub": false
+            }
+        ],
+        "priceMode": 9,
+        "realCommission": 11564,
+        "realFloorPrice": 41400,
+        "reduceCommisionMark": 0,
+        "refundBearer": "BIZ",
+        "refundOrderModel": null,
+        "refundRecords": [
+            {
+                "checkInDateModels": [
+                    {
+                        "checkInDate": 1785427200000,
+                        "checkInDateString": "2026-07-31 00:00:00",
+                        "pricePerRoom": 96364,
+                        "refundedRoomNightsCnt": 1,
+                        "roomNightsInfo": [
+                            {
+                                "checkInTimeStamp": 1785427200000,
+                                "checkInTimeStampString": "2026-07-31 00:00:00",
+                                "commission": 11564,
+                                "id": "3797049719475382882",
+                                "mtSoldPrice": 96364,
+                                "refundMoney": 39528,
+                                "refundReason": "OTHERS",
+                                "refunded": true,
+                                "roomType": "",
+                                "roomUser": ""
+                            }
+                        ]
+                    }
+                ],
+                "operateTimeStamp": 1785397054000,
+                "operateTimeStampString": "2026-07-30 15:37:34",
+                "refundBearer": "BIZ",
+                "refundPattern": 2,
+                "refundPromisee": "system",
+                "refundReason": "其他",
+                "totalRefundedMoney": 39528,
+                "userPenalty": 0
+            }
+        ],
+        "remark": "",
+        "resaleConfirmStatus": null,
+        "resaleMark": 0,
+        "resaleNewOrderType": 0,
+        "resaleOldOrderIdList": [],
+        "rescheduledOrderId": "5035035915540102978",
+        "reversePriceTmcOrderTag": "",
+        "rightsModelList": [
+            {
+                "autoConfirmSource": null,
+                "remindMsg": "",
+                "rightsCode": "MFQX",
+                "rightsConfirmType": "",
+                "rightsCostDesc": "",
+                "rightsId": "25000",
+                "rightsItemModelList": [
+                    {
+                        "expandDesc": "",
+                        "itemRemindText": "",
+                        "itemText": "可履约（接单后自动确认）",
+                        "itemType": 0
+                    }
+                ],
+                "rightsItemStatus": 2,
+                "rightsName": "无忧取消",
+                "rightsPerformanceStatus": 1,
+                "rightsServiceBriefDesc": "",
+                "rightsServiceDesc": "",
+                "rightsServiceDetailDesc": "",
+                "simpleStatusDesc": "可履约（接单后自动确认）"
+            }
+        ],
+        "rightsNames": [
+            "无忧取消"
+        ],
+        "rightsNeedConfirm": 1,
+        "rightsStatus": 2,
+        "riskOrderInfo": {
+            "holidayDesc": "",
+            "moreThanAFewDays": false,
+            "riskOrder": false
+        },
+        "roomCount": 1,
+        "roomDesc": "",
+        "roomId": 385788166,
+        "roomName": "安馨特大双床房[百亿补贴]",
+        "roomNightPriceModels": [
+            {
+                "date": 1785427200000,
+                "dateStr": "2026-07-31 00:00:00",
+                "hasRefunded": true,
+                "orderBasePriceModel": {
+                    "amountDetailList": [],
+                    "bizPromotionDetails": [
+                        {
+                            "additionalText": "",
+                            "bizMoney": {
+                                "originalPrice": 1000,
+                                "originalPriceLocal": 0,
+                                "price": 1000,
+                                "priceDesc": "",
+                                "priceLocal": 0,
+                                "showOriginalPrice": false
+                            },
+                            "bizPromotionType": 1,
+                            "hoverText": "",
+                            "hoverType": 0,
+                            "promotionId": 1342857567,
+                            "promotionType": 0,
+                            "showPattern": 0,
+                            "tagName": {
+                                "tagInfo": "马上来财",
+                                "tagInfo4En": "马上来财"
+                            }
+                        },
+                        {
+                            "additionalText": "",
+                            "bizMoney": {
+                                "originalPrice": 12720,
+                                "originalPriceLocal": 0,
+                                "price": 12720,
+                                "priceDesc": "",
+                                "priceLocal": 0,
+                                "showOriginalPrice": false
+                            },
+                            "bizPromotionType": 1,
+                            "hoverText": "",
+                            "hoverType": 0,
+                            "promotionId": 1429694162,
+                            "promotionType": 0,
+                            "showPattern": 0,
+                            "tagName": {
+                                "tagInfo": "白金会员8.5折",
+                                "tagInfo4En": "白金会员8.5折"
+                            }
+                        },
+                        {
+                            "additionalText": "",
+                            "bizMoney": {
+                                "originalPrice": 4240,
+                                "originalPriceLocal": 0,
+                                "price": 4240,
+                                "priceDesc": "",
+                                "priceLocal": 0,
+                                "showOriginalPrice": false
+                            },
+                            "bizPromotionType": 2,
+                            "hoverText": "",
+                            "hoverType": 0,
+                            "promotionId": 1773014497,
+                            "promotionType": 0,
+                            "showPattern": 0,
+                            "tagName": {
+                                "tagInfo": "美团神券",
+                                "tagInfo4En": "美团神券"
+                            }
+                        },
+                        {
+                            "additionalText": "",
+                            "bizMoney": {
+                                "originalPrice": 848,
+                                "originalPriceLocal": 0,
+                                "price": 848,
+                                "priceDesc": "",
+                                "priceLocal": 0,
+                                "showOriginalPrice": false
+                            },
+                            "bizPromotionType": 1,
+                            "hoverText": "",
+                            "hoverType": 0,
+                            "promotionId": 72057594078599310,
+                            "promotionType": 0,
+                            "showPattern": 0,
+                            "tagName": {
+                                "tagInfo": "早订多减",
+                                "tagInfo4En": "Early Bird"
+                            }
+                        },
+                        {
+                            "additionalText": "",
+                            "bizMoney": {
+                                "originalPrice": 24592,
+                                "originalPriceLocal": 0,
+                                "price": 24592,
+                                "priceDesc": "",
+                                "priceLocal": 0,
+                                "showOriginalPrice": false
+                            },
+                            "bizPromotionType": 1,
+                            "hoverText": "",
+                            "hoverType": 0,
+                            "promotionId": 72057594125729680,
+                            "promotionType": 0,
+                            "showPattern": 0,
+                            "tagName": {
+                                "tagInfo": "天天特价",
+                                "tagInfo4En": "Basic Deal"
+                            }
+                        }
+                    ],
+                    "commission": {
+                        "originalPrice": 11564,
+                        "originalPriceLocal": 0,
+                        "price": 11564,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "floorAwardPrice": null,
+                    "floorPrice": {
+                        "originalPrice": 84800,
+                        "originalPriceLocal": 0,
+                        "price": 41400,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": true
+                    },
+                    "kickOutPrice": {
+                        "originalPrice": 0,
+                        "originalPriceLocal": 0,
+                        "price": 0,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "preSettlementInfo": {
+                        "partnerIncome": "￥0.00",
+                        "refundByMoneyList": [],
+                        "statementPeriod": ""
+                    },
+                    "promotionPrice": {
+                        "originalPrice": 43400,
+                        "originalPriceLocal": 0,
+                        "price": 43400,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "salePrice": {
+                        "originalPrice": 96364,
+                        "originalPriceLocal": 0,
+                        "price": 52964,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": true
+                    },
+                    "subRatio": {
+                        "originalPrice": 1200,
+                        "originalPriceLocal": 0,
+                        "price": 1200,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    }
+                },
+                "paymentUnitId": "3797049719475382882"
+            }
+        ],
+        "roomNo": "",
+        "rpCustomName": "",
+        "rpInfo": "【含2早】无忧取消权益订单 2026/07/31 20:00:00 前可免费取消",
+        "rpServiceInfoes": [
+            {
+                "breakfastDate": 1785427200000,
+                "breakfastDateStr": "2026-07-31 00:00:00",
+                "paymentUnitId": 3797049719475383000,
+                "serviceItemNum": 2,
+                "serviceItemType": 1,
+                "serviceName": "",
+                "serviceSwitch": 0,
+                "serviceType": 0,
+                "specBreak": 1
+            }
+        ],
+        "secondConfirmStatus": 0,
+        "serviceFeeList": [],
+        "showCommision": true,
+        "showFloor": false,
+        "showRedPackage": 0,
+        "showRefuseButton": false,
+        "showRoomNightPreCalculate": false,
+        "showRoomNumDefault": false,
+        "showVIPTag": 1,
+        "signInboundTmcAgreement": false,
+        "sourceOrderId": "",
+        "specialInvoiceTrialOrder": false,
+        "status": "RESCHEDULED",
+        "superGroup": false,
+        "superGroupGoodsName": "",
+        "tags": [
+            {
+                "color": "#0590FB",
+                "enTitle": "",
+                "extendInfo": {
+                    "content": "<ul style=\"font-size: 12px; word-break: break-all; padding-left: 20px;\"><li>若客人索取发票，请贵酒店开具，开票金额可在订单详情页查询</li><li>依国家法律要求，商家有义务为消费者提供正式发票</li><li>为不影响您的HOS权益及流量曝光，请履约为客人开具发票</li></ul>",
+                    "enContent": "",
+                    "popover": true,
+                    "title": ""
+                },
+                "outline": true,
+                "tagType": 41,
+                "title": "酒店开发票"
+            },
+            {
+                "color": "#0590FB",
+                "enTitle": "",
+                "extendInfo": null,
+                "outline": true,
+                "tagType": 30,
+                "title": "住客权益"
+            }
+        ],
+        "taskCount": null,
+        "taskCreateTime": null,
+        "taskCreateTimeString": "",
+        "taskType": null,
+        "thirdFrom": null,
+        "thirdPartner": false,
+        "timelyConfirm": false,
+        "timeoutRefundSendMsgBtn": false,
+        "tmcInvoiceLabel": false,
+        "todayCheckIn": true,
+        "totalFee": 39528,
+        "totalOriginFloorPrice": 84800,
+        "touristMark": 0,
+        "traceRoom": 0,
+        "transformOrderMark": 1,
+        "type": 4,
+        "urgent": 0,
+        "userId": 370718088,
+        "veilGoodsInfo": {
+            "directionalDisplay": true,
+            "displayRuleList": [
+                "白金及以上专享",
+                "熟客专享",
+                "风控用户不可见"
+            ],
+            "displayTitle": "专客专享规则，部分用户可见",
+            "subDesc": "如有问题请咨询商务经理"
+        },
+        "verifyStatus": 1,
+        "visitorExpired": false,
+        "visitors": []
+    },
+    "message": "成功",
+    "status": 0
+}

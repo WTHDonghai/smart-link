@@ -1,0 +1,459 @@
+{
+    "data": {
+        "address": "自贡市北环路88号",
+        "agreementHosting": false,
+        "appointmentStatus": 1110,
+        "aptCreatTime": 1788856489000,
+        "aptCreatTimeString": "2026-09-08 16:34:49",
+        "arriveTime": 1791214200000,
+        "arriveTimeStr": "2026-10-05 23:30:00",
+        "autoAccept": 0,
+        "autoOrderConfirm": 1,
+        "bizCardCounts": 0,
+        "bizEnterprisePrice": null,
+        "bizPromotionDetail": [],
+        "bizRefund": false,
+        "bizSmsContact": true,
+        "blackFlag": "",
+        "bookSucTime": 1788856521000,
+        "bookSucTimeString": "2026-09-08 16:35:21",
+        "booking2CancelDiffTime": 0,
+        "bookingTime": 1788856489000,
+        "bookingTimeString": "2026-09-08 16:34:49",
+        "breakfastInfo": [
+            {
+                "breakfastDate": "2026-10-05 00:00:00",
+                "breakfastDesc": "含2早",
+                "paymentUnitId": "3802295789020342634"
+            }
+        ],
+        "cancelFee": 0,
+        "cancelOrder": false,
+        "cancelRules": [],
+        "cardCounts": 0,
+        "cards": [],
+        "channelLabel": false,
+        "checkInDate": 1791129600000,
+        "checkInDateModels": [
+            {
+                "checkInDate": 1791129600000,
+                "checkInDateString": "2026-10-05 00:00:00",
+                "pricePerRoom": 30000,
+                "refundedRoomNightsCnt": 0,
+                "roomNightsInfo": [
+                    {
+                        "checkInTimeStamp": 1791129600000,
+                        "checkInTimeStampString": "2026-10-05 00:00:00",
+                        "commission": 3000,
+                        "id": "3802295789020342634",
+                        "mtSoldPrice": 30000,
+                        "refundMoney": 0,
+                        "refundReason": null,
+                        "refunded": false,
+                        "roomType": "",
+                        "roomUser": ""
+                    }
+                ]
+            }
+        ],
+        "checkInDateString": "2026-10-05 00:00:00",
+        "checkInStatus": 4,
+        "checkInType": 0,
+        "checkOutDate": 1791216000000,
+        "checkOutDateString": "2026-10-06 00:00:00",
+        "commission": 3000,
+        "commissionDescModel": {
+            "subRatioDesc": "",
+            "wxAndLowSub": false
+        },
+        "contacts": [
+            {
+                "carLicenses": [],
+                "email": "",
+                "identity": "",
+                "name": "申**",
+                "phone": "",
+                "roomIndex": null
+            }
+        ],
+        "containerStatus": 0,
+        "continueLiveOrder": false,
+        "crsPromotionCode": "",
+        "dawnFlag": 0,
+        "deliveryOrder": 0,
+        "departure": null,
+        "discountType": 0,
+        "displayedSeparatelyOutsideList": [],
+        "distributorId": 1,
+        "donationInfo": {
+            "charityAmount": 10,
+            "charityOrder": true
+        },
+        "dynamicCouponServicePrice": null,
+        "ebSaveOrder": false,
+        "enterpriseName": "",
+        "extensionRoomNum": "",
+        "extraPrice": -1,
+        "fixRoom": true,
+        "floorPrice": 27000,
+        "freeTip": 0,
+        "freeTipPrice": 30000,
+        "fuseInfo": null,
+        "fxFloorInvoiceInfo": null,
+        "goodsId": 802409190,
+        "goodsInfos": [],
+        "goodsTagCode": 0,
+        "goodsType": 1,
+        "goodsVersion": 1,
+        "greenChannelMark": 0,
+        "guaranteeType": 0,
+        "guests": [
+            {
+                "carLicenses": [],
+                "email": "",
+                "identity": "",
+                "name": "申**",
+                "phone": "",
+                "roomIndex": null
+            }
+        ],
+        "hasKickOutPrice": false,
+        "hasPromotion": false,
+        "hourRoomTime": null,
+        "imMark": 0,
+        "independentDisplayPrice": [],
+        "inquiryPrice": false,
+        "insuranceClaim": 0,
+        "invDetailModel": null,
+        "invoiceDisplayInfo": {
+            "invoiceRequireDesc": "若客人索取发票，请贵酒店开具，参考开票金额：¥300.00",
+            "showDetail": false
+        },
+        "invoiceMark": 0,
+        "invoicePartyTagNewLogic": true,
+        "invoiceTagModel": {
+            "invoiceAppointment": 0,
+            "invoiceCanCreate": true,
+            "invoiceIsAppointed": false,
+            "invoiceMoney": 30000,
+            "invoiceParty": 3
+        },
+        "isAdvertise": false,
+        "isCashPayChange": false,
+        "isOccupiedTransSuc": null,
+        "keyTags": [],
+        "kickOutNewPolicyOrder": false,
+        "kickOutPrice": null,
+        "longAcceptTimeMark": false,
+        "lookSensitive": true,
+        "lowerCarbon": null,
+        "memberBenefits": 0,
+        "memberBenefitsWord": [],
+        "memberCommissionRiskControlMark": 0,
+        "memberDisplayMode": 1,
+        "memberLevel": 2,
+        "memberMark": null,
+        "modifyGuest": false,
+        "newOrderId": "",
+        "nonRoomAddOnPopInfo": null,
+        "nonRoomOrder": null,
+        "occupiedMark": 0,
+        "offLine": 0,
+        "orderBasePriceModel": {
+            "amountDetailList": [],
+            "bizPromotionDetails": [],
+            "commission": {
+                "originalPrice": 3000,
+                "originalPriceLocal": 0,
+                "price": 3000,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "floorAwardPrice": null,
+            "floorPrice": {
+                "originalPrice": 27000,
+                "originalPriceLocal": 0,
+                "price": 27000,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "kickOutPrice": {
+                "originalPrice": 0,
+                "originalPriceLocal": 0,
+                "price": 0,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "preSettlementInfo": {
+                "partnerIncome": "￥269.90",
+                "refundByMoneyList": [],
+                "statementPeriod": "2026-10-05 至 2026-10-11"
+            },
+            "promotionPrice": {
+                "originalPrice": 0,
+                "originalPriceLocal": 0,
+                "price": 0,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "salePrice": {
+                "originalPrice": 30000,
+                "originalPriceLocal": 0,
+                "price": 30000,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            },
+            "subRatio": {
+                "originalPrice": 0,
+                "originalPriceLocal": 0,
+                "price": 0,
+                "priceDesc": "",
+                "priceLocal": 0,
+                "showOriginalPrice": false
+            }
+        },
+        "orderContacts": [],
+        "orderDisplayLabel": "新订",
+        "orderId": "5035036039271512650",
+        "orderLabel": 0,
+        "orderPassAdPrice": null,
+        "orderPricePattern": 1,
+        "orderStatusExplain": "",
+        "orderType": 4,
+        "originOrRescheduled": 0,
+        "ownerPhones": [],
+        "packageBaseInfos": [],
+        "packageMark": 0,
+        "packageRoom": 2,
+        "partRefundInfo": {
+            "partRefund": false,
+            "partRefundByMoney": false,
+            "partRefundByMoneyDesc": "",
+            "roomInfo": [
+                {
+                    "bizDay": "2026-10-05",
+                    "leftCount": 1,
+                    "refundCount": 0,
+                    "totalCount": 1
+                }
+            ],
+            "totalRefundRoomRightCount": 0,
+            "totalRoomNightCount": 1
+        },
+        "partnerId": 4551093,
+        "partnerName": "自贡禅驿酒店有限公司",
+        "payTime": 1788856492000,
+        "payTimeString": "2026-09-08 16:34:52",
+        "paymentType": 0,
+        "poiId": 1533758592,
+        "poiIdStr": "1533758592",
+        "poiName": "禅驿度假酒店（自贡方特恐龙王国店）",
+        "pointDeductionTip": "",
+        "preSettlementInfo": {
+            "partnerIncome": "269.90",
+            "refundByMoneyList": [],
+            "statementPeriod": "2026-10-05 至 2026-10-11"
+        },
+        "pretender": false,
+        "price": 30000,
+        "priceInfo": [
+            {
+                "commission": 3000,
+                "date": 1791129600000,
+                "dateString": "2026-10-05 00:00:00",
+                "floorPrice": 27000,
+                "paymentUnitId": "3802295789020342634",
+                "price": 30000,
+                "subRatio": 1000,
+                "subRatioDesc": "",
+                "wxAndLowSub": false
+            }
+        ],
+        "priceInfoConstitute": [
+            {
+                "commission": 3000,
+                "date": 1791129600000,
+                "dateString": "2026-10-05 00:00:00",
+                "floorPrice": 27000,
+                "paymentUnitId": "3802295789020342634",
+                "price": 30000,
+                "subRatio": 1000,
+                "subRatioDesc": "",
+                "wxAndLowSub": false
+            }
+        ],
+        "priceMode": 9,
+        "realCommission": 3000,
+        "realFloorPrice": 27000,
+        "reduceCommisionMark": 0,
+        "refundBearer": null,
+        "refundOrderModel": null,
+        "refundRecords": [],
+        "remark": "",
+        "resaleConfirmStatus": null,
+        "resaleMark": 0,
+        "resaleNewOrderType": 0,
+        "resaleOldOrderIdList": [],
+        "rescheduledOrderId": "0",
+        "reversePriceTmcOrderTag": "",
+        "rightsModelList": [],
+        "rightsNames": [],
+        "rightsNeedConfirm": 0,
+        "rightsStatus": 0,
+        "riskOrderInfo": {
+            "holidayDesc": "",
+            "moreThanAFewDays": false,
+            "riskOrder": false
+        },
+        "roomCount": 1,
+        "roomDesc": "",
+        "roomId": 309339063,
+        "roomName": "云隐双床房【商旅用户专享价】",
+        "roomNightPriceModels": [
+            {
+                "date": 1791129600000,
+                "dateStr": "2026-10-05 00:00:00",
+                "hasRefunded": false,
+                "orderBasePriceModel": {
+                    "amountDetailList": [],
+                    "bizPromotionDetails": [],
+                    "commission": {
+                        "originalPrice": 3000,
+                        "originalPriceLocal": 0,
+                        "price": 3000,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "floorAwardPrice": null,
+                    "floorPrice": {
+                        "originalPrice": 27000,
+                        "originalPriceLocal": 0,
+                        "price": 27000,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "kickOutPrice": {
+                        "originalPrice": 0,
+                        "originalPriceLocal": 0,
+                        "price": 0,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "preSettlementInfo": {
+                        "partnerIncome": "￥270.00",
+                        "refundByMoneyList": [],
+                        "statementPeriod": ""
+                    },
+                    "promotionPrice": {
+                        "originalPrice": 0,
+                        "originalPriceLocal": 0,
+                        "price": 0,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "salePrice": {
+                        "originalPrice": 30000,
+                        "originalPriceLocal": 0,
+                        "price": 30000,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    },
+                    "subRatio": {
+                        "originalPrice": 1000,
+                        "originalPriceLocal": 0,
+                        "price": 1000,
+                        "priceDesc": "",
+                        "priceLocal": 0,
+                        "showOriginalPrice": false
+                    }
+                },
+                "paymentUnitId": "3802295789020342634"
+            }
+        ],
+        "roomNo": "",
+        "rpCustomName": "",
+        "rpInfo": "【含2早】2026-10-05 14:00:00前可取消",
+        "rpServiceInfoes": [
+            {
+                "breakfastDate": 1791129600000,
+                "breakfastDateStr": "2026-10-05 00:00:00",
+                "paymentUnitId": 3802295789020343000,
+                "serviceItemNum": 2,
+                "serviceItemType": 1,
+                "serviceName": "",
+                "serviceSwitch": 0,
+                "serviceType": 0,
+                "specBreak": 1
+            }
+        ],
+        "secondConfirmStatus": 0,
+        "serviceFeeList": [],
+        "showCommision": true,
+        "showFloor": false,
+        "showRedPackage": 0,
+        "showRefuseButton": false,
+        "showRoomNightPreCalculate": false,
+        "showRoomNumDefault": false,
+        "showVIPTag": null,
+        "signInboundTmcAgreement": false,
+        "sourceOrderId": "",
+        "specialInvoiceTrialOrder": false,
+        "status": "CONSUMED",
+        "superGroup": false,
+        "superGroupGoodsName": "",
+        "tags": [
+            {
+                "color": "#0590FB",
+                "enTitle": "",
+                "extendInfo": {
+                    "content": "<ul style=\"font-size: 12px; word-break: break-all; padding-left: 20px;\"><li>若客人索取发票，请贵酒店开具，开票金额可在订单详情页查询</li><li>依国家法律要求，商家有义务为消费者提供正式发票</li><li>为不影响您的HOS权益及流量曝光，请履约为客人开具发票</li></ul>",
+                    "enContent": "",
+                    "popover": true,
+                    "title": ""
+                },
+                "outline": true,
+                "tagType": 41,
+                "title": "酒店开发票"
+            }
+        ],
+        "taskCount": null,
+        "taskCreateTime": null,
+        "taskCreateTimeString": "",
+        "taskType": null,
+        "thirdFrom": 3,
+        "thirdPartner": false,
+        "timelyConfirm": false,
+        "timeoutRefundSendMsgBtn": false,
+        "tmcInvoiceLabel": false,
+        "todayCheckIn": true,
+        "totalFee": 30000,
+        "totalOriginFloorPrice": 27000,
+        "touristMark": 0,
+        "traceRoom": 0,
+        "transformOrderMark": 1,
+        "type": 4,
+        "urgent": 0,
+        "userId": 1963731199,
+        "veilGoodsInfo": {
+            "directionalDisplay": false,
+            "displayRuleList": [],
+            "displayTitle": "",
+            "subDesc": ""
+        },
+        "verifyStatus": 1,
+        "visitorExpired": false,
+        "visitors": []
+    },
+    "message": "成功",
+    "status": 0
+}

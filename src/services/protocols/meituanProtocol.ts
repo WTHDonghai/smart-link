@@ -852,6 +852,7 @@ export function cleanMeituanOrder(
     context['间夜数'] = context.nights;
   }
 
+  // TODO: 合并多个房间，一个价格,取第一条
   // 标准化每日价格 (OrderProtocolPricing[])：直接从美团真实报文的 data.priceInfo 取值
   const rawPriceInfo = Array.isArray(data.priceInfo)
     ? (data.priceInfo as Array<Record<string, unknown>>)

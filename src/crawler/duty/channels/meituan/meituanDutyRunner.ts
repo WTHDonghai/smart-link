@@ -7,6 +7,7 @@ import {
   type DutyActionDryRunOptions,
   type DutyActionVerificationResult,
 } from '../../dutyContracts';
+import type { DutyTaskLogSink } from '../../dutyTaskLogger';
 import {
   MeituanDutyErrorCode,
   DutyExecutionError,
@@ -25,6 +26,7 @@ import { getMeituanOrderScope } from './meituanCardLocator';
 import { MeituanListCollector } from './meituanListCollector';
 import { MeituanDetailInspector } from './meituanDetailInspector';
 import { MeituanActionExecutor } from './meituanActionExecutor';
+import type { DutyOrderStatus } from '../../dutyTaskContext';
 
 export { checkMeituanPageRisk, assertNoMeituanPageRisk, dismissMeituanNoticeModals, humanDelay };
 
@@ -135,12 +137,16 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
   /**
    * 页面操作：刷新美团待处理列表并返回待处理订单概要（权威网络响应为唯一源，带防抖补偿与请求合并）
    */
-  public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
+  public async collectUnhandledOrders(
+    _orderStatus?: DutyOrderStatus,
+    audit?: DutyTaskLogSink
+  ): Promise<DutyUnhandledOrderSummary[]> {
     const page = this.getActivePage('采集待处理订单');
     return this.listCollector.collectUnhandledOrders(
       page,
       (fn) => this.runWithMutex(fn),
-      (p) => this.refreshOrderList(p)
+      (p) => this.refreshOrderList(p),
+      audit
     );
   }
 
