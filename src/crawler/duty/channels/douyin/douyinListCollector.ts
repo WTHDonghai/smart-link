@@ -1,4 +1,4 @@
-import type { Page, Response, Locator } from 'playwright';
+import type { Page, Response, Locator, Request } from 'playwright';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import type { DutyUnhandledOrderSummary } from '../../dutyContracts';
 import {
@@ -28,7 +28,19 @@ export const TAB_TEXT_NEW = '新订/变更';
 export const TAB_TEXT_CANCEL = '取消/退款';
 
 /**
- * 等待抖音特定列表网络响应
+ * 抖音列表响应等待超时 (毫秒)
+ * 全局基线 ACTION_TIMEOUT.NETWORK (8s) 在偶发慢尾场景（大订单列表 / 工作台后台轮询竞争 /
+ * 网络抖动）下余量不足，出现间歇性 8s 内未拦截到列表响应；放宽至 15s 消化慢尾。
+ * 仅作用于抖音列表响应等待，不影响其他渠道与交互时序阶梯。
+ */
+export const DOUYIN_LIST_RESPONSE_TIMEOUT_MS = 15_000;
+
+/**
+ * 等待抖音特定列表网络响应。
+ * 附带全量 POST 请求路径观测诊断：超时时报错严格区分三种故障形态——
+ * 1. 目标请求已发出但未收到响应（网络挂起 / 浏览器同主机连接饱和）；
+ * 2. 未观察到目标请求但存在其他请求（点击被页面态忽略或接口路径变更）；
+ * 3. 完全无请求发出（页面冻结 / 请求未发起）。
  */
 export async function waitForDouyinListResponse(
   page: Page,
@@ -37,6 +49,25 @@ export async function waitForDouyinListResponse(
 ): Promise<Response> {
   if (typeof page.waitForResponse !== 'function') {
     throw new DutyExecutionError('当前页面环境不支持 waitForResponse', 'METHOD_NOT_SUPPORTED', false);
+  }
+
+  const observedPostPaths = new Set<string>();
+  let targetRequestObserved = false;
+  const onRequest = (request: Request) => {
+    try {
+      if (request.method() !== 'POST') return;
+      const url = request.url();
+      observedPostPaths.add(new URL(url).pathname);
+      if (isTargetUrl(url)) {
+        targetRequestObserved = true;
+      }
+    } catch {
+      // 无效 URL 不参与诊断
+    }
+  };
+  const canObserveRequests = typeof page.on === 'function' && typeof page.off === 'function';
+  if (canObserveRequests) {
+    page.on('request', onRequest);
   }
 
   let lastObservedStatus: number | undefined;
@@ -50,7 +81,7 @@ export async function waitForDouyinListResponse(
         }
         return false;
       },
-      { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
+      { timeout: getScaledTimeout(DOUYIN_LIST_RESPONSE_TIMEOUT_MS) }
     );
     if (response.status() !== 200) {
       throw new DutyExecutionError(
@@ -66,13 +97,21 @@ export async function waitForDouyinListResponse(
 
     const statusDetail = typeof lastObservedStatus === 'number'
       ? `（接口曾返回 HTTP ${lastObservedStatus}）`
-      : '（未收到任何 HTTP 响应包，请求未发起或网络挂起）';
+      : targetRequestObserved
+        ? `（目标接口请求已发出但 ${getScaledTimeout(DOUYIN_LIST_RESPONSE_TIMEOUT_MS)}ms 内未收到响应，疑似网络挂起或浏览器连接饱和）`
+        : observedPostPaths.size > 0
+          ? `（未观察到目标接口请求；期间观察到其他 POST 请求: ${Array.from(observedPostPaths).slice(0, 5).join('、')}）`
+          : '（未收到任何 HTTP 响应包且无任何 POST 请求发出，请求未发起或页面冻结）';
 
     throw new DutyExecutionError(
       `抖音「${phase}」列表响应超时或异常: ${error instanceof Error ? error.message : String(error)} ${statusDetail}`,
       DouyinDutyErrorCode.LIST_RESPONSE_TIMEOUT,
       true
     );
+  } finally {
+    if (canObserveRequests) {
+      page.off('request', onRequest);
+    }
   }
 }
 
@@ -94,62 +133,69 @@ export class DouyinListCollector {
 
   /**
    * 受控切换指定 Tab 并等待权威网络响应（纯 Page Action，零业务数据解析）
+   * 关键时序：响应监听必须在任何页面交互（弹窗清理/Tab 校验/点击）之前挂载——
+   * 弹窗关闭或页面自刷新可能在交互前就触发列表请求，若监听挂载过晚将错过响应，
+   * 且随后的 Tab 点击可能被工作台客户端去重（短时间内同接口不再重发），直接导致 8s 超时。
    */
   private async switchTabAndAwaitResponse(
     page: Page,
     tabText: string,
     isTargetUrl: (url: string) => boolean
   ): Promise<Response> {
-    await assertNoDouyinPageRisk(page);
-    await dismissDouyinNoticeModals(page);
+    // 1. 最先挂载响应监听：捕获弹窗清理或页面自动刷新触发的列表响应，消除监听迟到竞态
+    const responsePromise = waitForDouyinListResponse(page, isTargetUrl, tabText);
 
-    const tabLocator = this.getTabLocator(page, tabText);
     try {
-      await tabLocator.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
-    } catch (error) {
       await assertNoDouyinPageRisk(page);
-      throw new DutyExecutionError(
-        `未找到可用的「${tabText}」Tab: ${error instanceof Error ? error.message : String(error)}`,
-        DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
-        false
-      );
+      await dismissDouyinNoticeModals(page);
+
+      const tabLocator = this.getTabLocator(page, tabText);
+      try {
+        await tabLocator.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
+      } catch (error) {
+        await assertNoDouyinPageRisk(page);
+        throw new DutyExecutionError(
+          `未找到可用的「${tabText}」Tab: ${error instanceof Error ? error.message : String(error)}`,
+          DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
+          false
+        );
+      }
+
+      // 严密防御：点击前校验真实文本，杜绝误中相邻 Tab（如「今日待入住」）
+      const actualText = typeof tabLocator?.innerText === 'function'
+        ? (await tabLocator.innerText().catch(() => '')).trim()
+        : '';
+      const isNewTab = tabText === TAB_TEXT_NEW;
+      const isValidTab = isNewTab
+        ? actualText.includes('新订') || actualText.includes('变更')
+        : actualText.includes('取消') || actualText.includes('退款');
+      if (actualText && !isValidTab) {
+        throw new DutyExecutionError(
+          `Tab 元素文本校验失败：预期为「${tabText}」，实际定位到「${actualText}」，已阻断误触`,
+          DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
+          false
+        );
+      }
+
+      await updateVisualTrackerStatus(page, `📥 正在点击「${tabText}」Tab 并等待接口响应...`, 'action');
+
+      // 优先点击内层文字 label 容器，确保点击坐标 100% 精确落在文字中心，杜绝边缘拉伸偏离
+      const textLabel = typeof tabLocator?.locator === 'function'
+        ? tabLocator.locator('.byted-tab-bar-item-label, .semi-tabs-tab-title, span').first()
+        : null;
+      const isTextVisible = textLabel && typeof textLabel.isVisible === 'function'
+        ? await textLabel.isVisible().catch(() => false)
+        : false;
+      const clickTarget = (isTextVisible && textLabel) ? textLabel : tabLocator;
+
+      await clickWithModalBypass(page, clickTarget, (p) => dismissDouyinNoticeModals(p), {
+        timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK),
+      });
+    } catch (error) {
+      // 提前终止时显式丢弃响应监听 Promise，避免悬挂的未处理拒绝泄漏至全局
+      responsePromise.catch(() => undefined);
+      throw error;
     }
-
-    // 严密防御：点击前校验真实文本，杜绝误中相邻 Tab（如「今日待入住」）
-    const actualText = typeof tabLocator?.innerText === 'function'
-      ? (await tabLocator.innerText().catch(() => '')).trim()
-      : '';
-    const isNewTab = tabText === TAB_TEXT_NEW;
-    const isValidTab = isNewTab
-      ? actualText.includes('新订') || actualText.includes('变更')
-      : actualText.includes('取消') || actualText.includes('退款');
-    if (actualText && !isValidTab) {
-      throw new DutyExecutionError(
-        `Tab 元素文本校验失败：预期为「${tabText}」，实际定位到「${actualText}」，已阻断误触`,
-        DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
-        false
-      );
-    }
-
-    await updateVisualTrackerStatus(page, `📥 正在点击「${tabText}」Tab 并等待接口响应...`, 'action');
-    const responsePromise = waitForDouyinListResponse(
-      page,
-      isTargetUrl,
-      tabText
-    );
-
-    // 优先点击内层文字 label 容器，确保点击坐标 100% 精确落在文字中心，杜绝边缘拉伸偏离
-    const textLabel = typeof tabLocator?.locator === 'function'
-      ? tabLocator.locator('.byted-tab-bar-item-label, .semi-tabs-tab-title, span').first()
-      : null;
-    const isTextVisible = textLabel && typeof textLabel.isVisible === 'function'
-      ? await textLabel.isVisible().catch(() => false)
-      : false;
-    const clickTarget = (isTextVisible && textLabel) ? textLabel : tabLocator;
-
-    await clickWithModalBypass(page, clickTarget, (p) => dismissDouyinNoticeModals(p), {
-      timeout: getScaledTimeout(ACTION_TIMEOUT.CLICK),
-    });
 
     return await responsePromise;
   }

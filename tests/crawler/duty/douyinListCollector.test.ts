@@ -20,6 +20,24 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
   });
 
   describe('waitForDouyinListResponse', () => {
+    it('列表响应等待必须使用抖音专属 15s 超时（消化偶发慢尾），而非全局 8s 基线', async () => {
+      const mockResponse = {
+        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+        status: () => 200,
+        request: () => ({ method: () => 'POST' }),
+      } as unknown as Response;
+
+      const mockPage = {
+        waitForResponse: vi.fn().mockResolvedValue(mockResponse),
+        on: vi.fn(),
+        off: vi.fn(),
+      } as unknown as Page;
+
+      await waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW);
+
+      expect(mockPage.waitForResponse).toHaveBeenCalledWith(expect.any(Function), { timeout: 15_000 });
+    });
+
     it('should return response when target POST request succeeds with 200', async () => {
       const mockResponse = {
         url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
@@ -94,6 +112,70 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       await expect(
         waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
       ).rejects.toThrow('接口曾返回 HTTP 302');
+    });
+
+    it('超时且目标请求已发出时，错误信息应明确指向网络挂起/连接饱和（而非请求未发起）', async () => {
+      let requestListener: ((req: { url: () => string; method: () => string }) => void) | undefined;
+      const mockPage = {
+        waitForResponse: vi.fn().mockImplementation(async () => {
+          // 模拟目标请求已发出但响应迟迟未到
+          requestListener?.({
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+            method: () => 'POST',
+          });
+          throw new Error('Timeout 8000ms');
+        }),
+        on: vi.fn((event: string, listener: (req: { url: () => string; method: () => string }) => void) => {
+          if (event === 'request') requestListener = listener;
+        }),
+        off: vi.fn(),
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+      } as unknown as Page;
+
+      await expect(
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
+      ).rejects.toThrow('目标接口请求已发出但');
+    });
+
+    it('超时且仅观察到其他 POST 请求时，错误信息应列出实际观察到的请求路径（定位点击被忽略或接口路径变更）', async () => {
+      let requestListener: ((req: { url: () => string; method: () => string }) => void) | undefined;
+      const mockPage = {
+        waitForResponse: vi.fn().mockImplementation(async () => {
+          requestListener?.({
+            url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/other/poll',
+            method: () => 'POST',
+          });
+          throw new Error('Timeout 8000ms');
+        }),
+        on: vi.fn((event: string, listener: (req: { url: () => string; method: () => string }) => void) => {
+          if (event === 'request') requestListener = listener;
+        }),
+        off: vi.fn(),
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+      } as unknown as Page;
+
+      await expect(
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
+      ).rejects.toThrow('/life/trade_view/v1/workbench/other/poll');
+    });
+
+    it('超时且无任何 POST 请求发出时，错误信息应指向请求未发起或页面冻结', async () => {
+      const mockPage = {
+        waitForResponse: vi.fn().mockRejectedValue(new Error('Timeout 8000ms')),
+        on: vi.fn(),
+        off: vi.fn(),
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+      } as unknown as Page;
+
+      await expect(
+        waitForDouyinListResponse(mockPage, isDouyinBookOrderListUrl, TAB_TEXT_NEW)
+      ).rejects.toThrow('请求未发起或页面冻结');
     });
   });
 
@@ -351,6 +433,52 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
       });
 
       expect(misMatchedTab.click).not.toHaveBeenCalled();
+    });
+    it('响应监听必须在任何页面交互之前挂载（消除弹窗清理触发列表刷新的监听迟到竞态）', async () => {
+      const collector = new DouyinListCollector();
+
+      const callOrder: string[] = [];
+      const mockTab = {
+        waitFor: vi.fn().mockResolvedValue(undefined),
+        click: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const validPayload = {
+        status_code: 0,
+        data: { data: [] },
+      };
+
+      const mockResponse = {
+        url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
+        status: () => 200,
+        text: vi.fn().mockResolvedValue(JSON.stringify(validPayload)),
+        request: () => ({ method: () => 'POST' }),
+      } as unknown as Response;
+
+      const mockPage = {
+        url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+        frames: () => [],
+        evaluate: vi.fn().mockResolvedValue(false),
+        locator: vi.fn(() => {
+          // dismissDouyinNoticeModals / Tab 定位均经由 page.locator：记录首次 DOM 交互时序
+          callOrder.push('locator');
+          return {
+            first: () => mockTab,
+            count: vi.fn().mockResolvedValue(0),
+          };
+        }),
+        waitForResponse: vi.fn(() => {
+          callOrder.push('waitForResponse');
+          return Promise.resolve(mockResponse);
+        }),
+        on: vi.fn(),
+        off: vi.fn(),
+      } as unknown as Page;
+
+      await collector.refreshBookOrderList(mockPage);
+
+      // 响应监听挂载必须早于任何 DOM 交互（弹窗清理/Tab 定位）
+      expect(callOrder.indexOf('waitForResponse')).toBeLessThan(callOrder.indexOf('locator'));
     });
   });
 
