@@ -21,6 +21,16 @@ const KNOWN_DUTY_DESCRIPTIONS: Record<string, string> = {
 };
 
 /**
+ * 判定当前映射记录集中是否存在有效的美团商旅 (MEITUAN_BIZ) 渠道映射。
+ * 商旅分流开关的唯一事实源：存在 → MEITUAN/MEITUAN_BIZ 双侧互斥分流；不存在 → MEITUAN 全量接单。
+ */
+export function hasMeituanBizMapping(
+  mappings: readonly OTAChannelMappingRecord[] | null | undefined
+): boolean {
+  return deriveMappedDutyChannels(mappings).some((c) => c.code === 'MEITUAN_BIZ');
+}
+
+/**
  * 根据接口获取的 OTA 渠道映射记录，动态提取当前用户已映射的待值守渠道配置列表。
  *
  * 遵循 Fail-Fast 与纯函数规范：

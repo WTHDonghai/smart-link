@@ -20,7 +20,11 @@ import {
 import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
 } from '../../services/protocols/douyinProtocol';
-import { updateDutyTemplateCache } from '../../services/dutyBridge';
+import {
+  updateDutyTemplateCache,
+  syncMeituanBizSplitBestEffort,
+} from '../../services/dutyBridge';
+import { hasMeituanBizMapping } from '@/src/utils/channelDutyHelpers';
 import { getOtaChannelUrl } from '../../config/otaUrls';
 
 export const SCHEMA_STORAGE_PREFIX = 'smartlink_schema_';
@@ -288,6 +292,10 @@ export const fetchChannelMappingData = createAsyncThunk<
       fetchCulturalTourismChannels(),
       fetchChannelMappings(),
     ]);
+
+    // 映射集已刷新：按 MEITUAN_BIZ 映射存在性同步商旅分流开关（best-effort，不阻断拉取主流程）
+    syncMeituanBizSplitBestEffort(hasMeituanBizMapping(mappings));
+
     return { culturalTourismChannels, mappings };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -313,7 +321,7 @@ export const saveChannelMapping = createAsyncThunk<
     status?: string;
   },
   { rejectValue: string }
->('channel/saveChannelMapping', async (param, { rejectWithValue }) => {
+>('channel/saveChannelMapping', async (param, { dispatch, rejectWithValue }) => {
   try {
     const payload: SaveChannelMappingPayloadItem = {
       otaChannelCode: param.otaChannelCode,
@@ -324,6 +332,9 @@ export const saveChannelMapping = createAsyncThunk<
     };
 
     const res = await saveChannelMappingsBatch([payload]);
+
+    // 映射集已变更：重拉全量映射以同步 Redux 状态与商旅分流开关（含新增/失效场景）
+    void dispatch(fetchChannelMappingData());
 
     // 优先从服务端返回的 records 中匹配当前渠道的映射实体及 mappingId
     const matchedRecord =

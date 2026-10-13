@@ -440,6 +440,18 @@ export function registerDutyIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle('duty:set-meituan-biz-split-enabled', async (_event, enabled: boolean) => {
+    try {
+      dutyOrchestrationEngine.setMeituanBizSplitEnabled(Boolean(enabled));
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
   ipcMain.handle('duty:sync-tokens', async (_event, tokens: PlatformAuthTokens) => {
     if (!tokens || !tokens.accessToken) {
       return { success: false, error: '无效的 Token 载荷' };

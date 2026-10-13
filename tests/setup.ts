@@ -17,6 +17,7 @@ const desktopHost: HostBridgeApi = {
     stopAllDuty: () => Promise.reject(new Error('测试未预期停止全部值守')),
     getStatus: () => Promise.reject(new Error('测试未预期查询值守状态')),
     setConfirmImportEnabled: () => Promise.reject(new Error('测试未预期设置确认号回填开关')),
+    setMeituanBizSplitEnabled: () => Promise.reject(new Error('测试未预期设置商旅分流开关')),
     syncTokens: () => Promise.reject(new Error('测试未预期同步 Token')),
     clearTokens: () => Promise.reject(new Error('测试未预期清除 Token')),
     updateTemplateCache: () => Promise.resolve({ success: true }),

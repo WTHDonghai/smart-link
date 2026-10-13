@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveMappedDutyChannels } from '../../src/utils/channelDutyHelpers';
+import { deriveMappedDutyChannels, hasMeituanBizMapping } from '../../src/utils/channelDutyHelpers';
 import type { OTAChannelMappingRecord } from '../../src/types';
 
 describe('deriveMappedDutyChannels 渠道映射向值守配置派生工具测试', () => {
@@ -124,5 +124,71 @@ describe('deriveMappedDutyChannels 渠道映射向值守配置派生工具测试
     expect(result[0].code).toBe('CUSTOM_OTA');
     expect(result[0].name).toBe('自建海外渠道');
     expect(result[0].desc).toBe('已关联接收系统: 海外系统01');
+  });
+});
+
+describe('hasMeituanBizMapping 商旅映射存在性判定（商旅分流开关唯一事实源）', () => {
+  it('存在有效 MEITUAN_BIZ 映射时返回 true', () => {
+    const mappings: OTAChannelMappingRecord[] = [
+      {
+        id: 'map-mt',
+        mappingId: 'map-mt',
+        otaChannelCode: 'MEITUAN',
+        otaChannelName: '美团',
+        channelId: 'pms-1',
+        channelCode: 'MT',
+        channelName: '美团直连',
+        status: 'A',
+      },
+      {
+        id: 'map-biz',
+        mappingId: 'map-biz',
+        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelName: '美团商旅',
+        channelId: 'pms-2',
+        channelCode: 'MTBIZ',
+        channelName: '商旅渠道',
+        status: 'A',
+      },
+    ];
+
+    expect(hasMeituanBizMapping(mappings)).toBe(true);
+  });
+
+  it('仅有散客映射或空映射时返回 false', () => {
+    const meituanOnly: OTAChannelMappingRecord[] = [
+      {
+        id: 'map-mt',
+        mappingId: 'map-mt',
+        otaChannelCode: 'MEITUAN',
+        otaChannelName: '美团',
+        channelId: 'pms-1',
+        channelCode: 'MT',
+        channelName: '美团直连',
+        status: 'A',
+      },
+    ];
+
+    expect(hasMeituanBizMapping(meituanOnly)).toBe(false);
+    expect(hasMeituanBizMapping([])).toBe(false);
+    expect(hasMeituanBizMapping(null)).toBe(false);
+    expect(hasMeituanBizMapping(undefined)).toBe(false);
+  });
+
+  it('失效 (status I) 的商旅映射不计入', () => {
+    const mappings: OTAChannelMappingRecord[] = [
+      {
+        id: 'map-biz',
+        mappingId: 'map-biz',
+        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelName: '美团商旅',
+        channelId: 'pms-2',
+        channelCode: 'MTBIZ',
+        channelName: '商旅渠道',
+        status: 'I',
+      },
+    ];
+
+    expect(hasMeituanBizMapping(mappings)).toBe(false);
   });
 });

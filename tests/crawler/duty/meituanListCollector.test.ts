@@ -7,6 +7,7 @@ import {
 import {
   MeituanDutyErrorCode,
 } from '@/src/crawler/duty/channels/meituan/meituanDutyContracts';
+import { setMeituanBizSplitEnabled } from '@/src/crawler/duty/channels/meituan/meituanOrderFilter';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import { logger } from '@/src/services/logger';
 import type { DutyTaskLogSink } from '@/src/crawler/duty/dutyTaskLogger';
@@ -29,6 +30,8 @@ vi.mock('@/src/services/logger', () => ({
 describe('meituanListCollector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 商旅分流开关默认关闭，用例内按需开启（用例间隔离）
+    setMeituanBizSplitEnabled(false);
   });
 
   describe('waitForMeituanListResponse', () => {
@@ -183,6 +186,7 @@ describe('meituanListCollector', () => {
     });
 
     it('并发不同渠道身份的采集不得互相合并结果（MEITUAN 与 MEITUAN_BIZ 各自独立过滤）', async () => {
+      setMeituanBizSplitEnabled(true);
       const collector = new MeituanListCollector();
       const mockPage = {
         url: () => 'https://eb.meituan.com/dealorder',
@@ -334,6 +338,7 @@ describe('meituanListCollector', () => {
     });
 
     it('应逐笔过滤改签、商旅与缺主键订单并输出结构化 WARN 与分类 HUD', async () => {
+      setMeituanBizSplitEnabled(true);
       const collector = new MeituanListCollector();
       const mockPage = { url: () => 'https://eb.meituan.com/dealorder' } as unknown as Page;
       const mockPayload = {

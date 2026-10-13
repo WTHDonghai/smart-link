@@ -27,6 +27,7 @@ import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskCont
 import { createTaskLogger, type DutyTaskLogger } from './dutyTaskLogger';
 import { hotelCollectionEngine } from '../engine';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
+import { setMeituanBizSplitEnabled } from './channels/meituan/meituanOrderFilter';
 
 export interface TaskResultPayloadOptions {
   status: DutyTaskWireStatus;
@@ -144,6 +145,14 @@ export class DutyOrchestrationEngine {
         runner.setConfirmImportEnabled(this.confirmImportEnabled);
       }
     }
+  }
+
+  /**
+   * 商旅分流开关（由渲染层根据用户是否配置 MEITUAN_BIZ 渠道映射推送）：
+   * 关闭时 MEITUAN 值守不做商旅分流过滤（TMC 订单照常走散客渠道），开启时双侧互斥分流
+   */
+  public setMeituanBizSplitEnabled(enabled: boolean): void {
+    setMeituanBizSplitEnabled(enabled);
   }
 
   public isConfirmImportEnabled(): boolean {

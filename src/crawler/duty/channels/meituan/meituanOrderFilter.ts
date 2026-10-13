@@ -50,8 +50,35 @@ function loadBundledDefaultConfig(channel: MeituanFilterChannelId): ChannelFilte
   return extractFilterRuleChannelConfig(defaultFamilyRulesJson, channel, '随包默认过滤规则文件');
 }
 
-// 按渠道维度维护的内存配置缓存：MEITUAN 与 MEITUAN_BIZ 各自独立，互不覆盖
+// 按渠道维度维护的内存配置缓存：MEITUAN 与 MEITUAN_BIZ 各自独立，互不覆盖（缓存原始规则，剥离策略在返回时应用）
 const activeFilterConfigs = new Map<MeituanFilterChannelId, ChannelFilterConfig>();
+
+// 商旅分流开关：用户配置 MEITUAN_BIZ 渠道映射时开启；
+// 未配置时 MEITUAN 不做商旅分流过滤（TMC 订单照常走散客渠道，杜绝无人承接的丢单）
+let meituanBizSplitEnabled = false;
+
+export function setMeituanBizSplitEnabled(enabled: boolean): void {
+  meituanBizSplitEnabled = Boolean(enabled);
+}
+
+/**
+ * 商旅分流策略：分流关闭时剥离 MEITUAN 渠道全部 TMC 类规则
+ * （无商旅渠道承接时拒 TMC 即丢单，属正确性约束，运营自定义的 TMC 规则同样剥离）；
+ * 改签 (RESCHEDULED) 等安全规则与渠道分流无关，保留。
+ * MEITUAN_BIZ 渠道不受开关影响（未配置映射时其值守无法启动，配置不生效亦无害）。
+ */
+function applyMeituanBizSplitPolicy(
+  config: ChannelFilterConfig,
+  channel: MeituanFilterChannelId
+): ChannelFilterConfig {
+  if (channel !== 'MEITUAN' || meituanBizSplitEnabled) {
+    return config;
+  }
+  return {
+    ...config,
+    rules: config.rules.filter((rule) => rule.orderType !== 'TMC'),
+  };
+}
 
 /**
  * 从持久化文件加载美团系订单过滤规则配置（统一多渠道文件，按渠道提取后缓存）。
@@ -70,7 +97,7 @@ export function loadMeituanFilterConfig(
   if (!fs.existsSync(filePath)) {
     const bundled = loadBundledDefaultConfig(channel);
     activeFilterConfigs.set(channel, bundled);
-    return bundled;
+    return applyMeituanBizSplitPolicy(bundled, channel);
   }
 
   let parsed: unknown;
@@ -88,9 +115,9 @@ export function loadMeituanFilterConfig(
     );
   }
 
-  const config = extractFilterRuleChannelConfig(parsed, channel, `美团过滤规则配置文件 ${filePath}`);
-  activeFilterConfigs.set(channel, config);
-  return config;
+  const rawConfig = extractFilterRuleChannelConfig(parsed, channel, `美团过滤规则配置文件 ${filePath}`);
+  activeFilterConfigs.set(channel, rawConfig);
+  return applyMeituanBizSplitPolicy(rawConfig, channel);
 }
 
 /**
@@ -155,10 +182,10 @@ export function saveMeituanFilterConfig(
 export function getActiveMeituanFilterConfig(channelId?: string): ChannelFilterConfig {
   const channel = normalizeMeituanFilterChannel(channelId);
   const existing = activeFilterConfigs.get(channel);
-  if (existing) return existing;
+  if (existing) return applyMeituanBizSplitPolicy(existing, channel);
   const bundled = loadBundledDefaultConfig(channel);
   activeFilterConfigs.set(channel, bundled);
-  return bundled;
+  return applyMeituanBizSplitPolicy(bundled, channel);
 }
 
 export function setActiveMeituanFilterConfig(config: ChannelFilterConfig): void {
