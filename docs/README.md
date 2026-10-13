@@ -8,7 +8,7 @@
 ## 📚 核心设计与架构文档
 
 ### 1. 桌面原生运行时与工程架构
-- **文档路径**：[`docs/architecture/electron-runtime-architecture.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/electron-runtime-architecture.md)
+- **文档路径**：[`docs/architecture/electron-runtime-architecture.md`](../docs/architecture/electron-runtime-architecture.md)
 - **核心内容**：
   - **Electron-Only 进程拓扑**：Main 进程、Preload 脚本、Renderer 沙箱的分层职责与通信拓扑。
   - **安全隔离与 IPC 契约**：`window.host` 挂载标准、`DesktopOperationResult` 强类型响应规范与通道命名约束。
@@ -16,7 +16,7 @@
   - **生命周期与安全纵深防御**：单实例互斥锁 (`SingleInstanceLock`)、导航拦截 (`will-navigate`)、CSP 与优雅清退 (`teardownApplicationResources`)。
 
 ### 2. 全栈统一采集与值守架构
-- **文档路径**：[`docs/architecture/unified-crawler-and-duty-architecture.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/unified-crawler-and-duty-architecture.md)
+- **文档路径**：[`docs/architecture/unified-crawler-and-duty-architecture.md`](../docs/architecture/unified-crawler-and-duty-architecture.md)
 - **核心内容**：
   - **五层同心圆原生架构**：表现层、状态层、服务与网关层、预加载层、主进程自动化引擎层。
   - **端层职责与命名刚性契约**：严格区分 `*Api.ts`（前端网络请求）与 `*Bridge.ts`（桌面 IPC 网关），彻底杜绝跨层同名冲突。
@@ -24,14 +24,14 @@
   - **浏览器会话与反爬规避**：按渠道独立持久化 Profile、物理锁自动清理、Stealth 反爬指纹伪造与 HUD 视觉指示器。
 
 ### 3. 订单值守业务流程与流转契约
-- **文档路径**：[`docs/architecture/order-guardian-design.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/order-guardian-design.md)
+- **文档路径**：[`docs/architecture/order-guardian-design.md`](../docs/architecture/order-guardian-design.md)
 - **核心内容**：
   - **业务双重视角流程图**：渠道值守控制（IPC 驱动）与文旅中台订单运维（REST 驱动）全景流转。
   - **订单操作状态矩阵**：`FAILED`（编辑/导入/删除）、`SUCCESS`（取消）、`PENDING` / `IMPORTING` / `CANCEL`（禁用）状态机规则。
   - **关键数据与报文契约**：实际状态上报 (`POST /toolbox/actual-state/report`) 与任务回执 (`PUT /toolbox/tasks/:id/result`) 强契约定义。
 
 ### 4. 美团订单采集、详情抓取与确认号回填技术方案
-- **文档路径**：[`docs/architecture/meituan-order-collection-trust-plan.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/meituan-order-collection-trust-plan.md)
+- **文档路径**：[`docs/architecture/meituan-order-collection-trust-plan.md`](../docs/architecture/meituan-order-collection-trust-plan.md)
 - **文档状态**：生产级架构基线（v2.2.0 已全面实施并完成子模块解耦重构）
 - **核心内容**：
   - **权威网络响应为唯一数据源**：列表与详情 100% 来源于接口 JSON 响应，DOM 仅作交互与就绪断言，零 DOM 业务数据拼接（Fail-Fast）。
@@ -42,7 +42,7 @@
 
 
 ### 5. 美团商家后台（E-booking）DOM 结构与自动化交互参考规范
-- **文档路径**：[`docs/architecture/meituan-ebooking-dom-and-interaction-spec.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/architecture/meituan-ebooking-dom-and-interaction-spec.md)
+- **文档路径**：[`docs/architecture/meituan-ebooking-dom-and-interaction-spec.md`](../docs/architecture/meituan-ebooking-dom-and-interaction-spec.md)
 - **文档状态**：实测权威规范（生产实测取证与反思基准）
 - **核心内容**：
   - **Master-Detail 左右双栏拓扑**：左侧卡片流与右侧详情面板，彻底破除弹窗模态对话框（Modal）与表格操作列伪脑补。
@@ -56,17 +56,17 @@
 ## 🌐 渠道专项接入规范与调研文档 (Channel Integrations)
 
 集中维护各 OTA 渠道的后台调研、网络接口契约、DOM 拓扑定位规范与脱敏样本：
-- **渠道接入索引总览**：[`channels/README.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/README.md)
-- **标准化调研模板**：[`channels/_template/`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/_template/)
+- **渠道接入索引总览**：[`channels/README.md`](../docs/channels/README.md)
+- **标准化调研模板**：[`channels/_template/`](../docs/channels/_template/)
 - **美团（MEITUAN）接入规范与实例文档**：
-  - [美团概况与运行环境规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/01-survey-and-overview.md) (`01-survey-and-overview.md`)
-  - [美团订单网络接口与契约规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/02-order-api-spec.md) (`02-order-api-spec.md`)
-  - [美团 DOM 拓扑与自动化交互规范](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/03-dom-interaction-spec.md) (`03-dom-interaction-spec.md`)
-  - [美团真实脱敏报文样例库](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/docs/channels/meituan/samples/) (`samples/`)
+  - [美团概况与运行环境规范](../docs/channels/meituan/01-survey-and-overview.md) (`01-survey-and-overview.md`)
+  - [美团订单网络接口与契约规范](../docs/channels/meituan/02-order-api-spec.md) (`02-order-api-spec.md`)
+  - [美团 DOM 拓扑与自动化交互规范](../docs/channels/meituan/03-dom-interaction-spec.md) (`03-dom-interaction-spec.md`)
+  - [美团真实脱敏报文样例库](../docs/channels/meituan/samples/) (`samples/`)
 
 ---
 
 ## 🏛️ 项目最高治理准则
-- **开发与 AI 协同治理规范**：[`AGENTS.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/AGENTS.md)
+- **开发与 AI 协同治理规范**：[`AGENTS.md`](../AGENTS.md)
   - 规定了本项目的架构分层、技术栈标准、设计系统、Fail-Fast 刚性红线、诚实测试准则与极简设计原则。
 

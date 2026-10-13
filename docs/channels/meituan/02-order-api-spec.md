@@ -2,8 +2,8 @@
 
 > **渠道代号**：`MEITUAN`  
 > **核心原则**：权威网络响应为唯一数据源 (Network Authority)，零 DOM 业务数据拼接，严格执行 Fail-Fast。  
-> **解析器实现**：[`src/crawler/duty/channels/meituan/meituanOrderParsers.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanOrderParsers.ts)  
-> **单测覆盖**：[`tests/crawler/duty/meituanOrderParsers.test.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/tests/crawler/duty/meituanOrderParsers.test.ts)
+> **解析器实现**：[`src/crawler/duty/channels/meituan/meituanOrderParsers.ts`](../../../src/crawler/duty/channels/meituan/meituanOrderParsers.ts)  
+> **单测覆盖**：[`tests/crawler/duty/meituanOrderParsers.test.ts`](../../../tests/crawler/duty/meituanOrderParsers.test.ts)
 
 ---
 
@@ -102,7 +102,7 @@
 | :--- | :--- |
 | `ALLOW` | 允许进入自动化流水线处理（由下游消费方根据 `cancelOrder` 等状态分发执行） |
 | `MANUAL_ATTENTION` | 关键分类字段契约异常，或识别为改签/改期订单，转后台人工核对 |
-| `CHANNEL_MISMATCH` | 识别为美团商旅 / 企业差旅 (TMC) 订单，当前普通散客工位跳过 |
+| `CHANNEL_MISMATCH` | 渠道分流拦截：商旅分流开启时，MEITUAN 工位跳过 TMC 订单 / MEITUAN_BIZ 工位跳过非 TMC 订单（见下方商旅分流开关） |
 
 - 业务过滤跳过的记录输出 `MEITUAN_ORDER_FILTER_SKIPPED` / `WARN`，包含 `orderNo`、`meta.action`、`meta.orderType`、`meta.reason` 与 `meta.evidence`。
 - `evidence` 保留人工在美团后台核对必需的客人姓名 (`guestName`)、房型 (`roomName`) 及命中规则的特征实际值，拒绝过度技术脱敏，为前台运营排查提供清晰可读的事实上下文。
@@ -111,7 +111,7 @@
 
 ##### 过滤规则配置与表达式 DSL
 
-过滤规则以 JSON 声明，运行时按数组顺序求值，首条命中即止并返回其 `action`；`enabled: false` 的规则跳过；全部未命中则 `ALLOW`。规则字段：
+过滤规则以 **单文件多渠道 JSON** 声明：顶层 `channels` 映射以规范渠道码（`MEITUAN` / `MEITUAN_BIZ`）为键，每个渠道节持有独立 `rules` 数组。运行时按数组顺序求值，首条命中即止并返回其 `action`；`enabled: false` 的规则跳过；全部未命中则 `ALLOW`。规则字段：
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -140,9 +140,17 @@
 
 规则文件优先级与 Fail-Fast 约束：
 
-1. `<userDataDir>/filter-rules/meituan.json`（运营侧持久化定制，每轮采集前重载，修改后下一轮即生效）；
+1. `<userDataDir>/filter-rules/meituan.json`（运营侧持久化定制，**承载全部渠道节**；保存为读-改-写，仅替换目标渠道节、其余渠道节原样保留；每轮采集前重载，修改后下一轮即生效）；
 2. 随包默认 `meituanFilterRules.json`（仅当持久化文件不存在时启用，首启场景）；
-3. 持久化文件存在但读取/解析失败或结构无效（缺 `channelId` 字符串或 `rules` 数组）时，立即抛出含文件路径的异常中断本轮采集，绝不静默回退默认规则。
+3. 持久化文件存在但读取/解析失败或结构无效（顶层缺 `channels` 映射或渠道节缺 `rules` 数组，含旧单渠道格式）时，立即抛出含文件路径的异常中断本轮采集，绝不静默回退默认规则；请求渠道节缺失同样 Fail-Fast，绝不回退其他渠道。
+
+##### 商旅分流开关（按映射存在性决定过滤行为）
+
+过滤行为以**用户是否配置了有效 `MEITUAN_BIZ` 渠道映射**为唯一事实源（运行时开关，非规则文件内容）：
+
+- **未配置商旅映射**：MEITUAN 渠道在配置解析时**剥离全部 `orderType === 'TMC'` 规则**（含运营自定义 TMC 规则），TMC 订单照常 ALLOW 走散客渠道，杜绝无人承接的丢单；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUAN_BIZ 渠道不受开关影响（未配置映射时其值守无从启动）。
+- **配置了商旅映射**：双侧互斥分流（MEITUAN 拒 TMC、MEITUAN_BIZ 拒非 TMC）。
+- 同步链路：启动值守时强制同步；映射拉取/保存时 best-effort 即时推送。机制详见架构文档 §3.7/§3.8。
 
 - **真实脱敏样例**：参考 [`samples/list-task-response.json`](./samples/list-task-response.json)
 
@@ -164,7 +172,7 @@
     - 若美团升级至 `/api/v2/`，立即拒绝匹配并触发 Fail-Fast 告警，彻底杜绝跨版本协议变更导致脏数据解析。
 - **请求方式**：`GET`
 - **触发动作**：在美团后台页面点击左侧订单卡片时自动由前端异步发起。
-- **并发与时序安全**：执行层（[`meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)）采用**先注册网络监听器、后触发卡片点击**的刚性时序，并在获取 Payload 后二次比对 `payloadOrderId === otaOrderId`，防范网络竞态。
+- **并发与时序安全**：执行层（[`meituanDetailInspector.ts`](../../../src/crawler/duty/channels/meituan/meituanDetailInspector.ts)）采用**先注册网络监听器、后触发卡片点击**的刚性时序，并在获取 Payload 后二次比对 `payloadOrderId === otaOrderId`，防范网络竞态。
 
 ### 3.1 核心业务字段清洗字典 (Detail Parsers)
 由纯函数 `parseMeituanOrderDetailResponse()` 负责清洗：
@@ -223,7 +231,7 @@
 
 ## 5. 接单与确认号回填接口与校验规范
 
-- **提交方式**：基于订单详情头部「接受」按钮与弹窗内表单提交（由 [`meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts) 驱动）。
+- **提交方式**：基于订单详情头部「接受」按钮与弹窗内表单提交（由 [`meituanActionExecutor.ts`](../../../src/crawler/duty/channels/meituan/meituanActionExecutor.ts) 驱动）。
 - **校验原则**：
   1. **防串单校验**：若输入框中已有不同于本系统的旧确认号，抛出 `CONFIRM_INPUT_ALREADY_FILLED` 立即中止。
   2. **读回比对校验**：写入后通过 `inputValue()` 读回，若读回值与待写入值不匹配，抛出 `CONFIRM_VALUE_MISMATCH` 阻断提交。

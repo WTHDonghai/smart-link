@@ -138,10 +138,10 @@ flowchart TD
 针对多 OTA 渠道的差异化值守需求，系统确立了**抽象基类下沉 + 差异化领域子模块**的扩展架构：
 
 1. **公共基类能力下沉 (`BaseChannelDutyRunner`)**：
-   - 统一声明在 [`src/crawler/duty/dutyContracts.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/dutyContracts.ts)；
-   - **会话与目标 URL 管理**：统一维护 `session: ChannelBrowserSession | null` 与 `explicitTargetUrl`；
+   - 统一声明在 [`src/crawler/duty/dutyContracts.ts`](../../src/crawler/duty/dutyContracts.ts)；
+   - **会话与目标 URL 管理**：统一维护 `session: BrowserSession | null` 与 `explicitTargetUrl`；
    - **单页面任务互斥锁 (`runWithMutex`)**：通过串行 Promise 链，保证单工位页面上的 Tab 切换、详情抓取、确认号录入等操作互斥执行，彻底消除页面状态并发踩踏；
-   - **自愈式页面探测与唤醒 (`getActivePage`)**：若当前会话失效、窗口已关闭或尚未初始化，自动调起 `createChannelBrowserSession` 并导航至目标渠道后台，返回可用 `Page`；
+   - **Fail-Fast 页面探测 (`getActivePage`)**：会话未启动或页面已关闭时立即抛出 `RUNNER_NOT_RUNNING` / `TARGET_PAGE_NOT_READY` 异常，绝不静默重建；
    - **窗口关闭安全监听 (`waitForBrowserClose`)**：带 `isClosed?.()` 短路安全探测，监听目标页面的 `'close'` 事件与所属 Context 的所有页面关闭，在用户手动关闭浏览器时立即重置 `session = null` 并清退资源；
    - **优雅停止 (`stop`)**：安全关闭会话与浏览器进程。
 2. **两类渠道实现模式**：
@@ -151,11 +151,11 @@ flowchart TD
    - **复杂生产渠道（如 `MeituanDutyRunner`）**：
      - 继承 `BaseChannelDutyRunner` 作为对外统一门面（Facade），所有外部调用通过 `runWithMutex` 串行化保护；
      - 内部遵循单一职责原则，委托专业领域子模块协同工作：
-       - [`meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts)：Iframe 作用域穿透与多阶梯卡片定位；
-       - [`meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)：Tab 切换状态机、网络屏障、高精度防抖补偿与在途合并；
-       - [`meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)：网络监听预注册、卡片激活防抖、单号严格比对与敏感数据解密；
-       - [`meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)：接单弹窗回填、输入读回校验、取消确认与 `dryRun` 演练；
-       - [`meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts) / [`meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)：风控探测与通知弹窗自动穿透。
+       - [`meituanCardLocator.ts`](../../src/crawler/duty/channels/meituan/meituanCardLocator.ts)：Iframe 作用域穿透与多阶梯卡片定位；
+       - [`meituanListCollector.ts`](../../src/crawler/duty/channels/meituan/meituanListCollector.ts)：Tab 切换状态机、网络屏障、高精度防抖补偿与在途合并；
+       - [`meituanDetailInspector.ts`](../../src/crawler/duty/channels/meituan/meituanDetailInspector.ts)：网络监听预注册、卡片激活防抖、单号严格比对与敏感数据解密；
+       - [`meituanActionExecutor.ts`](../../src/crawler/duty/channels/meituan/meituanActionExecutor.ts)：接单弹窗回填、输入读回校验、取消确认与 `dryRun` 演练；
+       - [`meituanRiskGuard.ts`](../../src/crawler/duty/channels/meituan/meituanRiskGuard.ts) / [`meituanModalGuard.ts`](../../src/crawler/duty/channels/meituan/meituanModalGuard.ts)：风控探测与通知弹窗自动穿透。
 
 ### 3.6 值守任务类型与取消订单闭环
 
@@ -168,4 +168,29 @@ flowchart TD
 3. `dutyTaskContext` 对 `OTA_CANCEL_ORDER` 只从 `payload.channelCode` 提取渠道，缺失即 Fail-Fast；
 4. `dutyTaskDispatcher` 将 `OTA_CANCEL_ORDER` 与 `OTA_CONFIRM_CANCEL` 一样路由到渠道 runner 的 `confirmCancel` 能力。
 
-当前订单值守 runner 只支持普通 `MEITUAN` 与已有 `DOUYIN` 实现。`MEITUAN_BIZ` 是全局渠道身份与 UI 规划身份，不代表已存在订单值守 runner，也不应被描述为已接入订单值守闭环。
+### 3.7 美团商旅单浏览器别名路由 (MEITUAN_BIZ Alias Routing)
+
+美团商旅 (`MEITUAN_BIZ`) 与美团 (`MEITUAN`) **共用同一个浏览器值守会话**（单浏览器、单 Tab、同一 Profile），通过过滤规则按任务渠道分流订单：
+
+1. **别名注册**：`DutyOrchestrationEngine` 经 `registerRunnerAlias('MEITUAN_BIZ', meituanRunner)` 将两个渠道码指向同一 `MeituanDutyRunner` 实例。别名渠道拥有**独立的值守开关状态**（`channelStates` 条目）：
+   - `startDuty`：共享 Runner 已运行时复用会话不重复唤起；主渠道采集作业进行中时阻断别名启动；
+   - `stopDuty`：共享 Runner 仍被其他渠道使用时保留浏览器，仅关该渠道开关并更新工位上报；
+   - 工位上报 `otaCollectionTargets` 从开关状态派生（含别名渠道），中台据此只派发已开启渠道的采集任务；
+   - 滞留任务按**开关语义**（而非 Runner 存活语义）拒单 `TASK_ROUTE_UNAVAILABLE`。
+2. **渠道身份全链路穿参**：采集结果 `otaChannelCode`、下游派发 payload、协议清洗 `channelCode`、`otaChannel` 标记与备注模板路由均以**任务渠道** (`context.channelCode`) 为准而非 Runner 主渠道，商旅单正确落 PMS 渠道映射（`meituanbiz`）。
+3. **统一多渠道过滤规则**：随包 `meituanFilterRules.json` 与持久化 `<userDataDir>/filter-rules/meituan.json` 均为**单文件多渠道格式**（顶层 `channels` 映射，键为规范渠道码）；保存为读-改-写（仅替换对应渠道节）。渠道无关的规则契约（类型/守卫/渠道节提取）统一下沉 [`src/crawler/duty/orderFilterContracts.ts`](../../src/crawler/duty/orderFilterContracts.ts) 供未来渠道复用。
+
+### 3.8 商旅分流开关 (按映射存在性决定过滤行为)
+
+商旅/散客分流以**用户是否配置了有效 `MEITUAN_BIZ` 渠道映射**为唯一事实源：
+
+| 商户配置 | 语义 | 过滤行为 |
+| :--- | :--- | :--- |
+| 未配置商旅映射 | 不区分商旅/散客，单一渠道提交 | MEITUAN **不做商旅分流过滤**（TMC 订单照常 ALLOW 走散客渠道，杜绝无人承接的丢单） |
+| 配置了商旅映射 | 双渠道分 ID 提交 | 双侧互斥分流：MEITUAN 拒 TMC、MEITUAN_BIZ 拒非 TMC |
+
+实现为**运行时开关**（非改写规则文件——派生状态不持久化，每次从映射重算）：
+
+1. 过滤模块持有开关（默认关闭），配置解析返回时对 MEITUAN 渠道剥离全部 `orderType === 'TMC'` 规则（含运营自定义 TMC 规则）；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUAN_BIZ 渠道不受开关影响；
+2. 同步链路：渲染层 `toggleChannelDutyThunk` 启动值守前**强制同步**（`hasMeituanBizMapping(mappings)` → IPC `duty:set-meituan-biz-split-enabled` → 引擎门面 → 过滤模块）；`fetchChannelMappingData` 成功后与 `saveChannelMapping` 成功触发映射重拉时 **best-effort 即时推送**（宿主不支持时静默跳过，启动时的强制同步仍是权威路径）；
+3. 采集器在途合并按渠道身份隔离，不同渠道并发采集不互相合并结果。
