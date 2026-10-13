@@ -109,16 +109,29 @@ export function defaultVal(value: unknown, fallback: string): string {
 }
 
 /**
- * 手机号脱敏过滤 (保留前3后4，中间4位为*)
- * 如 13812345678 -> 138****5678
+ * 渠道支付方式字典值归一化 (按含义转换为中文描述)
+ * 预付: 0 / PP / PREPAY / 已含「预付」
+ * 现付: 1 / PS / POSTPAY / 已含「现付」「到付」
+ * 无法识别的非空字典值直接抛错阻断 (Fail-Fast)，严禁将原始数字渲染进备注模版
  */
-export function maskPhone(phone: unknown): string {
-  if (!phone) return '-';
-  const str = String(phone).trim();
-  if (str.length === 11) {
-    return `${str.slice(0, 3)}****${str.slice(7)}`;
+export function normalizePayType(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return '';
   }
-  return str;
+  const str = String(value).trim().toUpperCase();
+  if (str === '0' || str === 'PP' || str === 'PREPAY' || str.includes('预付')) {
+    return '预付';
+  }
+  if (
+    str === '1' ||
+    str === 'PS' ||
+    str === 'POSTPAY' ||
+    str.includes('现付') ||
+    str.includes('到付')
+  ) {
+    return '现付';
+  }
+  throw new Error(`[Filter Error] 无法识别的支付方式字典值: ${String(value)}`);
 }
 
 /**
@@ -133,9 +146,6 @@ export function applyFilter(value: unknown, filterName: string, arg?: string): u
       return formatDate(value as number | string, arg || 'YYYY-MM-DD');
     case 'default':
       return defaultVal(value, arg || '');
-    case 'phone':
-    case 'maskPhone':
-      return maskPhone(value);
     default:
       throw new Error(`[Filter Error] 不支持的过滤器: ${filterName}`);
   }

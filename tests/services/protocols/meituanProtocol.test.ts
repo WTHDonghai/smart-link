@@ -54,8 +54,13 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(vars['早餐说明']).toBe('不含早');
       expect(vars['特色权益']).toBe('延迟退房至 14:00，共 1 间');
       expect(vars['是否含权益']).toBe(true);
-      expect(vars['需酒店开票']).toBe(true); // invoiceParty == 3
-      expect(vars['参考开票金额']).toBe('265.55');
+      expect(vars['取消规则']).toBe('【不含早】2026-09-15 18:00:00前可取消');
+      expect(vars.cancelRule).toBe('【不含早】2026-09-15 18:00:00前可取消');
+      expect(vars['发票要求']).toBe('若客人索取发票，请贵酒店开具，参考开票金额：¥265.55');
+
+      // 付款方式：字典值 data.paymentType=0 必须按含义转换为中文，key 与 label 双变量同步归一
+      expect(vars['paytype']).toBe('预付');
+      expect(vars['付款方式']).toBe('预付');
 
       // 2. 验证向统一导入协议投影 (toUnifiedOrder)
       const unified = channelOrder.toUnifiedOrder('这是已渲染的备注');
@@ -128,7 +133,7 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
             label: '支付方式',
             path: 'data.paymentType',
             category: 'finance',
-            transform: 'string',
+            transform: 'payType',
             enabled: true,
           },
         ],
@@ -277,6 +282,34 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(unified.booking.pricing).toEqual([
         { date: '2026-09-29', price: 295.4 },
       ]);
+    });
+    it('should normalize paymentType dictionary code 1 to 现付 across key and label template variables', () => {
+      const postpaidOrder = {
+        ...MEITUAN_RAW_SAMPLE_ORDER,
+        data: {
+          ...MEITUAN_RAW_SAMPLE_ORDER.data,
+          paymentType: 1,
+        },
+      };
+
+      const vars = cleanMeituanOrder(postpaidOrder).getTemplateVariables();
+      expect(vars['paytype']).toBe('现付');
+      expect(vars['付款方式']).toBe('现付');
+      expect(cleanMeituanOrder(postpaidOrder).toUnifiedOrder('').booking.paytype).toBe('现付');
+    });
+
+    it('should throw Fail-Fast error on unrecognized paymentType dictionary code', () => {
+      const corruptedOrder = {
+        ...MEITUAN_RAW_SAMPLE_ORDER,
+        data: {
+          ...MEITUAN_RAW_SAMPLE_ORDER.data,
+          paymentType: 9,
+        },
+      };
+
+      expect(() => cleanMeituanOrder(corruptedOrder)).toThrow(
+        '[Filter Error] 无法识别的支付方式字典值: 9'
+      );
     });
   });
 

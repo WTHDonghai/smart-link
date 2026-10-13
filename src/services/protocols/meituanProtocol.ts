@@ -1,6 +1,6 @@
 /**
  * 美团订单协议规范与默认 Schema 定义 (Meituan Protocol Specification & Presets)
- * 将 150+ 繁杂字段裁剪归纳为 15 个高频业务指标
+ * 将 150+ 繁杂字段裁剪归纳为高频核心业务指标
  */
 
 import type {
@@ -251,6 +251,7 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
     payTimeString: '2026-09-15 11:37:45',
     paymentType: 0,
     ratePlanName: '美团会员特惠价',
+    rpInfo: '【不含早】2026-09-15 18:00:00前可取消',
     poiId: 1533758592,
     poiIdStr: '1533758592',
     poiName: '西软度假酒店',
@@ -318,7 +319,7 @@ export const MEITUAN_RAW_SAMPLE_ORDER = {
   status: 0,
 };
 
-/** 美团精炼协议 Schema：将 150+ 字段裁剪精简为 16 个高频核心业务指标 */
+/** 美团精炼协议 Schema：将 150+ 字段裁剪精简为高频核心业务指标 */
 export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
   channelId: 'meituan',
   channelCode: 'MEITUAN',
@@ -471,9 +472,9 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       label: '联系电话',
       path: 'data.contacts[*].phone',
       category: 'guest',
-      transform: 'maskPhone',
-      sampleValue: '138****9999',
-      description: '预留联系人手机号 (脱敏用于模版展示)',
+      transform: 'string',
+      sampleValue: '13888889999',
+      description: '全部预留联系人手机号 (多联系人自动拼接)',
       enabled: true,
     },
     {
@@ -483,7 +484,7 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       category: 'guest',
       transform: 'string',
       sampleValue: '13888889999',
-      description: '预留联系人未脱敏真实手机号',
+      description: '首个联系人真实手机号',
       enabled: true,
     },
 
@@ -521,10 +522,10 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     },
     {
       key: 'paytype',
-      label: '支付方式',
+      label: '付款方式',
       path: 'data.paymentType',
       category: 'finance',
-      transform: 'string',
+      transform: 'payType',
       sampleValue: '预付',
       description: '美团支付方式 (预付/现付)',
       enabled: true,
@@ -562,27 +563,26 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       description: '订单是否包含附加权益',
       enabled: true,
     },
+    {
+      key: 'cancelRule',
+      label: '取消规则',
+      path: 'data.rpInfo',
+      category: 'rights',
+      transform: 'string',
+      sampleValue: '【不含早】2026-09-29 18:00:00前可取消',
+      description: '取消规则',
+      enabled: true,
+    },
 
     // 7. 发票信息
     {
-      key: 'needInvoice',
-      label: '需酒店开票',
-      path: '',
+      key: 'invoiceInfo',
+      label: '发票要求',
+      path: 'data.invoiceDisplayInfo.invoiceRequireDesc',
       category: 'invoice',
-      transform: 'boolean',
-      conditionExpr: 'data.invoiceTagModel.invoiceParty == 3',
-      sampleValue: 'true',
-      description: '美团标记需酒店开具发票',
-      enabled: true,
-    },
-    {
-      key: 'invoiceMoney',
-      label: '参考开票金额',
-      path: 'data.invoiceTagModel.invoiceMoney',
-      category: 'invoice',
-      transform: 'centsToYuan',
-      sampleValue: '265.55',
-      description: '开票参考金额 (元)',
+      transform: 'string',
+      sampleValue: '若客人索取发票，请贵酒店开具，参考开票金额：¥265.55',
+      description: '发票要求',
       enabled: true,
     },
   ],
@@ -668,6 +668,7 @@ export class MeituanOrderProtocol implements IChannelOrderProtocol {
 
     const paytype = String(
       this.context.paytype ||
+      this.context['付款方式'] ||
       this.context['支付方式'] ||
       '预付'
     ).trim();
@@ -828,22 +829,6 @@ export function cleanMeituanOrder(
   if (context.roomTypeId) context['房型ID'] = context.roomTypeId;
   if (context.roomTypeId) context['房型商品ID'] = context.roomTypeId;
   if (context.rateCode) context['价格方案'] = context.rateCode;
-
-  // 补齐并归一化支付方式 (0/PP -> 预付, 1/PS -> 现付)
-  const rawPaymentType = context.paytype ?? data.paymentType ?? data.payType ?? (rawRecord as Record<string, unknown>).paymentType;
-  if (rawPaymentType != null) {
-    const pStr = String(rawPaymentType).trim().toUpperCase();
-    if (pStr === '0' || pStr === 'PP' || pStr.includes('预付') || pStr === 'PREPAY') {
-      context.paytype = '预付';
-    } else if (pStr === '1' || pStr === 'PS' || pStr.includes('现付') || pStr.includes('到付') || pStr === 'POSTPAY') {
-      context.paytype = '现付';
-    } else {
-      context.paytype = pStr;
-    }
-  }
-  if (context.paytype) {
-    context['支付方式'] = context.paytype;
-  }
 
   // 计算间夜数
   if (!context.nights && context.checkInDate && context.checkOutDate) {

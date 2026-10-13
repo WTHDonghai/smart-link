@@ -6,7 +6,7 @@
 
 import { ChannelProtocolSchema, CleanOrderContext, ProtocolDriftWarning } from '../../types/template';
 import { getNestedValue, evaluateCondition } from './evaluator';
-import { centsToYuan, formatDate, maskPhone } from './filters';
+import { centsToYuan, formatDate, normalizePayType } from './filters';
 
 export class ProtocolNormalizationError extends Error {
   public warning: ProtocolDriftWarning;
@@ -78,9 +78,6 @@ export function normalizeOrderPayload(
     } else if (Array.isArray(rawVal)) {
       // 针对通配符投影提取到的列表数据，自动批量清洗并以中文顿号拼接
       switch (field.transform) {
-        case 'maskPhone':
-          cleanedVal = rawVal.map(maskPhone).filter((v) => v !== '-').join('、');
-          break;
         case 'centsToYuan':
           cleanedVal = rawVal.map((v) => centsToYuan(v as number | string)).join('、');
           break;
@@ -89,6 +86,9 @@ export function normalizeOrderPayload(
           break;
         case 'boolean':
           cleanedVal = rawVal.length > 0;
+          break;
+        case 'payType':
+          cleanedVal = rawVal.map((v) => normalizePayType(v as number | string)).join('、');
           break;
         case 'string':
         case 'none':
@@ -107,11 +107,11 @@ export function normalizeOrderPayload(
         case 'date':
           cleanedVal = formatDate(rawVal as number | string, 'YYYY-MM-DD');
           break;
-        case 'maskPhone':
-          cleanedVal = maskPhone(rawVal);
-          break;
         case 'boolean':
           cleanedVal = Boolean(rawVal);
+          break;
+        case 'payType':
+          cleanedVal = normalizePayType(rawVal as number | string);
           break;
         case 'string':
           cleanedVal = String(rawVal);

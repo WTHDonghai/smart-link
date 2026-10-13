@@ -140,10 +140,10 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
 
     const cleanCtx = normalizeOrderPayload(multiUserOrder, DEFAULT_DOUYIN_PROTOCOL_SCHEMA);
     expect(cleanCtx.guestName).toBe('刘彩霞、王小明');
-    expect(cleanCtx.guestPhone).toBe('138****5090、139****8888');
+    expect(cleanCtx.guestPhone).toBe('13800005090、13911118888');
 
     const rendered = renderTemplate(SAMPLE_DOUYIN_REMARK_TEMPLATE, cleanCtx);
-    expect(rendered).toContain('客人:刘彩霞、王小明 (138****5090、139****8888)');
+    expect(rendered).toContain('客人:刘彩霞、王小明 (13800005090、13911118888)');
   });
 
   it('correctly calculates nightly pricing breakdown based on nights and total amount', () => {
