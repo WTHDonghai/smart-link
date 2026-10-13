@@ -837,18 +837,22 @@ export function cleanMeituanOrder(
     context['间夜数'] = context.nights;
   }
 
-  // TODO: 合并多个房间，一个价格,取第一条
   // 标准化每日价格 (OrderProtocolPricing[])：直接从美团真实报文的 data.priceInfo 取值
+  // 多间房时同一日期会拆成多行明细，按日期分组仅取第一行（即一间房的日价）
   const rawPriceInfo = Array.isArray(data.priceInfo)
     ? (data.priceInfo as Array<Record<string, unknown>>)
     : [];
 
-  let pricing: OrderProtocolPricing[] = rawPriceInfo
-    .map((item) => ({
-      date: String(item.dateString || item.date || '').slice(0, 10),
-      price: Math.round(((Number(item.floorPrice ?? item.price ?? 0)) / 100) * 100) / 100,
-    }))
-    .filter((p) => Boolean(p.date));
+  const pricingByDate = new Map<string, OrderProtocolPricing>();
+  for (const item of rawPriceInfo) {
+    const date = String(item.dateString || item.date || '').slice(0, 10);
+    if (!date || pricingByDate.has(date)) continue; // 同日期重复明细仅保留首行
+    pricingByDate.set(date, {
+      date,
+      price: Math.round((Number(item.floorPrice ?? item.price ?? 0) / 100) * 100) / 100,
+    });
+  }
+  let pricing: OrderProtocolPricing[] = Array.from(pricingByDate.values());
 
   // 仅在原始接口报文未提供 priceInfo 明细且存在入离日期时，根据总价平摊推导
   if (pricing.length === 0 && context.checkInDate && context.checkOutDate) {

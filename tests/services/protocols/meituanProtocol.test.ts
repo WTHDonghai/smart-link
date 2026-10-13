@@ -283,6 +283,37 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
         { date: '2026-09-29', price: 295.4 },
       ]);
     });
+
+    it('should keep only the first priceInfo row per date for multi-room duplicate daily details', () => {
+      const multiRoomPayload = {
+        data: {
+          orderId: '5035036080553098350',
+          goodsId: '3803962976768182158',
+          ratePlanName: '美团会员特惠',
+          paymentType: 0,
+          roomName: '安澜大床客房[错峰出游]',
+          checkInDateString: '2026-09-29 00:00:00',
+          checkOutDateString: '2026-10-01 00:00:00',
+          roomCount: 2,
+          floorPrice: 59080,
+          price: 70336,
+          priceInfo: [
+            { dateString: '2026-09-29 00:00:00', floorPrice: 29540 },
+            { dateString: '2026-09-29 00:00:00', floorPrice: 29541 }, // 第二间房同日重复行
+            { dateString: '2026-09-30 00:00:00', floorPrice: 29540 },
+            { dateString: '2026-09-30 00:00:00', floorPrice: 29541 },
+          ],
+        },
+      };
+
+      const unified = cleanMeituanOrder(multiRoomPayload).toUnifiedOrder('');
+
+      expect(unified.booking.pricing).toEqual([
+        { date: '2026-09-29', price: 295.4 },
+        { date: '2026-09-30', price: 295.4 },
+      ]);
+    });
+
     it('should normalize paymentType dictionary code 1 to 现付 across key and label template variables', () => {
       const postpaidOrder = {
         ...MEITUAN_RAW_SAMPLE_ORDER,
