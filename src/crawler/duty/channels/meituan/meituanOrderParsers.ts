@@ -29,6 +29,8 @@ export interface ExtractMeituanOrdersOptions {
 
 export interface ParseMeituanOrderOptions extends ExtractMeituanOrdersOptions {
   onFilterResult?: (result: OrderFilterResult) => void;
+  /** 过滤规则选用的渠道身份（MEITUAN 散客 / MEITUAN_BIZ 商旅），缺省为 MEITUAN */
+  filterChannelId?: string;
 }
 
 // [TODO] 后续需要迁移到env 环境变量
@@ -533,10 +535,13 @@ export function parseMeituanOrderListResponse(
     onExtractionAnomaly: options?.onExtractionAnomaly,
   });
 
-  // 阶段二：业务规则过滤
+  // 阶段二：业务规则过滤（按渠道身份选用对应过滤配置）
   const allowedSummaries: DutyUnhandledOrderSummary[] = [];
   for (const rawOrder of rawOrders) {
-    const filterResult = filterMeituanOrder(rawOrder);
+    const filterResult = filterMeituanOrder(
+      rawOrder,
+      options?.filterChannelId ? { channelId: options.filterChannelId } : undefined
+    );
     options?.onFilterResult?.(filterResult);
     if (!filterResult.allowed) {
       continue;

@@ -1,25 +1,49 @@
 {
-  "channelId": "MEITUAN",
   "version": "1.0.0",
-  "description": "美团渠道订单业务过滤规则配置（基于表达式求值，支持文件持久化）",
-  "rules": [
-    {
-      "id": "meituan-rescheduled",
-      "name": "美团改签/改期订单识别（status 唯一判定）",
-      "condition": "status === 'RESCHEDULED'",
-      "action": "MANUAL_ATTENTION",
-      "orderType": "RESCHEDULED",
-      "reason": "订单「{{orderId}}」为改签/改期订单，跳过自动化接单流水线，需人工核对",
-      "enabled": true
+  "description": "美团系渠道订单业务过滤规则（单文件多渠道，channels 键为规范化渠道码，基于表达式求值，支持文件持久化）",
+  "channels": {
+    "MEITUAN": {
+      "rules": [
+        {
+          "id": "meituan-rescheduled",
+          "name": "美团改签/改期订单识别（status 唯一判定）",
+          "condition": "status === 'RESCHEDULED'",
+          "action": "MANUAL_ATTENTION",
+          "orderType": "RESCHEDULED",
+          "reason": "订单「{{orderId}}」为改签/改期订单，跳过自动化接单流水线，需人工核对",
+          "enabled": true
+        },
+        {
+          "id": "meituan-tmc",
+          "name": "美团企业商旅(TMC)订单识别（reversePriceTmcOrderTag 非空唯一判定）",
+          "condition": "(reversePriceTmcOrderTag != null && reversePriceTmcOrderTag != '')",
+          "action": "CHANNEL_MISMATCH",
+          "orderType": "TMC",
+          "reason": "订单「{{orderId}}」为企业商旅订单，当前为普通散客工位，已跳过",
+          "enabled": true
+        }
+      ]
     },
-    {
-      "id": "meituan-tmc",
-      "name": "美团企业商旅(TMC)订单识别（reversePriceTmcOrderTag 非空唯一判定）",
-      "condition": "(reversePriceTmcOrderTag != null && reversePriceTmcOrderTag != '')",
-      "action": "CHANNEL_MISMATCH",
-      "orderType": "TMC",
-      "reason": "订单「{{orderId}}」为企业商旅订单，当前为普通散客工位，已跳过",
-      "enabled": true
+    "MEITUAN_BIZ": {
+      "rules": [
+        {
+          "id": "meituan-biz-rescheduled",
+          "name": "美团商旅改签/改期订单识别（status 唯一判定）",
+          "condition": "status === 'RESCHEDULED'",
+          "action": "MANUAL_ATTENTION",
+          "orderType": "RESCHEDULED",
+          "reason": "订单「{{orderId}}」为商旅改签/改期订单，跳过自动化接单流水线，需人工核对",
+          "enabled": true
+        },
+        {
+          "id": "meituan-biz-non-tmc",
+          "name": "普通散客订单识别（reversePriceTmcOrderTag 为空判定，商旅工位跳过）",
+          "condition": "(reversePriceTmcOrderTag == null || reversePriceTmcOrderTag == '')",
+          "action": "CHANNEL_MISMATCH",
+          "reason": "订单「{{orderId}}」为普通散客订单，当前为美团商旅工位，已跳过",
+          "enabled": true
+        }
+      ]
     }
-  ]
+  }
 }

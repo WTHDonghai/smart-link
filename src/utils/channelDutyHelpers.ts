@@ -11,7 +11,7 @@ export interface DutyChannelConfig {
 
 const KNOWN_DUTY_DESCRIPTIONS: Record<string, string> = {
   MEITUAN: '美团待处理订单自动发现与导入',
-  MEITUAN_BIZ: '美团商旅独立订单列表自动同步',
+  MEITUAN_BIZ: '美团商旅订单自动发现与导入（复用美团值守会话，仅处理企业商旅订单）',
   DOUYIN: '抖音新订/退款订单业务协同值守',
   CTRIP: '携程管家订单同步与确认号回填',
   TONGCHENG: '同程艺龙订单实时监听与回填',

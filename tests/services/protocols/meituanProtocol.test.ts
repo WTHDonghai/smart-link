@@ -351,6 +351,14 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(channelOrder.channelCode).toBe('MEITUAN');
     });
 
+    it('全部美团系别名变体应经全局归一化收敛为规范码 (MTBIZ / MEITUAN_BUSINESS / MEITUANBIZ → MEITUAN_BIZ)', () => {
+      for (const alias of ['MTBIZ', 'MEITUAN_BUSINESS', 'MEITUANBIZ', 'meituan_biz']) {
+        const channelOrder = cleanChannelOrder(alias, MEITUAN_RAW_SAMPLE_ORDER);
+        expect(channelOrder).toBeInstanceOf(MeituanOrderProtocol);
+        expect(channelOrder.channelCode).toBe('MEITUAN_BIZ');
+      }
+    });
+
     it('should throw error for unsupported channel code', () => {
       expect(() => cleanChannelOrder('UNKNOWN_CHANNEL', {})).toThrow(
         '[ProtocolRouter] 暂未实现渠道「UNKNOWN_CHANNEL」的订单协议清洗器'

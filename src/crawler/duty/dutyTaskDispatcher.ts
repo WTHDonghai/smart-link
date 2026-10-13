@@ -85,7 +85,7 @@ export async function dispatchDutyTask(
 
   const taskLogger = createTaskLogger(
     task,
-    { channelCode: runner.channelCode, orderId: context.orderId },
+    { channelCode: context.channelCode || runner.channelCode, orderId: context.orderId },
     recordLog
   );
 
@@ -94,12 +94,13 @@ export async function dispatchDutyTask(
       try {
         const unhandledOrders = await runner.collectUnhandledOrders(
           context.orderStatus,
-          (entry) => taskLogger.log(entry)
+          (entry) => taskLogger.log(entry),
+          context.channelCode || runner.channelCode
         );
         return {
           status: 'SUCCEEDED',
           result: {
-            otaChannelCode: runner.channelCode,
+            otaChannelCode: context.channelCode || runner.channelCode,
             recordCount: unhandledOrders.length,
             orders: unhandledOrders,
           },
@@ -145,16 +146,17 @@ export async function dispatchDutyTask(
         };
       }
 
-      // 2. 渠道协议清洗：得到强类型 IChannelOrderProtocol 实体
+      // 2. 渠道协议清洗：得到强类型 IChannelOrderProtocol 实体（以任务渠道身份透传，确保商旅单 otaChannel 正确标记）
+      const taskChannel = context.channelCode || runner.channelCode;
       let channelOrder: IChannelOrderProtocol;
       try {
-        channelOrder = cleanChannelOrder(runner.channelCode, rawDetail, null, orderId);
+        channelOrder = cleanChannelOrder(taskChannel, rawDetail, null, orderId);
       } catch (cleanErr) {
         const errMsg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_PARSE_FAILED',
-          errorMessage: `渠道「${runner.channelCode}」提取的订单「${orderId}」详情原始报文解析失败: ${errMsg}`,
+          errorMessage: `渠道「${taskChannel}」提取的订单「${orderId}」详情原始报文解析失败: ${errMsg}`,
           retryable: false,
         };
       }
@@ -190,7 +192,7 @@ export async function dispatchDutyTask(
         return {
           status: 'FAILED',
           errorCode: 'ORDER_DETAIL_INVALID',
-          errorMessage: `渠道「${runner.channelCode}」提取的订单「${orderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
+          errorMessage: `渠道「${taskChannel}」提取的订单「${orderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
           retryable: false,
         };
       }

@@ -111,10 +111,12 @@ describe('dutyOrchestrationEngine', () => {
       expect(statusMap['MOCK_OTA'].channelCode).toBe('MOCK_OTA');
     });
 
-    it('should have built-in MEITUAN and DOUYIN runners initialized to STOPPED', () => {
+    it('should have built-in MEITUAN, MEITUAN_BIZ (alias) and DOUYIN runners initialized to STOPPED', () => {
       const statusMap = engine.getChannelDutyStatus();
       expect(statusMap['MEITUAN']).toBeDefined();
       expect(statusMap['MEITUAN'].status).toBe('STOPPED');
+      expect(statusMap['MEITUAN_BIZ']).toBeDefined();
+      expect(statusMap['MEITUAN_BIZ'].status).toBe('STOPPED');
       expect(statusMap['DOUYIN']).toBeDefined();
       expect(statusMap['DOUYIN'].status).toBe('STOPPED');
     });
@@ -267,6 +269,143 @@ describe('dutyOrchestrationEngine', () => {
       await expect(engine.startDuty('MOCK_OTA')).rejects.toThrow(
         '渠道「MOCK_OTA」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启值守。'
       );
+    });
+  });
+
+  describe('Runner alias routing (单浏览器共享 Runner 生命周期)', () => {
+    it('should have built-in MEITUAN_BIZ alias channel initialized to STOPPED', () => {
+      const statusMap = engine.getChannelDutyStatus();
+      expect(statusMap['MEITUAN_BIZ']).toBeDefined();
+      expect(statusMap['MEITUAN_BIZ'].status).toBe('STOPPED');
+      expect(statusMap['MEITUAN_BIZ'].channelCode).toBe('MEITUAN_BIZ');
+    });
+
+    it('starting alias channel while primary is running should reuse the shared runner without re-starting it', async () => {
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');
+      const sharedRunner = new MockChannelRunner('SHARED_OTA');
+      engine.registerRunner(sharedRunner);
+      engine.registerRunnerAlias('SHARED_OTA_ALIAS', sharedRunner);
+
+      await engine.startDuty('SHARED_OTA');
+      await engine.startDuty('SHARED_OTA_ALIAS');
+
+      // 共享 Runner 仅启动一次（别名渠道复用同一浏览器会话）
+      expect(sharedRunner.startCalls).toBe(1);
+
+      const status = engine.getChannelDutyStatus();
+      expect(status['SHARED_OTA'].status).toBe('RUNNING');
+      expect(status['SHARED_OTA_ALIAS'].status).toBe('RUNNING');
+      expect(engine.isChannelActive('SHARED_OTA_ALIAS')).toBe(true);
+
+      // 工位上报应同时包含主渠道与别名渠道
+      expect(reportSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              appId: 'smart-link',
+              status: 'RUNNING',
+              otaCollectionTargets: expect.arrayContaining([
+                { otaChannelCode: 'SHARED_OTA' },
+                { otaChannelCode: 'SHARED_OTA_ALIAS' },
+              ]),
+            }),
+          ]),
+        })
+      );
+
+      await engine.stopDuty('SHARED_OTA');
+      await engine.stopDuty('SHARED_OTA_ALIAS');
+    });
+
+    it('stopping primary channel should keep the shared runner alive while alias channel duty is still active', async () => {
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');
+      const sharedRunner = new MockChannelRunner('SHARED_OTA');
+      engine.registerRunner(sharedRunner);
+      engine.registerRunnerAlias('SHARED_OTA_ALIAS', sharedRunner);
+
+      await engine.startDuty('SHARED_OTA');
+      await engine.startDuty('SHARED_OTA_ALIAS');
+
+      // 停止主渠道：别名渠道仍在值守，共享 Runner（浏览器会话）不得被关闭
+      await engine.stopDuty('SHARED_OTA');
+
+      const status = engine.getChannelDutyStatus();
+      expect(status['SHARED_OTA'].status).toBe('STOPPED');
+      expect(status['SHARED_OTA_ALIAS'].status).toBe('RUNNING');
+      expect(sharedRunner.stopCalls).toBe(0);
+      expect(engine.getCoordinatorStatus()).not.toBe('STOPPED');
+
+      // 工位上报应仅剩余别名渠道目标
+      expect(reportSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              status: 'RUNNING',
+              otaCollectionTargets: [{ otaChannelCode: 'SHARED_OTA_ALIAS' }],
+            }),
+          ]),
+        })
+      );
+
+      // 最后一个共享渠道停止后，浏览器会话才真正关闭并下线工位
+      await engine.stopDuty('SHARED_OTA_ALIAS');
+      expect(sharedRunner.stopCalls).toBe(1);
+      expect(engine.getCoordinatorStatus()).toBe('STOPPED');
+    });
+
+    it('starting alias channel standalone should bring up the shared runner session', async () => {
+      const sharedRunner = new MockChannelRunner('SHARED_OTA');
+      engine.registerRunner(sharedRunner);
+      engine.registerRunnerAlias('SHARED_OTA_ALIAS', sharedRunner);
+
+      await engine.startDuty('SHARED_OTA_ALIAS');
+
+      const status = engine.getChannelDutyStatus();
+      expect(status['SHARED_OTA_ALIAS'].status).toBe('RUNNING');
+      expect(status['SHARED_OTA'].status).toBe('STOPPED');
+      expect(sharedRunner.startCalls).toBe(1);
+
+      await engine.stopDuty('SHARED_OTA_ALIAS');
+      expect(sharedRunner.stopCalls).toBe(1);
+    });
+
+    it('should reject stale tasks for a stopped channel even while the shared runner stays alive for the alias channel', async () => {
+      const sharedRunner = new MockChannelRunner('SHARED_OTA');
+      engine.registerRunner(sharedRunner);
+      engine.registerRunnerAlias('SHARED_OTA_ALIAS', sharedRunner);
+
+      // 仅启动别名渠道：共享 Runner 存活，但主渠道开关处于 STOPPED
+      await engine.startDuty('SHARED_OTA_ALIAS');
+
+      const staleTask: DutyClaimedTask = {
+        id: 'task-stale-primary',
+        businessId: 'ORD-STALE-1',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-stale-1',
+        data: Buffer.from(JSON.stringify({ channel: 'SHARED_OTA', otaOrderId: 'ORD-STALE-1' })).toString('base64'),
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(staleTask)
+        .mockResolvedValue(null);
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // 主渠道开关已头：滞留任务必须被拒单，绝不被别名渠道的共享会话代执行
+      expect(sharedRunner.executedTasks).toHaveLength(0);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-stale-primary',
+        expect.objectContaining({
+          status: 'FAIL',
+          errorMessage: expect.stringContaining('渠道「SHARED_OTA」当前未在运行状态'),
+          retryable: true,
+        })
+      );
+
+      await engine.stopDuty('SHARED_OTA_ALIAS');
     });
   });
 

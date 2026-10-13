@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterMeituanOrder,
   getActiveMeituanFilterConfig,
+  normalizeMeituanFilterChannel,
   setActiveMeituanFilterConfig,
   resetMeituanFilterConfig,
   saveMeituanFilterConfig,
@@ -118,7 +119,7 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
       const tempFilePath = createTempConfigPath('roundtrip');
       try {
         saveMeituanFilterConfig(tempConfig, tempFilePath);
-        const loaded = loadMeituanFilterConfig(tempFilePath);
+        const loaded = loadMeituanFilterConfig('MEITUAN', tempFilePath);
         expect(loaded.rules).toHaveLength(1);
         expect(loaded.rules[0].id).toBe('custom-vip-rule');
 
@@ -134,14 +135,85 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
       }
     });
 
+    it('读-改-写保留兄弟渠道节：保存散客规则后，商旅渠道节应原样保留在同一文件', () => {
+      const tempFilePath = createTempConfigPath('family-merge');
+      try {
+        saveMeituanFilterConfig(
+          {
+            channelId: 'MEITUAN',
+            rules: [
+              {
+                id: 'custom-meituan-only',
+                condition: "totalAmount > 1000",
+                action: 'MANUAL_ATTENTION' as const,
+                reason: '散客高价值核验',
+                enabled: true,
+              },
+            ],
+          },
+          tempFilePath
+        );
+
+        // 同一文件：散客节已替换为自定义规则，商旅节保留随包默认
+        const meituanLoaded = loadMeituanFilterConfig('MEITUAN', tempFilePath);
+        expect(meituanLoaded.rules.map((r) => r.id)).toEqual(['custom-meituan-only']);
+
+        const bizLoaded = loadMeituanFilterConfig('MEITUAN_BIZ', tempFilePath);
+        expect(bizLoaded.rules.map((r) => r.id)).toEqual([
+          'meituan-biz-rescheduled',
+          'meituan-biz-non-tmc',
+        ]);
+      } finally {
+        resetMeituanFilterConfig();
+        if (existsSync(tempFilePath)) unlinkSync(tempFilePath);
+      }
+    });
+
+    it('持久化文件缺失目标渠道节时应 Fail-Fast 拒绝，绝不静默回退其他渠道', () => {
+      const tempFilePath = createTempConfigPath('missing-channel');
+      try {
+        writeFileSync(
+          tempFilePath,
+          JSON.stringify({
+            version: '1.0.0',
+            channels: {
+              MEITUAN: { rules: [] },
+            },
+          }),
+          'utf8'
+        );
+
+        expect(() => loadMeituanFilterConfig('MEITUAN_BIZ', tempFilePath)).toThrow(
+          '缺失渠道「MEITUAN_BIZ」的规则节'
+        );
+      } finally {
+        if (existsSync(tempFilePath)) unlinkSync(tempFilePath);
+      }
+    });
+
+    it('旧单渠道格式 (顶层 channelId/rules) 的持久化文件应被拒绝并提示多渠道格式要求', () => {
+      const tempFilePath = createTempConfigPath('legacy-format');
+      try {
+        writeFileSync(
+          tempFilePath,
+          JSON.stringify({ channelId: 'MEITUAN', rules: [{ id: 'legacy', condition: 'true', action: 'MANUAL_ATTENTION', reason: '旧格式' }] }),
+          'utf8'
+        );
+
+        expect(() => loadMeituanFilterConfig('MEITUAN', tempFilePath)).toThrow('单文件多渠道格式');
+      } finally {
+        if (existsSync(tempFilePath)) unlinkSync(tempFilePath);
+      }
+    });
+
     it('持久化文件损坏时应 Fail-Fast 抛出异常而不是静默回退默认规则', () => {
       const tempFilePath = createTempConfigPath('broken');
       const activeBefore = getActiveMeituanFilterConfig();
       try {
         writeFileSync(tempFilePath, '{ broken json !!!', 'utf8');
 
-        expect(() => loadMeituanFilterConfig(tempFilePath)).toThrow('美团过滤规则配置文件读取或解析失败');
-        expect(() => loadMeituanFilterConfig(tempFilePath)).toThrow(tempFilePath);
+        expect(() => loadMeituanFilterConfig('MEITUAN', tempFilePath)).toThrow('美团过滤规则配置文件读取或解析失败');
+        expect(() => loadMeituanFilterConfig('MEITUAN', tempFilePath)).toThrow(tempFilePath);
         expect(getActiveMeituanFilterConfig()).toBe(activeBefore);
       } finally {
         if (existsSync(tempFilePath)) unlinkSync(tempFilePath);
@@ -154,8 +226,8 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
       try {
         writeFileSync(tempFilePath, JSON.stringify({ channelId: 'MEITUAN', rules: 'not-an-array' }), 'utf8');
 
-        expect(() => loadMeituanFilterConfig(tempFilePath)).toThrow('美团过滤规则配置文件结构无效');
-        expect(() => loadMeituanFilterConfig(tempFilePath)).toThrow(tempFilePath);
+        expect(() => loadMeituanFilterConfig('MEITUAN', tempFilePath)).toThrow('美团过滤规则配置文件结构无效');
+        expect(() => loadMeituanFilterConfig('MEITUAN', tempFilePath)).toThrow(tempFilePath);
         expect(getActiveMeituanFilterConfig()).toBe(activeBefore);
       } finally {
         if (existsSync(tempFilePath)) unlinkSync(tempFilePath);
@@ -165,7 +237,7 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
     it('持久化文件不存在时应回退随包默认规则 (首启场景)', () => {
       const nonexistentPath = createTempConfigPath('__nonexistent__');
       try {
-        const loaded = loadMeituanFilterConfig(nonexistentPath);
+        const loaded = loadMeituanFilterConfig('MEITUAN', nonexistentPath);
 
         expect(loaded.channelId).toBe('MEITUAN');
         expect(loaded.rules.map((r) => r.id)).toEqual(['meituan-rescheduled', 'meituan-tmc']);
@@ -367,6 +439,108 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
     });
   });
 
+  describe('美团商旅渠道过滤 (MEITUAN_BIZ 单浏览器别名路由)', () => {
+    it('商旅渠道应加载随包默认规则：仅放行 TMC 订单，改签单转人工', () => {
+      try {
+        const bizConfig = getActiveMeituanFilterConfig('MEITUAN_BIZ');
+        expect(bizConfig.channelId).toBe('MEITUAN_BIZ');
+        expect(bizConfig.rules.map((r) => r.id)).toEqual([
+          'meituan-biz-rescheduled',
+          'meituan-biz-non-tmc',
+        ]);
+
+        // TMC 订单在商旅工位应 ALLOW 放行
+        const tmcResult = filterMeituanOrder(
+          createTestDutyOrder({
+            orderId: '5035036081700003001',
+            status: 'NEW_ORDER',
+            reversePriceTmcOrderTag: 'TMC',
+          }),
+          { channelId: 'MEITUAN_BIZ' }
+        );
+        expect(tmcResult).toMatchObject({
+          allowed: true,
+          action: 'ALLOW',
+          orderId: '5035036081700003001',
+        });
+
+        // 商旅改签单仍应 MANUAL_ATTENTION 转人工
+        const rescheduledResult = filterMeituanOrder(
+          createTestDutyOrder({
+            orderId: '5035036081700003002',
+            status: 'RESCHEDULED',
+            reversePriceTmcOrderTag: 'TMC',
+          }),
+          { channelId: 'MEITUAN_BIZ' }
+        );
+        expect(rescheduledResult).toMatchObject({
+          allowed: false,
+          action: 'MANUAL_ATTENTION',
+          orderType: 'RESCHEDULED',
+        });
+      } finally {
+        resetMeituanFilterConfig('MEITUAN_BIZ');
+      }
+    });
+
+    it('普通散客订单在商旅工位应 CHANNEL_MISMATCH 跳过（与散客工位规则互斥，杜绝重复导入）', () => {
+      const result = filterMeituanOrder(
+        createTestDutyOrder({
+          orderId: '5035036081700003003',
+          status: 'NEW_ORDER',
+          reversePriceTmcOrderTag: '',
+        }),
+        { channelId: 'MEITUAN_BIZ' }
+      );
+
+      expect(result).toMatchObject({
+        allowed: false,
+        action: 'CHANNEL_MISMATCH',
+        orderId: '5035036081700003003',
+      });
+      expect(result.reason).toContain('普通散客订单');
+    });
+
+    it('渠道配置应彼此独立：修改散客规则不得影响商旅规则', () => {
+      try {
+        const meituanConfig = getActiveMeituanFilterConfig('MEITUAN');
+        setActiveMeituanFilterConfig({
+          ...meituanConfig,
+          rules: meituanConfig.rules.map((r) => ({ ...r, enabled: false })),
+        });
+
+        // 散客侧 TMC 拦截已禁用 → 放行
+        expect(
+          filterMeituanOrder(
+            createTestDutyOrder({ orderId: '5035036081700003004', reversePriceTmcOrderTag: 'TMC' })
+          ).allowed
+        ).toBe(true);
+
+        // 商旅侧规则不受影响 → 散客单仍被跳过
+        const bizResult = filterMeituanOrder(
+          createTestDutyOrder({ orderId: '5035036081700003005', reversePriceTmcOrderTag: '' }),
+          { channelId: 'MEITUAN_BIZ' }
+        );
+        expect(bizResult.allowed).toBe(false);
+        expect(bizResult.action).toBe('CHANNEL_MISMATCH');
+      } finally {
+        resetMeituanFilterConfig('MEITUAN');
+      }
+    });
+
+    it('未知渠道身份应 Fail-Fast 拒绝而不是静默回退散客规则', () => {
+      expect(() => getActiveMeituanFilterConfig('DOUYIN')).toThrow('未知的美团系过滤渠道');
+    });
+
+    it('别名变体应经全局归一化收敛 (mtbiz / MEITUAN_BUSINESS / MEITUANHOTEL)', () => {
+      expect(normalizeMeituanFilterChannel('mtbiz')).toBe('MEITUAN_BIZ');
+      expect(normalizeMeituanFilterChannel('MEITUAN_BUSINESS')).toBe('MEITUAN_BIZ');
+      expect(normalizeMeituanFilterChannel('meituan')).toBe('MEITUAN');
+      expect(normalizeMeituanFilterChannel('MEITUANHOTEL')).toBe('MEITUAN');
+      expect(normalizeMeituanFilterChannel(undefined)).toBe('MEITUAN');
+    });
+  });
+
   describe('列表解析集成验证 (两阶段流水线: 数据提取 -> 业务过滤)', () => {
     it('应从数据源提取有效订单，记录提取异常，过滤改签与商旅，并放行新订与取消单', () => {
       const payload = {
@@ -390,6 +564,7 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
       const anomalies: MeituanOrderExtractionAnomaly[] = [];
       const skipped: Array<[string, OrderFilterResult['action']]> = [];
       const summaries = parseMeituanOrderListResponse(payload, {
+        filterChannelId: 'MEITUAN',
         onExtractionAnomaly: (anomaly) => {
           anomalies.push(anomaly);
         },
@@ -419,6 +594,35 @@ describe('MeituanOrderFilter (美团订单分层过滤器)', () => {
       ]);
       expect(summaries[0].cancelOrder).toBe(false);
       expect(summaries[1].cancelOrder).toBe(true);
+    });
+
+    it('同一列表报文按商旅渠道身份过滤时，应仅放行 TMC 订单（别名路由果道隔离）', () => {
+      const payload = {
+        data: {
+          results: [
+            { orderId: '5035036081700004001', status: 'NEW_ORDER', orderDisplayLabel: '新订', totalFee: 20000 },
+            { orderId: '5035036081700004002', status: 'NEW_ORDER', reversePriceTmcOrderTag: 'TMC' },
+            { orderId: '5035036081700004003', status: 'CANCELED', reversePriceTmcOrderTag: 'TMC' },
+            { orderId: '5035036081700004004', status: 'RESCHEDULED', reversePriceTmcOrderTag: 'TMC' },
+          ],
+        },
+      };
+
+      const skipped: string[] = [];
+      const summaries = parseMeituanOrderListResponse(payload, {
+        filterChannelId: 'MEITUAN_BIZ',
+        onFilterResult: (result) => {
+          if (!result.allowed) skipped.push(result.orderId);
+        },
+      });
+
+      // 商旅工位：仅 TMC 新订与 TMC 取消单放行，散客新订跳过、商旅改签转人工
+      expect(summaries.map((o) => o.orderId)).toEqual([
+        '5035036081700004002',
+        '5035036081700004003',
+      ]);
+      expect(summaries[1].cancelOrder).toBe(true);
+      expect(skipped).toEqual(['5035036081700004001', '5035036081700004004']);
     });
   });
 });

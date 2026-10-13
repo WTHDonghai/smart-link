@@ -108,8 +108,12 @@ export class DutyOrchestrationEngine {
   private unsubscribeLogger?: () => void;
 
   constructor() {
-    // 注册内置渠道执行器（美团酒店、抖音生活服务）
-    this.registerRunner(new MeituanDutyRunner());
+    // 注册内置渠道执行器（美团酒店、抖音生活服务）；
+    // 美团商旅 (MEITUAN_BIZ) 与美团共用同一浏览器值守会话：单浏览器 + 别名路由，
+    // MEITUAN_BIZ 任务路由至美团 Runner 执行，采集时按任务渠道选用商旅过滤规则
+    const meituanRunner = new MeituanDutyRunner();
+    this.registerRunner(meituanRunner);
+    this.registerRunnerAlias('MEITUAN_BIZ', meituanRunner);
     this.registerRunner(new DouyinDutyRunner());
 
     // 绑定工位调度器的日志回调至本地日志系统
@@ -153,6 +157,22 @@ export class DutyOrchestrationEngine {
     this.runners.set(runner.channelCode.toUpperCase(), runner);
     this.channelStates.set(runner.channelCode.toUpperCase(), {
       channelCode: runner.channelCode.toUpperCase(),
+      status: 'STOPPED',
+    });
+  }
+
+  /**
+   * 注册渠道别名：将别名渠道路由至已有 Runner 实例（共享同一浏览器值守会话），
+   * 别名渠道拥有独立的值守开关状态与工位上报目标，但停止时仅在无其他共享受渠道时才真正关闭浏览器
+   */
+  public registerRunnerAlias(aliasCode: string, runner: ChannelDutyRunner): void {
+    const code = aliasCode.trim().toUpperCase();
+    if (!code) {
+      throw new Error('渠道别名 aliasCode 不能为空');
+    }
+    this.runners.set(code, runner);
+    this.channelStates.set(code, {
+      channelCode: code,
       status: 'STOPPED',
     });
   }
@@ -232,15 +252,36 @@ export class DutyOrchestrationEngine {
   }
 
   private getActiveRunners(): ChannelDutyRunner[] {
-    return Array.from(this.runners.values()).filter((r) => r.isRunning());
+    // 按实例去重：别名渠道与主渠道共享同一 Runner，避免重复计数与重复停止
+    const unique = new Set<ChannelDutyRunner>();
+    for (const runner of this.runners.values()) {
+      if (runner.isRunning()) unique.add(runner);
+    }
+    return Array.from(unique);
   }
 
   private getActiveChannelCodes(): string[] {
-    return this.getActiveRunners().map((r) => r.channelCode);
+    // 从值守开关状态派生活跃渠道（含别名渠道），作为工位上报的唯一可信来源
+    const codes: string[] = [];
+    for (const [code] of this.channelStates) {
+      if (this.isChannelDutyOn(code)) {
+        codes.push(code);
+      }
+    }
+    return codes;
   }
 
   /**
-   * 启动指定渠道值守
+   * 渠道值守开关是否已开启（含启动过渡态 STARTING）。
+   * 与 Runner 存活语义 (isChannelActive) 分离：共享 Runner 存活不代表该渠道开关已开。
+   */
+  private isChannelDutyOn(channelCode: string): boolean {
+    const status = this.channelStates.get(channelCode)?.status;
+    return status === 'RUNNING' || status === 'STARTING';
+  }
+
+  /**
+   * 启动指定渠道值守（支持别名渠道：共享 Runner 已运行时复用浏览器会话，仅激活该渠道开关）
    */
   public async startDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
@@ -255,7 +296,15 @@ export class DutyOrchestrationEngine {
       );
     }
 
-    if (runner.isRunning()) {
+    // 别名渠道与主渠道共享同一浏览器 Profile：任一共享渠道正在执行采集作业时均必须阻断值守启动
+    const primaryCode = runner.channelCode.trim().toUpperCase();
+    if (primaryCode !== code && hotelCollectionEngine.isChannelActive(primaryCode)) {
+      throw new Error(
+        `渠道「${primaryCode}」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启「${code}」值守。`
+      );
+    }
+
+    if (this.isChannelDutyOn(code)) {
       return { success: true };
     }
 
@@ -266,8 +315,11 @@ export class DutyOrchestrationEngine {
     });
 
     try {
-      // 1. 优先启动渠道自动化执行器 (唤起前台 Playwright 窗口 / 导航)
-      await runner.start();
+      // 1. 优先启动渠道自动化执行器 (唤起前台 Playwright 窗口 / 导航)；共享 Runner 已在运行时直接复用会话
+      const sharedSession = runner.isRunning();
+      if (!sharedSession) {
+        await runner.start();
+      }
 
       this.channelStates.set(code, {
         channelCode: code,
@@ -281,7 +333,9 @@ export class DutyOrchestrationEngine {
         event: 'PLAYWRIGHT_WORKER_START',
         channelId: code,
         taskActionStage: "execute",
-        message: `[值守启动] 渠道「${code}」可视化前台浏览器窗口已唤起，进入订单自动化值守监听`,
+        message: sharedSession
+          ? `[值守启动] 渠道「${code}」复用已运行的共享浏览器值守会话 (渠道「${runner.channelCode}」)`
+          : `[值守启动] 渠道「${code}」可视化前台浏览器窗口已唤起，进入订单自动化值守监听`,
         details: `渠道: ${code} | 状态: RUNNING | 监听目标: ${(runner as unknown as { targetUrl?: string })?.targetUrl || code}`,
       });
 
@@ -327,7 +381,7 @@ export class DutyOrchestrationEngine {
   }
 
   /**
-   * 停止指定渠道值守
+   * 停止指定渠道值守（支持别名渠道：共享 Runner 仍被其他渠道使用时保留浏览器会话，仅关闭该渠道开关）
    */
   public async stopDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
@@ -335,8 +389,6 @@ export class DutyOrchestrationEngine {
     if (!runner) {
       throw new Error(`未知渠道「${code}」`);
     }
-
-    await runner.stop();
 
     this.channelStates.set(code, {
       channelCode: code,
@@ -351,8 +403,15 @@ export class DutyOrchestrationEngine {
       details: `渠道: ${code} | 状态: STOPPED`,
     });
 
-    const active = this.getActiveRunners();
-    if (active.length === 0) {
+    const remainingChannels = this.getActiveChannelCodes();
+
+    // 共享同一 Runner 的其他渠道仍在值守时，保留浏览器会话，仅更新工位上报的值守目标
+    const runnerStillShared = remainingChannels.some((c) => this.runners.get(c) === runner);
+    if (!runnerStillShared) {
+      await runner.stop();
+    }
+
+    if (remainingChannels.length === 0) {
       this.coordinatorStatus = 'STOPPED';
       this.stopSignal = true;
       this.stationCoordinator.stopHeartbeat();
@@ -360,7 +419,7 @@ export class DutyOrchestrationEngine {
         await this.stationCoordinator.reportActualState([], true);
       }
     } else if (this.stationCoordinator.getIdentity()) {
-      await this.stationCoordinator.reportActualState(this.getActiveChannelCodes());
+      await this.stationCoordinator.reportActualState(remainingChannels);
     }
 
     return { success: true };
@@ -732,7 +791,10 @@ export class DutyOrchestrationEngine {
     }
 
     const runner = this.runners.get(targetChannel);
-    if (!runner || !runner.isRunning()) {
+    // 共享 Runner 场景：Runner 存活不等于该渠道开关已开启，必须同时校验渠道值守状态，
+    // 避免已关闭渠道的滞留任务被其他共享渠道的会话代执行
+    const channelDutyOn = this.channelStates.get(targetChannel)?.status === 'RUNNING';
+    if (!runner || !runner.isRunning() || !channelDutyOn) {
       const failureMsg = `渠道「${targetChannel}」当前未在运行状态`;
       const isCollect = task.msgType === 'OTA_COLLECT_ORDER';
       await this.rejectClaimedTask(
