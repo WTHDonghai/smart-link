@@ -28,12 +28,12 @@ export const TAB_TEXT_NEW = '新订/变更';
 export const TAB_TEXT_CANCEL = '取消/退款';
 
 /**
- * 抖音列表响应等待超时 (毫秒)
+ * 抖音接口响应等待超时 (毫秒)，列表与详情报文拦截共用
  * 全局基线 ACTION_TIMEOUT.NETWORK (8s) 在偶发慢尾场景（大订单列表 / 工作台后台轮询竞争 /
- * 网络抖动）下余量不足，出现间歇性 8s 内未拦截到列表响应；放宽至 15s 消化慢尾。
- * 仅作用于抖音列表响应等待，不影响其他渠道与交互时序阶梯。
+ * 网络抖动）下余量不足，出现间歇性 8s 内未拦截到目标响应；放宽至 15s 消化慢尾。
+ * 仅作用于抖音接口响应等待，不影响其他渠道与交互时序阶梯。
  */
-export const DOUYIN_LIST_RESPONSE_TIMEOUT_MS = 15_000;
+export const DOUYIN_API_RESPONSE_TIMEOUT_MS = 15_000;
 
 /**
  * 等待抖音特定列表网络响应。
@@ -81,7 +81,7 @@ export async function waitForDouyinListResponse(
         }
         return false;
       },
-      { timeout: getScaledTimeout(DOUYIN_LIST_RESPONSE_TIMEOUT_MS) }
+      { timeout: getScaledTimeout(DOUYIN_API_RESPONSE_TIMEOUT_MS) }
     );
     if (response.status() !== 200) {
       throw new DutyExecutionError(
@@ -98,7 +98,7 @@ export async function waitForDouyinListResponse(
     const statusDetail = typeof lastObservedStatus === 'number'
       ? `（接口曾返回 HTTP ${lastObservedStatus}）`
       : targetRequestObserved
-        ? `（目标接口请求已发出但 ${getScaledTimeout(DOUYIN_LIST_RESPONSE_TIMEOUT_MS)}ms 内未收到响应，疑似网络挂起或浏览器连接饱和）`
+        ? `（目标接口请求已发出但 ${getScaledTimeout(DOUYIN_API_RESPONSE_TIMEOUT_MS)}ms 内未收到响应，疑似网络挂起或浏览器连接饱和）`
         : observedPostPaths.size > 0
           ? `（未观察到目标接口请求；期间观察到其他 POST 请求: ${Array.from(observedPostPaths).slice(0, 5).join('、')}）`
           : '（未收到任何 HTTP 响应包且无任何 POST 请求发出，请求未发起或页面冻结）';

@@ -101,6 +101,133 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     expect(mockPage.waitForResponse).toHaveBeenCalled();
   });
 
+  it('真实事故回归：先到达的非目标订单详情响应应被丢弃，继续等待目标单号响应后成功解析', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const targetOrderId = '1114091864839417197';
+    const staleRawData = {
+      order_base_info: { order_id: '1118500327345300277' },
+      book_detail_info: { hotel_name: '其他订单酒店' },
+    };
+    const targetRawData = {
+      order_base_info: { order_id: targetOrderId },
+      book_detail_info: { hotel_name: '淮安日月洲度假村' },
+    };
+
+    const staleResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1118500327345300277',
+      text: async () => JSON.stringify({ data: { data: JSON.stringify(staleRawData) } }),
+      request: () => ({ method: () => 'POST' }),
+    };
+    const targetResponse = {
+      status: () => 200,
+      url: () => `https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=${targetOrderId}`,
+      text: async () => JSON.stringify({ data: { data: JSON.stringify(targetRawData) } }),
+      request: () => ({ method: () => 'POST' }),
+    };
+
+    // 第一次捕获到非目标订单的在途响应，第二次才等到目标单号响应
+    const waitForResponse = vi
+      .fn()
+      .mockResolvedValueOnce(staleResponse as unknown as never)
+      .mockResolvedValueOnce(targetResponse as unknown as never);
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes(targetOrderId)) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      waitForResponse,
+    } as unknown as Page;
+
+    const result = await inspector.inspectOrderDetail(mockPage, targetOrderId, {
+      refreshOrderList: vi.fn(),
+    });
+
+    // 非目标响应被丢弃后，最终以目标单号报文成功解析
+    expect(waitForResponse).toHaveBeenCalledTimes(2);
+    expect((result as { data?: { data?: string } }).data?.data).toContain(targetOrderId);
+    expect(mockCard.click).toHaveBeenCalled();
+  });
+
+  it('仅存在非目标订单响应且等待耗尽时，应报 ORDER_DETAIL_TIMEOUT 且可重试（而非终态 FIELD_MISSING）', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const targetOrderId = 'DY-STALE-ONLY-001';
+    const staleResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=999',
+      text: async () => JSON.stringify({ data: { data: JSON.stringify({ order_base_info: { order_id: '999' } }) } }),
+      request: () => ({ method: () => 'POST' }),
+    };
+
+    // 第一次返回非目标响应，第二次等待超时
+    const waitForResponse = vi
+      .fn()
+      .mockResolvedValueOnce(staleResponse as unknown as never)
+      .mockRejectedValueOnce(new Error('Timeout 15000ms exceeded'));
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes(targetOrderId)) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      waitForResponse,
+    } as unknown as Page;
+
+    await expect(
+      inspector.inspectOrderDetail(mockPage, targetOrderId, {
+        refreshOrderList: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      errorCode: DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
+      retryable: true,
+    });
+
+    expect(waitForResponse).toHaveBeenCalledTimes(2);
+  });
+
   it('should throw ORDER_DETAIL_TIMEOUT when card is located but network response times out', async () => {
     const inspector = new DouyinDetailInspector();
 
