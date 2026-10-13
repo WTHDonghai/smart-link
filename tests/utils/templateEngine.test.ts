@@ -8,7 +8,6 @@ import { evaluateCondition, getNestedValue } from '../../src/utils/template/eval
 import {
   centsToYuan,
   formatDate,
-  maskPhone,
   defaultVal,
   applyFilter,
 } from '../../src/utils/template/filters';
@@ -44,12 +43,6 @@ describe('templateEngine & filters', () => {
 
     it('throws error for unsupported filter in applyFilter', () => {
       expect(() => applyFilter(100, 'unknownFilter')).toThrowError('[Filter Error] 不支持的过滤器: unknownFilter');
-    });
-
-    it('masks phone number correctly', () => {
-      expect(maskPhone('13812345678')).toBe('138****5678');
-      expect(maskPhone('')).toBe('-');
-      expect(maskPhone(undefined)).toBe('-');
     });
 
     it('provides fallback for defaultVal', () => {
@@ -214,9 +207,9 @@ describe('templateEngine & filters', () => {
     });
 
     it('renders double brace variables with filter pipeline', () => {
-      const template = '实付:¥{{ price | money }} | 手机:{{ phone | maskPhone }}';
+      const template = '实付:¥{{ price | money }} | 手机:{{ phone }}';
       const result = renderTemplate(template, { price: 26555, phone: '13912345678' });
-      expect(result).toBe('实付:¥265.55 | 手机:139****5678');
+      expect(result).toBe('实付:¥265.55 | 手机:13912345678');
     });
 
     it('renders conditional if-else branches', () => {

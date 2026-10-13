@@ -319,9 +319,9 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
       label: '联系电话',
       path: 'guest_info.user_list[*].phone',
       category: 'guest',
-      transform: 'maskPhone',
+      transform: 'string',
       sampleValue: '*******5090',
-      description: '预留联系人手机号 (多住客自动脱敏拼接)',
+      description: '预留联系人手机号 (多住客自动拼接，平台返回值)',
       enabled: true,
     },
 
@@ -362,11 +362,11 @@ export const DEFAULT_DOUYIN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
     {
       key: 'paytype',
       label: '支付方式',
-      path: 'order_base_info.pay_type',
+      path: '',
       category: 'finance',
-      transform: 'string',
+      transform: 'none',
       sampleValue: '预付',
-      description: '抖音支付方式 (预付/现付)',
+      description: '抖音酒店单由平台在线代收全款，固有预付 (报文无支付方式字段，渠道级常量)',
       enabled: true,
     },
 
@@ -765,7 +765,8 @@ export function cleanDouyinOrder(
     context['房型商品ID'] = context.roomTypeId;
   }
 
-  // 补齐并归一化支付方式 (预付/现付)
+  // 抖汀酒店单由平台在线代收全款，报文仅含 pay_time/pay_amount 已收款事实，无支付方式字典字段，
+  // 渠道固有模式为预付 (详见 tests/fixtures/douyinReal*.json 真实报文验证)
   context.paytype = '预付';
   if (context.paytype) {
     context['支付方式'] = context.paytype;

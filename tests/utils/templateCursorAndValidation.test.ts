@@ -116,9 +116,9 @@ describe('Template Syntax, Cursor Insertion, and Unknown Variable Detection', ()
   describe('Task 3: Unknown Variable Detection Logic', () => {
     it('returns empty list for default Meituan template against Meituan schema', () => {
       const meituanTemplate =
-        '【美团搬单】单号:{美团单号} | 房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话}) | 入住:{入住日期}至{离店日期} | 底价:¥{结算底价} | 早餐:{早餐说明}' +
+        '【美团搬单】单号:{美团单号} | 房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话}) | 入住:{入住日期}至{离店日期} | 底价:¥{结算底价} | 付款方式:{付款方式} | 早餐:{早餐说明}' +
         '{{#if hasRights}}\n【权益】{特色权益}{{/if}}' +
-        '{{#if needInvoice}}\n【发票提醒】该单客人要求酒店开具发票(参考金额:¥{参考开票金额}){{/if}}';
+        '{{#if invoiceInfo}}\n【发票提醒】{发票要求}{{/if}}';
 
       const unknown = detectUnknownVariables(
         meituanTemplate,
@@ -134,7 +134,7 @@ describe('Template Syntax, Cursor Insertion, and Unknown Variable Detection', ()
           结算底价: '239.00',
           早餐说明: '无早',
           特色权益: '双人温泉',
-          参考开票金额: '265.55',
+          发票要求: '若客人索取发票，请贵酒店开具，参考开票金额：¥265.55',
         }
       );
 

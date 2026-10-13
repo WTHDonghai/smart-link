@@ -343,6 +343,7 @@ export const MEITUAN_PRODUCTION_REAL_ORDER_SAMPLE = {
     poiIdStr: '781913923',
     poiName: '成都安得天馨Wellness Resort酒店',
     pointDeductionTip: '',
+    rpInfo: '【不含早】2026-09-29 18:00:00前可取消',
     preSettlementInfo: {
       partnerIncome: '0.00',
       refundByMoneyList: [],
@@ -413,8 +414,10 @@ describe('美团真实接口原始报文测试验证 (Meituan Production Raw Pay
     expect(vars['结算底价']).toBe('295.40');
     expect(vars['OTA售价']).toBe('351.68');
     expect(vars['早餐说明']).toBe('不含早');
-    expect(vars['需酒店开票']).toBe(true);
-    expect(vars['参考开票金额']).toBe('0.00');
+    expect(vars['取消规则']).toBe('【不含早】2026-09-29 18:00:00前可取消');
+    expect(vars['发票要求']).toBe('若客人索取发票，请贵酒店开具，参考开票金额：¥0.00');
+    expect(vars['paytype']).toBe('预付');
+    expect(vars['付款方式']).toBe('预付');
 
     // 2. 验证每日价格 pricing：必须严格来自 priceInfo[0].floorPrice (295.40)，绝不取 checkInDateModels 的 469.00
     expect(vars['pricing']).toEqual([

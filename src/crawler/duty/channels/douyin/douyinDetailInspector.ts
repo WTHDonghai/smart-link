@@ -22,6 +22,7 @@ import {
   parseDouyinSecretNumResponse,
   DOUYIN_REVEAL_PHONE_SELECTOR,
 } from './douyinOrderParsers';
+import { DOUYIN_API_RESPONSE_TIMEOUT_MS } from './douyinListCollector';
 
 export interface DouyinDetailInspectorOptions {
   refreshOrderList: (page: Page) => Promise<unknown>;
@@ -110,11 +111,10 @@ export class DouyinDetailInspector {
 
     const scope = getDouyinOrderScope(page);
 
-    // 1. 在操作前启动 waitForResponse 声明式 Promise 监听（过滤 isDouyinDetailResponse）
-    const detailResponsePromise = page.waitForResponse(
-      (res) => isDouyinDetailResponse(res),
-      { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
-    );
+    // 1. 在任何交互前启动目标详情响应等待（监听前置，消除迟到竞态）：
+    //    工作台列表刷新/后台预取可能在途其他订单的详情响应，必须丢弃非目标单号响应并继续等待，
+    //    而非捕获首个详情响应后因单号不匹配直接终态失败（真实事故: 详情接口响应不包含目标单号）
+    const detailResponsePromise = this.waitForTargetDetailResponse(page, cleanOrderId);
     // 避免在卡片定位异常提前退出时，后台网络等待超时引发未捕获的 Promise Rejection
     detailResponsePromise.catch(() => {});
 
@@ -127,11 +127,12 @@ export class DouyinDetailInspector {
       // 3. 点击订单卡片展开详情抽屉并触发详情接口
       await this.triggerDetailExpand(page, orderCard, cleanOrderId);
 
-      // 4. 等待权威网络响应
+      // 4. 等待包含目标单号的权威网络响应
       let response: ResponseLike;
       try {
         response = await detailResponsePromise;
       } catch (err) {
+        if (err instanceof DutyExecutionError) throw err;
         await assertNoDouyinPageRisk(page);
         throw new DutyExecutionError(
           `抖音订单「${cleanOrderId}」详情网络响应超时或未捕获到原始报文（诊断原因: ${err instanceof Error ? err.message : String(err)}）`,
@@ -189,6 +190,74 @@ export class DouyinDetailInspector {
 
     // 7. 敏感信息脱敏解除：定位界面元素并点击触发，拦截 get_secret_num 接口响应
     return await this.revealAndCapturePhone(page, scope, rawDetail, cleanOrderId);
+  }
+
+  /**
+   * 循环等待「包含目标单号」的详情权威响应：
+   * 列表刷新或后台预取产生的其他订单在途详情响应会被先行捕获，必须丢弃并继续等待，
+   * 直到等到包含目标单号的报文或等待预算耗尽（超时为可重试错误，交由中台重派自愈）。
+   */
+  private async waitForTargetDetailResponse(
+    page: Page,
+    cleanOrderId: string
+  ): Promise<ResponseLike> {
+    const deadline = Date.now() + getScaledTimeout(DOUYIN_API_RESPONSE_TIMEOUT_MS);
+
+    while (Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      let response: ResponseLike;
+      try {
+        response = await page.waitForResponse(
+          (res) => isDouyinDetailResponse(res),
+          { timeout: remainingMs }
+        );
+      } catch (err) {
+        // 等待预算耗尽：整个窗口内未捕获到包含目标单号的详情报文
+        throw new DutyExecutionError(
+          `抖音订单「${cleanOrderId}」详情响应等待超时：等待窗口内未捕获到包含目标单号的详情报文（诊断原因: ${err instanceof Error ? err.message : String(err)}）`,
+          DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
+          true
+        );
+      }
+
+      // 非 200 响应直接交由上层 HTTP 错误路径处理（保持原语义）
+      if (response.status() !== 200) {
+        return response;
+      }
+
+      const text = await response.text().catch(() => '');
+      if (text && text.includes(cleanOrderId)) {
+        return response;
+      }
+
+      // 业务级失败（如登录态失效）与单号无关：立即上抛交由解析层 Fail-Fast，绝不能丢弃空转等待
+      if (text) {
+        try {
+          const json = JSON.parse(text) as { status_code?: unknown };
+          if (typeof json.status_code === 'number' && json.status_code !== 0) {
+            return response;
+          }
+        } catch {
+          // 非 JSON 文本按非目标响应处理，交出循环丢弃
+        }
+      }
+
+      logger.warn(
+        `[抖音详情] 捕获到非目标订单的详情响应，已丢弃并继续等待目标单号「${cleanOrderId}」`,
+        {
+          module: 'DUTY_TASK',
+          channelId: 'DOUYIN',
+          orderNo: cleanOrderId,
+          apiUrl: response.url(),
+        }
+      );
+    }
+
+    throw new DutyExecutionError(
+      `抖音订单「${cleanOrderId}」详情响应等待超时：等待窗口内未捕获到包含目标单号的详情报文`,
+      DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
+      true
+    );
   }
 
   /**

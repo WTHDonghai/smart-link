@@ -10,9 +10,9 @@ import {
 import { renderTemplate } from '../../src/utils/template/templateEngine';
 
 const SAMPLE_MEITUAN_REMARK_TEMPLATE =
-  '【美团搬单】单号:{美团单号} | 房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话}) | 入住:{入住日期}至{离店日期} | 底价:¥{结算底价} | 早餐:{早餐说明}' +
+  '【美团搬单】单号:{美团单号} | 房型:{房型名称} x {房间间数}间 | 客人:{入住人} ({联系电话}) | 入住:{入住日期}至{离店日期} | 底价:¥{结算底价} | 付款方式:{付款方式} | 早餐:{早餐说明}' +
   '{{#if hasRights}}\n【权益】{特色权益}{{/if}}' +
-  '{{#if needInvoice}}\n【发票提醒】该单客人要求酒店开具发票(参考金额:¥{参考开票金额}){{/if}}';
+  '{{#if invoiceInfo}}\n【发票提醒】{发票要求}{{/if}}';
 
 describe('protocolNormalizer (Meituan Protocol)', () => {
   it('successfully cleans Meituan raw payload into 15+ canonical business fields', () => {
@@ -38,7 +38,7 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
 
     // 客人联系人
     expect(cleanCtx.guestName).toBe('巨*');
-    expect(cleanCtx.guestPhone).toBe('138****9999');
+    expect(cleanCtx.guestPhone).toBe('13888889999');
 
     // 财务结算（分转元自动清洗）
     expect(cleanCtx.floorPrice).toBe('239.00');
@@ -49,10 +49,16 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
     expect(cleanCtx.breakfast).toBe('不含早');
     expect(cleanCtx.rightsDesc).toBe('延迟退房至 14:00，共 1 间');
     expect(cleanCtx.hasRights).toBe(true);
+    expect(cleanCtx.cancelRule).toBe('【不含早】2026-09-15 18:00:00前可取消');
+    expect(cleanCtx['取消规则']).toBe('【不含早】2026-09-15 18:00:00前可取消');
+
+    // 付款方式：字典值 0 按含义转换为中文，key 与 label 双变量同步归一
+    expect(cleanCtx.paytype).toBe('预付');
+    expect(cleanCtx['付款方式']).toBe('预付');
 
     // 发票判定
-    expect(cleanCtx.needInvoice).toBe(true);
-    expect(cleanCtx.invoiceMoney).toBe('265.55');
+    expect(cleanCtx.invoiceInfo).toBe('若客人索取发票，请贵酒店开具，参考开票金额：¥265.55');
+    expect(cleanCtx['发票要求']).toBe('若客人索取发票，请贵酒店开具，参考开票金额：¥265.55');
   });
 
   it('renders default Meituan remark template end-to-end with real data', () => {
@@ -64,12 +70,13 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
 
     expect(rendered).toContain('【美团搬单】单号:5035036057245515034');
     expect(rendered).toContain('房型:豪华大床房 x 1间');
-    expect(rendered).toContain('客人:巨* (138****9999)');
+    expect(rendered).toContain('客人:巨* (13888889999)');
     expect(rendered).toContain('入住:2026-09-15至2026-09-16');
     expect(rendered).toContain('底价:¥239.00');
+    expect(rendered).toContain('付款方式:预付');
     expect(rendered).toContain('早餐:不含早');
     expect(rendered).toContain('\n【权益】延迟退房至 14:00，共 1 间');
-    expect(rendered).toContain('\n【发票提醒】该单客人要求酒店开具发票(参考金额:¥265.55)');
+    expect(rendered).toContain('\n【发票提醒】若客人索取发票，请贵酒店开具，参考开票金额：¥265.55');
   });
 
   it('renders Meituan remark template correctly across all conditional permutations without text concatenation bugs', () => {
@@ -78,10 +85,11 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
       '房型名称': '标准大床房',
       '房间间数': '1',
       '入住人': '张三',
-      '联系电话': '138****0000',
+      '联系电话': '13800001111',
       '入住日期': '2026-09-15',
       '离店日期': '2026-09-16',
       '结算底价': '200.00',
+      '付款方式': '现付',
       '早餐说明': '不含早',
     };
 
@@ -89,8 +97,8 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
     const ctxNoRightsWithInvoice = {
       ...baseCtx,
       hasRights: false,
-      needInvoice: true,
-      '参考开票金额': '220.00',
+      invoiceInfo: true,
+      '发票要求': '若客人索取发票，请贵酒店开具，参考开票金额：¥220.00',
     };
     const res1 = renderTemplate(SAMPLE_MEITUAN_REMARK_TEMPLATE, ctxNoRightsWithInvoice);
     expect(res1.includes('早餐:不含早\n【发票提醒】')).toBe(true);
@@ -102,7 +110,7 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
       ...baseCtx,
       hasRights: true,
       '特色权益': '免费升房',
-      needInvoice: false,
+      invoiceInfo: false,
     };
     const res2 = renderTemplate(SAMPLE_MEITUAN_REMARK_TEMPLATE, ctxWithRightsNoInvoice);
     expect(res2.includes('早餐:不含早\n【权益】免费升房')).toBe(true);
@@ -113,7 +121,7 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
     const ctxNeither = {
       ...baseCtx,
       hasRights: false,
-      needInvoice: false,
+      invoiceInfo: false,
     };
     const res3 = renderTemplate(SAMPLE_MEITUAN_REMARK_TEMPLATE, ctxNeither);
     expect(res3.includes('\n')).toBe(false);
@@ -217,11 +225,11 @@ describe('protocolNormalizer (Meituan Protocol)', () => {
 
     expect(cleanCtx.guestName).toBe('张三、李四、王五');
     expect(cleanCtx['入住人']).toBe('张三、李四、王五');
-    expect(cleanCtx.guestPhone).toBe('138****5678、139****4321');
-    expect(cleanCtx['联系电话']).toBe('138****5678、139****4321');
+    expect(cleanCtx.guestPhone).toBe('13812345678、13987654321');
+    expect(cleanCtx['联系电话']).toBe('13812345678、13987654321');
 
     const rendered = renderTemplate(SAMPLE_MEITUAN_REMARK_TEMPLATE, cleanCtx);
-    expect(rendered).toContain('客人:张三、李四、王五 (138****5678、139****4321)');
+    expect(rendered).toContain('客人:张三、李四、王五 (13812345678、13987654321)');
   });
 
   it('triggers Fail-Fast warning when a required field resolves to an empty array', () => {
