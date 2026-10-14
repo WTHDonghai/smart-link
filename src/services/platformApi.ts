@@ -1,5 +1,6 @@
 import { platformAuthService, getPlatformBaseUrl } from './platformAuth';
 import { joinApiUrl } from '../utils/url';
+import { describeErrorMessage } from '@/src/utils/errorCauses';
 import { logger } from './logger';
 import type { LogModule, TaskActionStage } from '../types';
 
@@ -269,7 +270,8 @@ export async function requestPlatformApi<T = unknown>(
       throw err;
     }
     const durationMs = Date.now() - startTime;
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    // 附带 cause 链：undici 的 `TypeError: fetch failed` 真实原因 (ECONNRESET/ENOTFOUND 等) 只存在于 error.cause
+    const errorMsg = describeErrorMessage(err);
 
     logger.track('API_REQUEST_ERROR', {
       level: 'ERROR',

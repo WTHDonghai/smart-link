@@ -27,6 +27,7 @@ import { parseDutyTaskContext, type ParsedDutyTaskContext } from './dutyTaskCont
 import { createTaskLogger, type DutyTaskLogger } from './dutyTaskLogger';
 import { hotelCollectionEngine } from '../engine';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
+import { describeErrorMessage, describeErrorCauses } from '@/src/utils/errorCauses';
 import { setMeituanBizSplitEnabled } from './channels/meituan/meituanOrderFilter';
 
 export interface TaskResultPayloadOptions {
@@ -1054,14 +1055,17 @@ export class DutyOrchestrationEngine {
     if (!this.stopSignal && this.getActiveRunners().length > 0) {
       this.coordinatorStatus = 'CLAIM_BACKOFF';
     }
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = describeErrorMessage(err);
     this.appendDutyLog({
       level: 'ERROR',
       module: 'DUTY_TASK',
       event: 'DUTY_TASK_CLAIM_LOOP_ERROR',
       taskActionStage: 'claim',
       message: `[任务调度异常] 任务调度认领与回执循环异常: ${errMsg}`,
-      details: err instanceof Error ? err.stack : '调度器已进入退避状态，将在 3 秒后自动重试',
+      details:
+        err instanceof Error
+          ? `${err.stack ?? err.message}${describeErrorCauses(err)}`
+          : '调度器已进入退避状态，将在 3 秒后自动重试',
     });
     if (this.stopSignal || this.getActiveRunners().length === 0) {
       return;
