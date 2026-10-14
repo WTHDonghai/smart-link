@@ -111,7 +111,8 @@ export function defaultVal(value: unknown, fallback: string): string {
 /**
  * 渠道支付方式字典值归一化 (按含义转换为中文描述)
  * 预付: 0 / PP / PREPAY / 已含「预付」
- * 现付: 1 / PS / POSTPAY / 已含「现付」「到付」
+ * 现付: 1 / 2 / PS / POSTPAY / 已含「现付」「到付」
+ *   - 美团 B 端字典: 0=预付, 1=现付, 2=面付(到店现付，业务归入现付)
  * 无法识别的非空字典值直接抛错阻断 (Fail-Fast)，严禁将原始数字渲染进备注模版
  */
 export function normalizePayType(value: number | string | null | undefined): string {
@@ -124,6 +125,7 @@ export function normalizePayType(value: number | string | null | undefined): str
   }
   if (
     str === '1' ||
+    str === '2' ||
     str === 'PS' ||
     str === 'POSTPAY' ||
     str.includes('现付') ||

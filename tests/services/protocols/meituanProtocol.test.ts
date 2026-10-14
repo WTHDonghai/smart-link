@@ -329,6 +329,21 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(cleanMeituanOrder(postpaidOrder).toUnifiedOrder('').booking.paytype).toBe('现付');
     });
 
+    it('should normalize paymentType dictionary code 2 (美团面付/到店现付) to 现付 across key and label template variables', () => {
+      const onsitePostpaidOrder = {
+        ...MEITUAN_RAW_SAMPLE_ORDER,
+        data: {
+          ...MEITUAN_RAW_SAMPLE_ORDER.data,
+          paymentType: 2,
+        },
+      };
+
+      const vars = cleanMeituanOrder(onsitePostpaidOrder).getTemplateVariables();
+      expect(vars['paytype']).toBe('现付');
+      expect(vars['付款方式']).toBe('现付');
+      expect(cleanMeituanOrder(onsitePostpaidOrder).toUnifiedOrder('').booking.paytype).toBe('现付');
+    });
+
     it('should throw Fail-Fast error on unrecognized paymentType dictionary code', () => {
       const corruptedOrder = {
         ...MEITUAN_RAW_SAMPLE_ORDER,

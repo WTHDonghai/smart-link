@@ -18,7 +18,7 @@ export type ProtocolFieldTransform =
   | 'centsToYuan'   // 分转换为元 (保留2位小数，如 26555 -> 265.55)
   | 'date'          // 日期时间戳/格式清洗
   | 'boolean'       // 转为布尔值
-  | 'payType';      // 支付方式字典值转中文 (0/PP/PREPAY -> 预付, 1/PS/POSTPAY -> 现付)
+  | 'payType';      // 支付方式字典值转中文 (0/PP/PREPAY -> 预付, 1/2/PS/POSTPAY -> 现付, 2 为美团面付即到店现付)
 
 export interface ProtocolFieldMapping {
   /** 变量标识符 (英文唯一键)，如 'orderNo', 'floorPrice', 'needInvoice' */
