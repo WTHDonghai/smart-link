@@ -398,9 +398,29 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
 
       const result = parseMeituanSensitiveResponse(payload);
       expect(result).toEqual({
-        guestName: '张小三',
+        guestNames: ['张小三'],
         guestMobile: '13800138000',
       });
+    });
+
+    it('should collect all decrypted guest names in order for multi-guest orders', () => {
+      const payload = {
+        data: {
+          sensitiveDataList: [
+            {
+              guestInfos: [
+                { name: '李四', phone: '13800138000' },
+                { name: '王五' },
+                { name: '李四' }, // 重复住客名去重
+              ],
+            },
+          ],
+        },
+      };
+
+      const result = parseMeituanSensitiveResponse(payload);
+      expect(result?.guestNames).toEqual(['李四', '王五']);
+      expect(result?.guestMobile).toBe('13800138000');
     });
 
     it('should filter out placeholder strings like "查看姓名" or "点击查看"', () => {
@@ -417,7 +437,7 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       };
 
       const result = parseMeituanSensitiveResponse(payload);
-      expect(result?.guestName).toBeUndefined();
+      expect(result?.guestNames).toEqual([]);
       expect(result?.guestMobile).toBe('13800138000');
     });
 
@@ -431,7 +451,7 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
 
       const result = parseMeituanSensitiveResponse(payload);
       expect(result).toEqual({
-        guestName: '赵六',
+        guestNames: ['赵六'],
         guestMobile: '13987654321',
       });
     });
@@ -459,13 +479,13 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
 
   describe('mergeSensitiveDataIntoRawDetail', () => {
     it('should return rawPayload directly when rawPayload or sensitive is invalid/empty', () => {
-      expect(mergeSensitiveDataIntoRawDetail(null, { guestName: '张三' })).toBeNull();
-      expect(mergeSensitiveDataIntoRawDetail('not-object', { guestName: '张三' })).toBe('not-object');
+      expect(mergeSensitiveDataIntoRawDetail(null, { guestNames: ['张三'] })).toBeNull();
+      expect(mergeSensitiveDataIntoRawDetail('not-object', { guestNames: ['张三'] })).toBe('not-object');
 
       const original = { data: { orderDetail: { guestName: '张*' } } };
       expect(mergeSensitiveDataIntoRawDetail(original, null)).toBe(original);
-      expect(mergeSensitiveDataIntoRawDetail(original, { guestName: '张*' })).toBe(original);
-      expect(mergeSensitiveDataIntoRawDetail(original, {})).toBe(original);
+      expect(mergeSensitiveDataIntoRawDetail(original, { guestNames: ['张*'] })).toBe(original);
+      expect(mergeSensitiveDataIntoRawDetail(original, { guestNames: [] })).toBe(original);
     });
 
     it('should replace masked guestName and guestMobile in data.orderDetail and contacts', () => {
@@ -485,7 +505,7 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       };
 
       const merged = mergeSensitiveDataIntoRawDetail(rawPayload, {
-        guestName: '李小龙',
+        guestNames: ['李小龙'],
         guestMobile: '13812345678',
       }) as typeof rawPayload;
 
@@ -498,6 +518,70 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       const parsed = parseMeituanOrderDetailResponse(merged, 'MT-RAW-001');
       expect(parsed?.guestName).toBe('李小龙');
       expect(parsed?.guestMobile).toBe('13812345678');
+    });
+
+    it('should unmask every guest entry by index for multi-guest orders (两客人两间房场景)', () => {
+      const rawPayload = {
+        code: 0,
+        data: {
+          orderDetail: {
+            orderId: 'MT-MULTI-GUEST-001',
+            guestName: '李*',
+            guests: [
+              { name: '李*' },
+              { name: '王*' },
+            ],
+            contacts: [
+              { name: '李*', phone: '138****0000' },
+              { name: '王*', phone: '' },
+            ],
+          },
+        },
+      };
+
+      const merged = mergeSensitiveDataIntoRawDetail(rawPayload, {
+        guestNames: ['李四', '王五'],
+        guestMobile: '13800138000',
+      }) as typeof rawPayload;
+
+      const orderDetail = merged.data.orderDetail;
+      // 标量字段回写首位（主）住客
+      expect(orderDetail.guestName).toBe('李四');
+      // 多住客按索引逐一回写，第二位客人不再残留王*；首位住客同步回写明文电话
+      expect(orderDetail.guests).toEqual([{ name: '李四', phone: '13800138000' }, { name: '王五' }]);
+      expect(orderDetail.contacts).toEqual([
+        { name: '李四', phone: '13800138000' },
+        { name: '王五', phone: '' },
+      ]);
+    });
+
+    it('should append missing guest entries when decrypted names outnumber array entries (合并串场景)', () => {
+      const rawPayload = {
+        data: {
+          guests: [{ name: '李四，王*' }],
+        },
+      };
+
+      const merged = mergeSensitiveDataIntoRawDetail(rawPayload, {
+        guestNames: ['李四', '王五'],
+      }) as { data: { guests: Array<{ name: string }> } };
+
+      expect(merged.data.guests).toEqual([{ name: '李四' }, { name: '王五' }]);
+    });
+
+    it('should leave later guest entries untouched when fewer decrypted names are available', () => {
+      const rawPayload = {
+        data: {
+          guests: [{ name: '李*' }, { name: '王*' }],
+        },
+      };
+
+      const merged = mergeSensitiveDataIntoRawDetail(rawPayload, {
+        guestNames: ['李四'],
+      }) as { data: { guests: Array<{ name: string }> } };
+
+      // 仅解密出首位住客时，第二位保持原样（由推单边界 GUEST_INFO_MASKED 显式阻断）
+      expect(merged.data.guests).toEqual([{ name: '李四' }, { name: '王*' }]);
     });
 
     it('should replace sensitive data across multiple possible container shapes (order, root)', () => {
@@ -513,7 +597,7 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
       };
 
       const mergedOrder = mergeSensitiveDataIntoRawDetail(payloadOrder, {
-        guestName: '王大拿',
+        guestNames: ['王大拿'],
         guestMobile: '13900001111',
       }) as { data: { order: { guestName: string; guestMobile: string; guests: Array<{ name: string }> } } };
 

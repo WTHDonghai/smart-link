@@ -10,6 +10,7 @@ import {
   parseMeituanSensitiveResponse,
   mergeSensitiveDataIntoRawDetail,
   hasPlainMobileNumber,
+  type MeituanSensitiveGuestData,
 } from './meituanOrderParsers';
 import {
   ACTION_TIMEOUT,
@@ -49,7 +50,7 @@ export class MeituanDetailInspector {
     // 1. 预先挂载本次查看详情专属的单次网络响应监听（在探测卡片前就位，避免探测阶段网络请求遗漏）
     const capturedRef: {
       rawDetail: unknown | null;
-      sensitive: { guestName?: string; guestMobile?: string } | null;
+      sensitive: MeituanSensitiveGuestData | null;
     } = {
       rawDetail: null,
       sensitive: null,
@@ -79,8 +80,10 @@ export class MeituanDetailInspector {
                 const parsed = JSON.parse(text);
                 const sensitive = parseMeituanSensitiveResponse(parsed);
                 if (sensitive) {
+                  // 多住客多次解密响应逐一累积，保留首次解密顺序
+                  const prevNames = capturedRef.sensitive?.guestNames ?? [];
                   capturedRef.sensitive = {
-                    guestName: sensitive.guestName || capturedRef.sensitive?.guestName,
+                    guestNames: [...new Set([...prevNames, ...sensitive.guestNames])],
                     guestMobile: sensitive.guestMobile || capturedRef.sensitive?.guestMobile,
                   };
                 }

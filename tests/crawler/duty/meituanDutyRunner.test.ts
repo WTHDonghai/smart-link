@@ -362,8 +362,28 @@ describe('meituanDutyRunner', () => {
 
       const result = extractMeituanSensitiveDataFromPayload(payload);
       expect(result).not.toBeNull();
-      expect(result?.guestName).toBe('张三丰');
+      expect(result?.guestNames).toEqual(['张三丰']);
       expect(result?.guestMobile).toBe('13912345678');
+    });
+
+    it('should collect all decrypted guest names for multi-guest orders', () => {
+      const payload = {
+        code: 0,
+        data: {
+          sensitiveDataList: [
+            {
+              guestInfos: [
+                { name: '李四', phone: '13800138000' },
+                { name: '王五' },
+              ],
+            },
+          ],
+        },
+      };
+
+      const result = extractMeituanSensitiveDataFromPayload(payload);
+      expect(result?.guestNames).toEqual(['李四', '王五']);
+      expect(result?.guestMobile).toBe('13800138000');
     });
 
     it('should ignore masked names and placeholder text', () => {
@@ -381,7 +401,7 @@ describe('meituanDutyRunner', () => {
       };
 
       const result = extractMeituanSensitiveDataFromPayload(payload);
-      expect(result?.guestName).toBeUndefined();
+      expect(result?.guestNames).toEqual([]);
       expect(result?.guestMobile).toBe('13800138000');
     });
 

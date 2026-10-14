@@ -197,6 +197,20 @@ export async function dispatchDutyTask(
         };
       }
 
+      // 5.1 脱敏残留拦截：姓名/电话仍含未解密掩码时显式阻断自动入单，杜绝掩码数据污染 PMS
+      const maskedName = unifiedOrder.contact.name.includes('*');
+      const maskedMobile = unifiedOrder.contact.mobile
+        ? unifiedOrder.contact.mobile.includes('*')
+        : false;
+      if (maskedName || maskedMobile) {
+        return {
+          status: 'FAILED',
+          errorCode: 'GUEST_INFO_MASKED',
+          errorMessage: `订单「${orderId}」客人信息仍含未解密掩码 (姓名: ${unifiedOrder.contact.name || '-'} / 电话: ${unifiedOrder.contact.mobile || '-'})，已阻断自动入单，请人工在渠道后台完成解密后重试`,
+          retryable: true,
+        };
+      }
+
       // 6. 提取 extUnitCode
       const extUnitCode =
         (typeof context.payload.extUnitCode === 'string' && context.payload.extUnitCode.trim())

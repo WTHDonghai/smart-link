@@ -404,6 +404,83 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.errorMessage).toContain('缺少必须的业务字段');
     });
 
+    it('should fail fast with GUEST_INFO_MASKED when guest name still contains asterisk mask (多住客残留)', async () => {
+      runner.detailResult = {
+        orderId: 'ORD-MASKED-NAME',
+        guestName: '李四、王*', // 第二位住客未解密残留掩码
+        roomName: '海景套房',
+        goodsId: 'GOODS-SEA-01',
+        ratePlanName: '海景套房特惠价',
+        paymentType: 0,
+        checkInDateString: '2026-09-20',
+        checkOutDateString: '2026-09-22',
+        nights: 2,
+        roomCount: 1,
+        floorPrice: 50000,
+      };
+
+      const taskPayload = { otaOrderId: 'ORD-MASKED-NAME' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-masked-name',
+        businessId: 'ORD-MASKED-NAME',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+      });
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('GUEST_INFO_MASKED');
+      expect(result.errorMessage).toContain('李四、王*');
+      expect(result.errorMessage).toContain('已阻断自动入单');
+      // 严密断言：掩码残留时绝不提交中台入单
+      expect(importSpy).not.toHaveBeenCalled();
+    });
+
+    it('should fail fast with GUEST_INFO_MASKED when guest mobile still contains asterisk mask', async () => {
+      runner.detailResult = {
+        orderId: 'ORD-MASKED-MOBILE',
+        guestName: '张三',
+        guestMobile: '138****0000', // 电话未解密残留掩码
+        roomName: '海景套房',
+        goodsId: 'GOODS-SEA-01',
+        ratePlanName: '海景套房特惠价',
+        paymentType: 0,
+        checkInDateString: '2026-09-20',
+        checkOutDateString: '2026-09-22',
+        nights: 2,
+        roomCount: 1,
+        floorPrice: 50000,
+      };
+
+      const taskPayload = { otaOrderId: 'ORD-MASKED-MOBILE' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-masked-mobile',
+        businessId: 'ORD-MASKED-MOBILE',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+      });
+
+      const result = await dispatchDutyTask(task, runner);
+      expect(result.status).toBe('FAILED');
+      expect(result.errorCode).toBe('GUEST_INFO_MASKED');
+      expect(result.errorMessage).toContain('138****0000');
+      expect(importSpy).not.toHaveBeenCalled();
+    });
+
     it('should fail fast with ORDER_DETAIL_PARSE_FAILED when channel protocol is unsupported', async () => {
       runner.channelCode = 'UNSUPPORTED_OTA';
       const taskPayload = { otaOrderId: 'ORD-UNKNOWN' };

@@ -113,16 +113,25 @@ export function isPlainPhoneNumber(phone: unknown): boolean {
 }
 
 /**
+ * 美团敏感数据解密结果：多住客订单逐一收集全部明文姓名（按美团返回顺序）
+ */
+export interface MeituanSensitiveGuestData {
+  guestNames: string[];
+  guestMobile?: string;
+}
+
+/**
  * 从美团敏感数据解密接口（/sensitiveData/ 或 /confirmPhone）响应报文中解析真实客人姓名与手机号
+ * 多住客订单（一单多间多客人）会收集全部明文姓名，避免第二位客人姓名残留脱敏掩码
  */
 export function parseMeituanSensitiveResponse(
   payload: unknown
-): { guestName?: string; guestMobile?: string } | null {
+): MeituanSensitiveGuestData | null {
   if (!payload || typeof payload !== 'object') return null;
   const root = payload as Record<string, unknown>;
   const data = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
 
-  let guestName = '';
+  const guestNames: string[] = [];
   let guestMobile = '';
 
   const isPlainName = (name: string): boolean => {
@@ -151,7 +160,7 @@ export function parseMeituanSensitiveResponse(
           const g = info as Record<string, unknown>;
           const n = String(g.name || '').trim();
           const p = String(g.phone || g.mobile || '').trim();
-          if (n && isPlainName(n) && !guestName) guestName = n;
+          if (n && isPlainName(n) && !guestNames.includes(n)) guestNames.push(n);
           if (p && isPlainPhone(p) && !guestMobile) guestMobile = p;
         }
       }
@@ -165,13 +174,13 @@ export function parseMeituanSensitiveResponse(
   }
 
   const directName = String(data.name || data.guestName || root.name || root.guestName || '').trim();
-  if (directName && isPlainName(directName) && !guestName) {
-    guestName = directName;
+  if (directName && isPlainName(directName) && guestNames.length === 0) {
+    guestNames.push(directName);
   }
 
-  if (!guestName && !guestMobile) return null;
+  if (guestNames.length === 0 && !guestMobile) return null;
   return {
-    guestName: guestName || undefined,
+    guestNames,
     guestMobile: guestMobile || undefined,
   };
 }
@@ -182,27 +191,27 @@ export const extractMeituanSensitiveDataFromPayload = parseMeituanSensitiveRespo
  * 将敏感解密数据（明文客人姓名、明文电话）反向融合/替换到美团原始详情报文中。
  * 遵循极简与单一真实源原则，直接更新原始响应中的客人与联系人字段，
  * 避免执行器自行拆解字段或重复校验，交由后续解析器与清洗流水线统一处理。
+ * 多住客订单按索引逐一回写明文姓名，杜绝第二位客人姓名残留掩码被拼接推单。
  */
 export function mergeSensitiveDataIntoRawDetail(
   rawPayload: unknown,
-  sensitive: { guestName?: string; guestMobile?: string } | null
+  sensitive: MeituanSensitiveGuestData | null
 ): unknown {
   if (!rawPayload || typeof rawPayload !== 'object' || !sensitive) {
     return rawPayload;
   }
 
-  const plainName =
-    sensitive.guestName && !sensitive.guestName.includes('*')
-      ? sensitive.guestName.trim()
-      : '';
+  const guestNames = sensitive.guestNames.filter((n) => n && !n.includes('*'));
   const plainPhone =
     sensitive.guestMobile && !sensitive.guestMobile.includes('*')
       ? sensitive.guestMobile.trim()
       : '';
 
-  if (!plainName && !plainPhone) {
+  if (guestNames.length === 0 && !plainPhone) {
     return rawPayload;
   }
+
+  const primaryName = guestNames[0] || '';
 
   // 浅拷贝 root 及其 data 层
   const root = { ...(rawPayload as Record<string, unknown>) };
@@ -234,10 +243,10 @@ export function mergeSensitiveDataIntoRawDetail(
   targetContainers.push(root);
 
   for (const container of targetContainers) {
-    if (plainName) {
-      container.guestName = plainName;
-      if ('customerName' in container) container.customerName = plainName;
-      if ('contactName' in container) container.contactName = plainName;
+    if (primaryName) {
+      container.guestName = primaryName;
+      if ('customerName' in container) container.customerName = primaryName;
+      if ('contactName' in container) container.contactName = primaryName;
     }
     if (plainPhone) {
       container.guestMobile = plainPhone;
@@ -247,21 +256,28 @@ export function mergeSensitiveDataIntoRawDetail(
       if ('mobile' in container) container.mobile = plainPhone;
     }
 
-    // 同步更新 contacts / guests 列表首位
+    // 多住客按索引逐一回写明文姓名；电话仅回写首位联系人
     for (const key of ['contacts', 'guests']) {
       if (Array.isArray(container[key])) {
-        container[key] = (container[key] as unknown[]).map((c, idx) => {
-          if (c && typeof c === 'object' && idx === 0) {
+        const list = [...(container[key] as unknown[])];
+        for (let idx = 0; idx < guestNames.length; idx++) {
+          const plainName = guestNames[idx];
+          if (idx < list.length) {
+            const c = list[idx];
+            if (!c || typeof c !== 'object') continue;
             const updated = { ...(c as Record<string, unknown>) };
-            if (plainName) updated.name = plainName;
-            if (plainPhone) {
+            updated.name = plainName;
+            if (plainPhone && idx === 0) {
               updated.phone = plainPhone;
               if ('mobile' in updated) updated.mobile = plainPhone;
             }
-            return updated;
+            list[idx] = updated;
+          } else {
+            // 解密返回的住客数多于报文条目（合并串场景）：补齐缺失住客条目
+            list.push({ name: plainName });
           }
-          return c;
-        });
+        }
+        container[key] = list;
       }
     }
   }
