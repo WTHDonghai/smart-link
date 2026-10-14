@@ -35,7 +35,7 @@ docs/channels/<channel_name>/
 
 ## 🏛️ 渠道接入四大核心工程准则
 
-所有渠道在进行调研、设计与代码实现时，必须无条件遵循以下红线准则（详见 [`AGENTS.md`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/AGENTS.md)）：
+所有渠道在进行调研、设计与代码实现时，必须无条件遵循以下红线准则（详见 [`AGENTS.md`](../AGENTS.md)）：
 
 1. **权威网络响应为唯一数据源 (Network Authority & Fail-Fast)**：
    - 订单列表数据、订单详情数据与敏感信息**必须 100% 来源于渠道网络响应（JSON Payload）**；

@@ -93,12 +93,12 @@ describe('browserManager', () => {
 
     try {
       const session = await createPersistentBrowserSession({
-        channelCode: 'MEITUAN_BIZ',
+        channelCode: 'MEITUANBIZ',
         headless: true,
       });
 
       const [calledProfileDir] = vi.mocked(chromium.launchPersistentContext).mock.calls[0];
-      expect(calledProfileDir).toBe(path.resolve(customUserData, '.chrome-profile', 'meituan_biz'));
+      expect(calledProfileDir).toBe(path.resolve(customUserData, '.chrome-profile', 'meituanbiz'));
 
       await session.close();
     } finally {

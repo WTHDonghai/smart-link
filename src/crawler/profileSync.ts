@@ -469,7 +469,7 @@ export function syncChromeProfile(options: ProfileSyncOptions = {}): ProfileSync
 
   const channelNameMap: Record<string, string> = {
     MEITUAN: '美团',
-    MEITUAN_BIZ: '美团商旅',
+    MEITUANBIZ: '美团商旅',
     DOUYIN: '抖音',
     CTRIP: '携程',
   };

@@ -49,6 +49,9 @@ const dutyApi: DutyBridgeApi = {
   setConfirmImportEnabled: (enabled: boolean) => {
     return ipcRenderer.invoke('duty:set-confirm-import-enabled', enabled);
   },
+  setMeituanBizSplitEnabled: (enabled: boolean) => {
+    return ipcRenderer.invoke('duty:set-meituan-biz-split-enabled', enabled);
+  },
   syncTokens: (tokens: PlatformAuthTokens) => {
     return ipcRenderer.invoke('duty:sync-tokens', tokens);
   },

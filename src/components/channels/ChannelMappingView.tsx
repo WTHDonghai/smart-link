@@ -5,7 +5,7 @@ import {
   saveChannelMapping,
   selectCulturalTourismChannel,
   setSelectedChannelForTemplate,
-  removeChannel,
+  deleteChannelMappingThunk,
   clearChannelError,
 } from '../../store/slices/channelSlice';
 import { showToast } from '../../store/slices/appSlice';
@@ -28,6 +28,8 @@ export const ChannelMappingView: React.FC = () => {
     isLoading,
     isSaving,
     savingChannelId,
+    isDeleting,
+    deletingChannelId,
     error,
   } = useAppSelector((state) => state.channel);
 
@@ -170,21 +172,51 @@ export const ChannelMappingView: React.FC = () => {
   );
 
   const handleDelete = useCallback(
-    (channel: OTAChannel) => {
-      dispatch(removeChannel(channel.id));
-      dispatch(
-        showToast({
-          title: `已删除「${channel.name}」渠道`,
-          description: '该渠道映射已从列表中移除',
-          type: 'info',
+    async (channel: OTAChannel) => {
+      const hadRemoteMapping = Boolean(channel.mappingId);
+
+      const result = await dispatch(
+        deleteChannelMappingThunk({
+          channelId: channel.id,
+          mappingId: channel.mappingId,
         })
       );
-      logger.track('CHANNEL_RESET_DEFAULT', {
-        module: 'CHANNEL',
-        level: 'WARN',
-        channelId: channel.id,
-        message: `[ChannelConfig] 已移除渠道映射「${channel.name}」(${channel.code})`
-      });
+
+      if (deleteChannelMappingThunk.fulfilled.match(result)) {
+        dispatch(
+          showToast({
+            title: `已删除「${channel.name}」渠道映射`,
+            description: hadRemoteMapping
+              ? '服务端映射已删除，并已从列表移除'
+              : '该渠道映射尚未保存，已从列表移除',
+            type: 'info',
+          })
+        );
+        logger.track('CHANNEL_MAPPING_DELETE', {
+          module: 'CHANNEL',
+          level: 'WARN',
+          channelId: channel.id,
+          message: `[ChannelMapping] 已删除渠道映射「${channel.name}」(${channel.code})${hadRemoteMapping ? `，服务端记录 ${channel.mappingId}` : '（本地未保存草稿）'}`
+        });
+      } else if (deleteChannelMappingThunk.rejected.match(result)) {
+        const rawError = (result.payload as string) || result.error?.message || '删除渠道映射失败';
+        const normalized = normalizeAppError(rawError, 'NET');
+        dispatch(
+          showToast({
+            title: `删除「${channel.name}」渠道映射失败`,
+            description: normalized.userMessage,
+            type: 'error',
+          })
+        );
+        logger.track('CHANNEL_MAPPING_DELETE', {
+          module: 'CHANNEL',
+          level: 'ERROR',
+          channelId: channel.id,
+          message: `[ChannelMapping] 删除渠道「${channel.name}」(${channel.code}) 映射失败: ${rawError}`,
+          details: rawError,
+          meta: { error: rawError }
+        });
+      }
     },
     [dispatch]
   );
@@ -274,6 +306,7 @@ export const ChannelMappingView: React.FC = () => {
                 channels.map((ch, index) => {
                   const isPaused = ch.status === 'paused';
                   const isRowSaving = isSaving && savingChannelId === ch.id;
+                  const isRowDeleting = isDeleting && deletingChannelId === ch.id;
                   const isUnsaved = Boolean(ch.channelId && !ch.isMapped);
 
                   return (
@@ -321,7 +354,7 @@ export const ChannelMappingView: React.FC = () => {
                                 : '-- 请选择文旅渠道 --'
                             }
                             searchPlaceholder="输入关键词搜索文旅渠道..."
-                            disabled={isLoading || isRowSaving}
+                            disabled={isLoading || isRowSaving || isRowDeleting}
                             placement={index >= channels.length - 1 && channels.length > 1 ? 'top' : 'bottom'}
                             clearable
                           />
@@ -370,6 +403,7 @@ export const ChannelMappingView: React.FC = () => {
                           saveDisabled={!ch.channelId}
                           saveAriaLabel={`保存 ${ch.name} 渠道映射`}
                           onDelete={() => handleDelete(ch)}
+                          isDeleting={isRowDeleting}
                           deleteTitle="删除渠道"
                           deleteAriaLabel={`删除 ${ch.name} 渠道`}
                         />

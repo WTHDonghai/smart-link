@@ -13,6 +13,7 @@ import {
   saveChannelMappingsBatch,
   saveChannelRemarkTemplate,
   fetchChannelRemarkTemplate,
+  deleteChannelMapping,
 } from '../../services/channelApi';
 import {
   DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
@@ -20,7 +21,11 @@ import {
 import {
   DEFAULT_DOUYIN_PROTOCOL_SCHEMA,
 } from '../../services/protocols/douyinProtocol';
-import { updateDutyTemplateCache } from '../../services/dutyBridge';
+import {
+  updateDutyTemplateCache,
+  syncMeituanBizSplitBestEffort,
+} from '../../services/dutyBridge';
+import { hasMeituanBizMapping } from '@/src/utils/channelDutyHelpers';
 import { getOtaChannelUrl } from '../../config/otaUrls';
 
 export const SCHEMA_STORAGE_PREFIX = 'smartlink_schema_';
@@ -110,17 +115,17 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
   {
     id: 'meituanbiz',
     name: '美团商旅',
-    code: 'MEITUAN_BIZ',
+    code: 'MEITUANBIZ',
     short: '商',
     bgColor: 'bg-[#eef2ff]',
     textColor: 'text-[#004ac6]',
     targetSystem: 'meituanbiz',
     targetSystemOptions: [
-      { val: 'meituanbiz', label: '美团商旅 (MEITUAN_BIZ)' },
+      { val: 'meituanbiz', label: '美团商旅 (MEITUANBIZ)' },
       { val: 'meituanbiz_vip', label: '美团企业采购 VIP (MEITUAN_CORP)' }
     ],
     remarkTemplate: '',
-    storeCrawlUrl: getOtaChannelUrl('MEITUAN_BIZ'),
+    storeCrawlUrl: getOtaChannelUrl('MEITUANBIZ'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -241,6 +246,8 @@ export interface ChannelState {
   isLoading: boolean;
   isSaving: boolean;
   savingChannelId: string | null;
+  isDeleting: boolean;
+  deletingChannelId: string | null;
   error: string | null;
   selectedChannelForTemplate: string | null;
   isSavingTemplate: boolean;
@@ -262,6 +269,8 @@ const initialState: ChannelState = {
   isLoading: false,
   isSaving: false,
   savingChannelId: null,
+  isDeleting: false,
+  deletingChannelId: null,
   error: null,
   channels: createInitialChannels(),
   isSavingTemplate: false,
@@ -288,6 +297,10 @@ export const fetchChannelMappingData = createAsyncThunk<
       fetchCulturalTourismChannels(),
       fetchChannelMappings(),
     ]);
+
+    // 映射集已刷新：按 MEITUANBIZ 映射存在性同步商旅分流开关（best-effort，不阻断拉取主流程）
+    syncMeituanBizSplitBestEffort(hasMeituanBizMapping(mappings));
+
     return { culturalTourismChannels, mappings };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -313,7 +326,7 @@ export const saveChannelMapping = createAsyncThunk<
     status?: string;
   },
   { rejectValue: string }
->('channel/saveChannelMapping', async (param, { rejectWithValue }) => {
+>('channel/saveChannelMapping', async (param, { dispatch, rejectWithValue }) => {
   try {
     const payload: SaveChannelMappingPayloadItem = {
       otaChannelCode: param.otaChannelCode,
@@ -324,6 +337,9 @@ export const saveChannelMapping = createAsyncThunk<
     };
 
     const res = await saveChannelMappingsBatch([payload]);
+
+    // 映射集已变更：重拉全量映射以同步 Redux 状态与商旅分流开关（含新增/失效场景）
+    void dispatch(fetchChannelMappingData());
 
     // 优先从服务端返回的 records 中匹配当前渠道的映射实体及 mappingId
     const matchedRecord =
@@ -341,6 +357,31 @@ export const saveChannelMapping = createAsyncThunk<
       message: res.message,
       mappingId: returnedMappingId,
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return rejectWithValue(message);
+  }
+});
+
+// 异步 Thunk：删除渠道映射 (DELETE /toolkit/channel-mappings/{id})
+export const deleteChannelMappingThunk = createAsyncThunk<
+  { channelId: string },
+  { channelId: string; mappingId?: string },
+  { rejectValue: string }
+>('channel/deleteChannelMapping', async (param, { dispatch, rejectWithValue }) => {
+  try {
+    // 映射已持久化至服务端时先真实调用远端删除，失败立即阻断，绝不本地假删
+    if (param.mappingId) {
+      await deleteChannelMapping(param.mappingId);
+    }
+
+    // 远端删除成功后移除本地渠道行与映射缓存
+    dispatch(removeChannel(param.channelId));
+
+    // 映射集已变更：重拉全量映射以同步 Redux 状态与商旅分流开关
+    void dispatch(fetchChannelMappingData());
+
+    return { channelId: param.channelId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return rejectWithValue(message);
@@ -748,6 +789,22 @@ export const channelSlice = createSlice({
         state.isSaving = false;
         state.savingChannelId = null;
         state.error = action.payload || action.error.message || '保存渠道映射失败';
+      })
+
+      // deleteChannelMappingThunk
+      .addCase(deleteChannelMappingThunk.pending, (state, action) => {
+        state.isDeleting = true;
+        state.deletingChannelId = action.meta.arg.channelId;
+        state.error = null;
+      })
+      .addCase(deleteChannelMappingThunk.fulfilled, (state) => {
+        state.isDeleting = false;
+        state.deletingChannelId = null;
+      })
+      .addCase(deleteChannelMappingThunk.rejected, (state, action) => {
+        state.isDeleting = false;
+        state.deletingChannelId = null;
+        state.error = action.payload || action.error.message || '删除渠道映射失败';
       })
 
       // saveRemarkTemplateAsync

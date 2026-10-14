@@ -3,13 +3,13 @@
 > **渠道代号**：`MEITUAN`  
 > **商户系统**：美团商家中心 (E-booking)  
 > **执行器架构**：
-> - 统一门面：[`src/crawler/duty/channels/meituan/meituanDutyRunner.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDutyRunner.ts) (继承 `BaseChannelDutyRunner`)
+> - 统一门面：[`src/crawler/duty/channels/meituan/meituanDutyRunner.ts`](../../../src/crawler/duty/channels/meituan/meituanDutyRunner.ts) (继承 `BaseChannelDutyRunner`)
 > - 领域子模块：
->   - 作用域与卡片定位：[`src/crawler/duty/channels/meituan/meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts)
->   - 列表流转与防抖：[`src/crawler/duty/channels/meituan/meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts)
->   - 详情嗅探与网络拦截：[`src/crawler/duty/channels/meituan/meituanDetailInspector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanDetailInspector.ts)
->   - 接单与取消执行：[`src/crawler/duty/channels/meituan/meituanActionExecutor.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanActionExecutor.ts)
->   - 风控与弹窗防护：[`src/crawler/duty/channels/meituan/meituanRiskGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanRiskGuard.ts), [`src/crawler/duty/channels/meituan/meituanModalGuard.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanModalGuard.ts)  
+>   - 作用域与卡片定位：[`src/crawler/duty/channels/meituan/meituanCardLocator.ts`](../../../src/crawler/duty/channels/meituan/meituanCardLocator.ts)
+>   - 列表流转与防抖：[`src/crawler/duty/channels/meituan/meituanListCollector.ts`](../../../src/crawler/duty/channels/meituan/meituanListCollector.ts)
+>   - 详情嗅探与网络拦截：[`src/crawler/duty/channels/meituan/meituanDetailInspector.ts`](../../../src/crawler/duty/channels/meituan/meituanDetailInspector.ts)
+>   - 接单与取消执行：[`src/crawler/duty/channels/meituan/meituanActionExecutor.ts`](../../../src/crawler/duty/channels/meituan/meituanActionExecutor.ts)
+>   - 风控与弹窗防护：[`src/crawler/duty/channels/meituan/meituanRiskGuard.ts`](../../../src/crawler/duty/channels/meituan/meituanRiskGuard.ts), [`src/crawler/duty/channels/meituan/meituanModalGuard.ts`](../../../src/crawler/duty/channels/meituan/meituanModalGuard.ts)  
 > > **核心原则**：基于真实生产环境 DOM 结构实测取证，坚决杜绝“脱离真实 DOM 的盲目脑补”。
 
 
@@ -32,7 +32,7 @@
 - **联动行为**：点击左侧卡片，右侧详情面板即刻刷新渲染，并向美团后端异步触发详情请求。
 
 ### 1.3 微前端与 Iframe 作用域穿透 (`getMeituanOrderScope`)
-- 由 [`meituanCardLocator.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanCardLocator.ts) 统一提供 `getMeituanOrderScope(page: Page): Page | FrameLocator`；
+- 由 [`meituanCardLocator.ts`](../../../src/crawler/duty/channels/meituan/meituanCardLocator.ts) 统一提供 `getMeituanOrderScope(page: Page): Page | FrameLocator`；
 - **探测逻辑**：自动探测顶层页面中是否存在有效 `#me-iframe-container` 或 `iframe[src*="ebooking"]`；若存在且内部已有订单容器，返回子 FrameLocator，否则回退为顶层 Page；
 - 所有子模块（定位、列表、详情、执行）统一以此 Scope 进行元素检索，保障在不同宿主嵌套层级下的穿透鲁棒性。
 
@@ -41,7 +41,7 @@
 ## 2. 列表刷新与 Tab 切换交互 (List Refresh & Tab Switching)
 
 ### 2.1 业务痛点
-美团商家后台页面上**不存在单独的“一键刷新列表”按钮**。要获取最新待处理订单，必须通过 Tab 切换触发列表网络请求重新加载。由 [`meituanListCollector.ts`](file:///Users/daniel-wu/antigravity/Smart-Link-order-guardian/src/crawler/duty/channels/meituan/meituanListCollector.ts) 独立负责。
+美团商家后台页面上**不存在单独的“一键刷新列表”按钮**。要获取最新待处理订单，必须通过 Tab 切换触发列表网络请求重新加载。由 [`meituanListCollector.ts`](../../../src/crawler/duty/channels/meituan/meituanListCollector.ts) 独立负责。
 
 ### 2.2 真实交互状态机与网络屏障 (Lifecycle Barrier)
 ```text

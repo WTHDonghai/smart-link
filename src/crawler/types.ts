@@ -1,5 +1,5 @@
 export interface HotelCrawlRequest {
-  channelCode: string; // 必须大写，如 'MEITUAN', 'MEITUAN_BIZ'
+  channelCode: string; // 必须大写，如 'MEITUAN', 'MEITUANBIZ'
   targetUrl?: string; // 可选指定目标 URL，未传递时默认从统一配置/环境变量解析
   headless?: boolean;
   waitSeconds?: number; // 采集等待时长 (单位: 秒，推荐，便于精准防风控)

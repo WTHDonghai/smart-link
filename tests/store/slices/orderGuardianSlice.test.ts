@@ -25,6 +25,7 @@ import { addLog } from '../../../src/store/slices/systemLogSlice';
 
 vi.mock('../../../src/services/dutyBridge', () => ({
   setConfirmImportEnabled: vi.fn().mockResolvedValue(undefined),
+  setMeituanBizSplitEnabled: vi.fn().mockResolvedValue(undefined),
   startDutyByChannel: vi.fn().mockResolvedValue(undefined),
   stopDutyByChannel: vi.fn().mockResolvedValue(undefined),
   queryDutyStatus: vi.fn().mockResolvedValue({
@@ -559,6 +560,72 @@ describe('orderGuardianSlice reducer', () => {
           ]),
         })
       );
+    });
+  });
+
+  describe('toggleChannelDutyThunk 商旅分流开关联动', () => {
+    it('启动值守前应按 MEITUANBIZ 渠道映射存在与否推送分流开关（已配置 → true）', async () => {
+      const { setMeituanBizSplitEnabled: mockSplit, startDutyByChannel } = await import(
+        '../../../src/services/dutyBridge'
+      );
+
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: { channelDuty: {} },
+        channel: {
+          mappings: [
+            { otaChannelCode: 'MEITUAN', status: 'A' },
+            { otaChannelCode: 'MEITUANBIZ', status: 'A' },
+          ],
+        },
+      });
+
+      await toggleChannelDutyThunk('MEITUAN')(dispatch, getState, undefined);
+
+      expect(mockSplit).toHaveBeenCalledWith(true);
+      expect(startDutyByChannel).toHaveBeenCalledWith('MEITUAN');
+      // 顺序刚性：分流开关必须在 startDutyByChannel 之前完成推送（同步失败必须阻断值守启动）
+      expect(vi.mocked(mockSplit).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(startDutyByChannel).mock.invocationCallOrder[0]
+      );
+    });
+
+    it('未配置 MEITUANBIZ 映射时推送分流关闭（false），且失效映射不计入', async () => {
+      const { setMeituanBizSplitEnabled: mockSplit } = await import(
+        '../../../src/services/dutyBridge'
+      );
+
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: { channelDuty: {} },
+        channel: {
+          mappings: [
+            { otaChannelCode: 'MEITUAN', status: 'A' },
+            { otaChannelCode: 'MEITUANBIZ', status: 'I' },
+          ],
+        },
+      });
+
+      await toggleChannelDutyThunk('MEITUAN')(dispatch, getState, undefined);
+
+      expect(mockSplit).toHaveBeenCalledWith(false);
+    });
+
+    it('停止值守时不触碰分流开关（仅在启动分支同步）', async () => {
+      const { setMeituanBizSplitEnabled: mockSplit, stopDutyByChannel } = await import(
+        '../../../src/services/dutyBridge'
+      );
+
+      const dispatch = vi.fn();
+      const getState = vi.fn().mockReturnValue({
+        orderGuardian: { channelDuty: { MEITUAN: { status: 'RUNNING' } } },
+        channel: { mappings: [{ otaChannelCode: 'MEITUANBIZ', status: 'A' }] },
+      });
+
+      await toggleChannelDutyThunk('MEITUAN')(dispatch, getState, undefined);
+
+      expect(mockSplit).not.toHaveBeenCalled();
+      expect(stopDutyByChannel).toHaveBeenCalledWith('MEITUAN');
     });
   });
 });

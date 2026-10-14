@@ -357,6 +357,44 @@ export async function saveChannelMappingsBatch(
   };
 }
 
+/**
+ * 删除 OTA 渠道映射
+ * DELETE /toolkit/channel-mappings/{id}
+ * 接口ID：521126408
+ */
+export async function deleteChannelMapping(mappingId: string): Promise<void> {
+  const id = String(mappingId || '').trim();
+  if (!id) {
+    throw new Error('缺少要删除的渠道映射记录 ID');
+  }
+
+  const response = await requestPlatformApi<{
+    code?: number | string;
+    msg?: string;
+    message?: string;
+    success?: boolean;
+  }>(`${CHANNEL_ENDPOINTS.OTA_CHANNEL_MAPPINGS}/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+
+  // 严格 Fail-Fast 校验：遇到业务失败立即阻断抛错，绝不返回伪造成功
+  // （删除成功时后端可能返回空响应体，response 为 undefined 视为成功）
+  if (
+    response &&
+    (response.success === false ||
+      (response.code !== undefined &&
+        response.code !== null &&
+        String(response.code) !== '0' &&
+        String(response.code) !== '200'))
+  ) {
+    const errorMsg =
+      response.msg ||
+      response.message ||
+      `业务状态异常 (code: ${response.code})`;
+    throw new Error(`删除渠道映射失败: ${errorMsg}`);
+  }
+}
+
 export interface SaveChannelRemarkTemplatePayload {
   remarkTemplate: string;
 }

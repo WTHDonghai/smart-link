@@ -34,6 +34,7 @@ export interface DutyBridgeApi {
     confirmImportEnabled?: boolean;
   }>;
   setConfirmImportEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
+  setMeituanBizSplitEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
   syncTokens(tokens: PlatformAuthTokens): Promise<{ success: boolean; error?: string }>;
   clearTokens(): Promise<{ success: boolean; error?: string }>;
   updateTemplateCache(payload: {

@@ -588,13 +588,12 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
   ],
 };
 
-/** 美团订单协议实现类 (实现 IChannelOrderProtocol) */
+/** 美团订单协议实现类 (实现 IChannelOrderProtocol)；channelCode 支持美团系渠道身份透传 (MEITUAN / MEITUANBIZ) */
 export class MeituanOrderProtocol implements IChannelOrderProtocol {
-  public readonly channelCode = 'MEITUAN';
-
   constructor(
     public readonly context: CleanOrderContext,
-    public readonly raw: Record<string, unknown>
+    public readonly raw: Record<string, unknown>,
+    public readonly channelCode: string = 'MEITUAN'
   ) {}
 
   /** 供模版引擎渲染的上下文变量字典 (100% 对齐 DEFAULT_MEITUAN_PROTOCOL_SCHEMA) */
@@ -745,7 +744,8 @@ export class MeituanOrderProtocol implements IChannelOrderProtocol {
 export function cleanMeituanOrder(
   rawPayload: unknown,
   customSchema?: ChannelProtocolSchema | null,
-  targetOrderId?: string
+  targetOrderId?: string,
+  channelCode?: string
 ): MeituanOrderProtocol {
   if (!rawPayload || typeof rawPayload !== 'object') {
     throw new Error('[MeituanProtocol] 美团订单原始报文为空或非合法对象');
@@ -881,5 +881,9 @@ export function cleanMeituanOrder(
     context['checkInOutDate'] = `${context.checkInDate}至${context.checkOutDate}`;
   }
 
-  return new MeituanOrderProtocol(context, rawRecord);
+  return new MeituanOrderProtocol(
+    context,
+    rawRecord,
+    channelCode && channelCode.trim() ? channelCode.trim().toUpperCase() : 'MEITUAN'
+  );
 }

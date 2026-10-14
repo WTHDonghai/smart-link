@@ -103,15 +103,15 @@ describe('hotelApi - 门店/酒店映射平台接入服务', () => {
       expect(normalized.otaHotelName).toBe('自贡恐龙方特客栈');
     });
 
-    it('正确规范化 MEITUAN_BIZ 渠道代码并映射 otaChannelId 为 meituanbiz', () => {
+    it('正确规范化 MEITUANBIZ 渠道代码并映射 otaChannelId 为 meituanbiz', () => {
       const raw = {
-        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelCode: 'MEITUANBIZ',
         extUnitCode: 'MT-BIZ-001',
         otaHotelName: '美团商旅企业自营酒店',
       };
 
       const normalized = normalizeRemoteHotelMapping(raw);
-      expect(normalized.otaChannelCode).toBe('MEITUAN_BIZ');
+      expect(normalized.otaChannelCode).toBe('MEITUANBIZ');
       expect(normalized.otaChannelId).toBe('meituanbiz');
     });
 

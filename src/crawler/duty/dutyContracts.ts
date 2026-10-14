@@ -143,10 +143,12 @@ export interface ChannelDutyRunner {
   stop(): Promise<void>;
   isRunning(): boolean;
 
-  /** 页面操作：刷新订单列表并获取当前待处理订单概要（orderStatus 指定目标状态 Tab，缺省新订；不支持状态区分的渠道忽略之） */
+  /** 页面操作：刷新订单列表并获取当前待处理订单概要（orderStatus 指定目标状态 Tab，缺省新订；不支持状态区分的渠道忽略之）
+   * channelId 为任务目标渠道身份：别名渠道（如 MEITUANBIZ 复用美团 Runner）时用于选用对应渠道的过滤规则，缺省为 Runner 主渠道 */
   collectUnhandledOrders(
     orderStatus?: DutyOrderStatus,
-    audit?: DutyTaskLogSink
+    audit?: DutyTaskLogSink,
+    channelId?: string
   ): Promise<DutyUnhandledOrderSummary[]>;
 
   /** 页面操作：在当前渠道后台点击打开订单详情并抓取原始数据（回写明文客人姓名） */
@@ -293,7 +295,8 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
 
   public abstract collectUnhandledOrders(
     orderStatus?: DutyOrderStatus,
-    audit?: DutyTaskLogSink
+    audit?: DutyTaskLogSink,
+    channelId?: string
   ): Promise<DutyUnhandledOrderSummary[]>;
   public abstract inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
 

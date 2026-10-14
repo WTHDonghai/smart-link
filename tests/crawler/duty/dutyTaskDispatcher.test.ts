@@ -40,6 +40,7 @@ class MockDutyRunner extends BaseChannelDutyRunner {
   };
 
   public collectCalls = 0;
+  public collectChannelIds: Array<string | undefined> = [];
   public collectAudits: Array<DutyTaskLogSink | undefined> = [];
   public inspectCalls: string[] = [];
   public confirmImportCalls: Array<{ confirmNo: string; otaOrderId: string }> = [];
@@ -56,9 +57,11 @@ class MockDutyRunner extends BaseChannelDutyRunner {
   }
   public async collectUnhandledOrders(
     _orderStatus?: unknown,
-    audit?: DutyTaskLogSink
+    audit?: DutyTaskLogSink,
+    channelId?: string
   ): Promise<DutyUnhandledOrderSummary[]> {
     this.collectCalls++;
+    this.collectChannelIds.push(channelId);
     this.collectAudits.push(audit);
     return this.unhandledOrdersResult;
   }
@@ -152,6 +155,58 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
       expect(result.status).toBe('FAILED');
       expect(result.errorCode).toBe('COLLECT_FAILED');
       expect(result.errorMessage).toContain('页面刷新超时');
+    });
+  });
+
+  describe('OTA_COLLECT_ORDER / OTA_IMPORT_ORDER 渠道身份透传 (MEITUANBIZ 别名路由)', () => {
+    it('should thread MEITUANBIZ task channel into collectUnhandledOrders and result otaChannelCode', async () => {
+      const taskPayload = { otaChannelCode: 'MEITUANBIZ' };
+      const task: DutyClaimedTask = {
+        id: 'task-coll-biz',
+        businessId: 'biz-coll-biz',
+        businessType: 'ORDER',
+        msgType: 'OTA_COLLECT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+
+      expect(result.status).toBe('SUCCEEDED');
+      // 任务渠道身份必须透传至 Runner 采集调用（用于选用商旅过滤规则）
+      expect(runner.collectChannelIds).toEqual(['MEITUANBIZ']);
+      // 采集回执必须携带任务真实渠道而非 Runner 主渠道
+      expect(result.result?.otaChannelCode).toBe('MEITUANBIZ');
+    });
+
+    it('should tag imported order with otaChannel MEITUANBIZ when task channel is meituanbiz', async () => {
+      const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
+        success: true,
+        pmsOrderId: 'PMS-BIZ-100',
+      });
+
+      const taskPayload = { channel: 'meituanbiz', otaOrderId: 'OTA-BIZ-77', unitId: 'HOTEL-U1' };
+      const task: DutyClaimedTask = {
+        id: 'task-imp-biz',
+        businessId: 'OTA-BIZ-77',
+        businessType: 'ORDER',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-1',
+        leaseToken: 'lt-1',
+        data: Buffer.from(JSON.stringify(taskPayload)).toString('base64'),
+      };
+
+      const result = await dispatchDutyTask(task, runner);
+
+      expect(result.status).toBe('SUCCEEDED');
+      expect(importSpy).toHaveBeenCalledTimes(1);
+      // 协议清洗必须以任务渠道身份透传：商旅单 otaChannel 落 MEITUANBIZ，而非 Runner 主渠道 MEITUAN
+      const importPayload = importSpy.mock.calls[0][0] as {
+        orders: Array<{ otaChannel: string; otaOrderId: string }>;
+      };
+      expect(importPayload.orders[0].otaChannel).toBe('MEITUANBIZ');
+      expect(importPayload.orders[0].otaOrderId).toBe('ORD-1');
     });
   });
 

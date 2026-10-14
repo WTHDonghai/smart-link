@@ -7,6 +7,7 @@ import {
 import {
   MeituanDutyErrorCode,
 } from '@/src/crawler/duty/channels/meituan/meituanDutyContracts';
+import { setMeituanBizSplitEnabled } from '@/src/crawler/duty/channels/meituan/meituanOrderFilter';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import { logger } from '@/src/services/logger';
 import type { DutyTaskLogSink } from '@/src/crawler/duty/dutyTaskLogger';
@@ -29,6 +30,8 @@ vi.mock('@/src/services/logger', () => ({
 describe('meituanListCollector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 商旅分流开关默认关闭，用例内按需开启（用例间隔离）
+    setMeituanBizSplitEnabled(false);
   });
 
   describe('waitForMeituanListResponse', () => {
@@ -182,6 +185,110 @@ describe('meituanListCollector', () => {
       expect(res1).toEqual(res2);
     });
 
+    it('并发不同渠道身份的采集不得互相合并结果（MEITUAN 与 MEITUANBIZ 各自独立过滤）', async () => {
+      setMeituanBizSplitEnabled(true);
+      const collector = new MeituanListCollector();
+      const mockPage = {
+        url: () => 'https://eb.meituan.com/dealorder',
+      } as unknown as Page;
+
+      const mockPayload = {
+        code: 0,
+        data: {
+          orders: [
+            {
+              orderId: 'MT-REG-1',
+              status: 'NEW_ORDER',
+              orderDisplayLabel: '新订',
+              roomName: '大床房',
+              checkInDate: '2026-10-01',
+              checkOutDate: '2026-10-02',
+              totalAmount: 300,
+              contactName: '张三',
+            },
+            {
+              orderId: 'MT-TMC-2',
+              status: 'NEW_ORDER',
+              orderDisplayLabel: '新订',
+              roomName: '大床房',
+              checkInDate: '2026-10-01',
+              checkOutDate: '2026-10-02',
+              totalAmount: 500,
+              contactName: '李四',
+              reversePriceTmcOrderTag: 'TMC',
+            },
+          ],
+        },
+      };
+
+      const mockResponse = {
+        text: async () => JSON.stringify(mockPayload),
+      } as unknown as Response;
+
+      let callCount = 0;
+      const runWithMutex = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+      const refreshFn = vi.fn().mockImplementation(async () => {
+        callCount++;
+        return mockResponse;
+      });
+
+      const [regularOrders, bizOrders] = await Promise.all([
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUAN'),
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
+      ]);
+
+      // 不同渠道身份的采集各自独立执行列表刷新，绝不合并结果
+      expect(callCount).toBe(2);
+      expect(regularOrders.map((o) => o.orderId)).toEqual(['MT-REG-1']);
+      expect(bizOrders.map((o) => o.orderId)).toEqual(['MT-TMC-2']);
+    });
+
+    it('同一渠道身份的并发采集仍应在途合并（复用一次列表刷新）', async () => {
+      const collector = new MeituanListCollector();
+      const mockPage = {
+        url: () => 'https://eb.meituan.com/dealorder',
+      } as unknown as Page;
+
+      const mockPayload = {
+        code: 0,
+        data: {
+          orders: [
+            {
+              orderId: 'MT-TMC-9',
+              status: 'NEW_ORDER',
+              orderDisplayLabel: '新订',
+              roomName: '大床房',
+              checkInDate: '2026-10-01',
+              checkOutDate: '2026-10-02',
+              totalAmount: 500,
+              contactName: '王五',
+              reversePriceTmcOrderTag: 'TMC',
+            },
+          ],
+        },
+      };
+
+      const mockResponse = {
+        text: async () => JSON.stringify(mockPayload),
+      } as unknown as Response;
+
+      let callCount = 0;
+      const runWithMutex = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+      const refreshFn = vi.fn().mockImplementation(async () => {
+        callCount++;
+        return mockResponse;
+      });
+
+      const [res1, res2] = await Promise.all([
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
+      ]);
+
+      expect(callCount).toBe(1);
+      expect(res1.map((o) => o.orderId)).toEqual(['MT-TMC-9']);
+      expect(res2).toEqual(res1);
+    });
+
     it('完成后应清理在途采集状态，允许后续请求再次刷新', async () => {
       const collector = new MeituanListCollector();
       const mockPage = { url: () => 'https://eb.meituan.com/dealorder' } as unknown as Page;
@@ -231,6 +338,7 @@ describe('meituanListCollector', () => {
     });
 
     it('应逐笔过滤改签、商旅与缺主键订单并输出结构化 WARN 与分类 HUD', async () => {
+      setMeituanBizSplitEnabled(true);
       const collector = new MeituanListCollector();
       const mockPage = { url: () => 'https://eb.meituan.com/dealorder' } as unknown as Page;
       const mockPayload = {

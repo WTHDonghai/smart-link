@@ -34,7 +34,7 @@ export const KNOWN_CHANNEL_METAS: Record<string, ChannelMeta> = {
     bgColor: 'bg-[#fff1e0]',
     textColor: 'text-[#ff7d00]',
   },
-  MEITUAN_BIZ: {
+  MEITUANBIZ: {
     name: '美团商旅',
     short: '商',
     bgColor: 'bg-[#eef2ff]',
@@ -80,7 +80,7 @@ export const KNOWN_CHANNEL_METAS: Record<string, ChannelMeta> = {
 
 // 保持小写兼容器，确保向后兼容
 KNOWN_CHANNEL_METAS.meituan = KNOWN_CHANNEL_METAS.MEITUAN;
-KNOWN_CHANNEL_METAS.meituanbiz = KNOWN_CHANNEL_METAS.MEITUAN_BIZ;
+KNOWN_CHANNEL_METAS.meituanbiz = KNOWN_CHANNEL_METAS.MEITUANBIZ;
 KNOWN_CHANNEL_METAS.douyin = KNOWN_CHANNEL_METAS.DOUYIN;
 KNOWN_CHANNEL_METAS.ctrip = KNOWN_CHANNEL_METAS.CTRIP;
 KNOWN_CHANNEL_METAS.tongcheng = KNOWN_CHANNEL_METAS.TONGCHENG;
@@ -95,7 +95,7 @@ KNOWN_CHANNEL_METAS['6002760'] = KNOWN_CHANNEL_METAS.CTRIP;
 
 /**
  * 统一精准解析渠道图徽元数据：
- * 优先匹配已配置 channels 列表，次级根据渠道代码与特征智能推断，彻底杜绝 MEITUAN 与 MEITUAN_BIZ 降级为 OTA
+ * 优先匹配已配置 channels 列表，次级根据渠道代码与特征智能推断，彻底杜绝 MEITUAN 与 MEITUANBIZ 降级为 OTA
  */
 export function resolveChannelMeta(
   source: ChannelIdentitySource | string | null | undefined,

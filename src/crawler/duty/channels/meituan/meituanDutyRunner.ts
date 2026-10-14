@@ -136,17 +136,20 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
 
   /**
    * 页面操作：刷新美团待处理列表并返回待处理订单概要（权威网络响应为唯一源，带防抖补偿与请求合并）
+   * channelId 为任务目标渠道身份（MEITUANBIZ 商旅任务复用本 Runner 时选用商旅过滤规则）
    */
   public async collectUnhandledOrders(
     _orderStatus?: DutyOrderStatus,
-    audit?: DutyTaskLogSink
+    audit?: DutyTaskLogSink,
+    channelId?: string
   ): Promise<DutyUnhandledOrderSummary[]> {
     const page = this.getActivePage('采集待处理订单');
     return this.listCollector.collectUnhandledOrders(
       page,
       (fn) => this.runWithMutex(fn),
       (p) => this.refreshOrderList(p),
-      audit
+      audit,
+      channelId
     );
   }
 

@@ -121,7 +121,7 @@ export function resolveChannelDebugPort(channelCode: string): number {
   const code = (channelCode || 'MEITUAN').trim().toUpperCase();
   const PORT_MAP: Record<string, number> = {
     MEITUAN: 9222,
-    MEITUAN_BIZ: 9223,
+    MEITUANBIZ: 9223,
     DOUYIN: 9224,
     CTRIP: 9225,
   };
@@ -164,7 +164,7 @@ async function tryConnectExistingBrowser(
       const channelPatterns: Record<string, RegExp> = {
         DOUYIN: /douyin\.com/i,
         MEITUAN: /meituan\.com/i,
-        MEITUAN_BIZ: /meituan\.com/i,
+        MEITUANBIZ: /meituan\.com/i,
         CTRIP: /ctrip\.com/i,
       };
       const pattern = channelPatterns[code];

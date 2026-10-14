@@ -6,6 +6,7 @@ import type {
   PlatformAuthTokens,
 } from '../types';
 import { loadTokensFromStorage } from './platformAuth';
+import { logger } from './logger';
 import type { DutyBridgeApi } from '../types';
 
 function getDutyApi(): DutyBridgeApi {
@@ -76,6 +77,43 @@ export async function setConfirmImportEnabled(enabled: boolean): Promise<void> {
   if (!result.success) {
     throw new Error(result.error || '切换确认号回填开关失败');
   }
+}
+
+/**
+ * 推送商旅分流开关至主进程（用户是否配置 MEITUANBIZ 渠道映射决定）：
+ * 关闭时 MEITUAN 值守不做商旅分流过滤，开启时双侧互斥分流
+ */
+export async function setMeituanBizSplitEnabled(enabled: boolean): Promise<void> {
+  const result = await getDutyApi().setMeituanBizSplitEnabled(enabled);
+  if (!result.success) {
+    throw new Error(result.error || '切换商旅分流开关失败');
+  }
+}
+
+/**
+ * 映射数据变更时向主进程同步商旅分流开关（渐进增强性 best-effort IPC 通知）。
+ * 若宿主不支持（非 Electron 环境或旧版 Preload），静默跳过属于预期行为，
+ * 不阻断映射拉取/保存主流程——启动值守时的强制同步 (setMeituanBizSplitEnabled)
+ * 仍是权威路径，本函数仅缩短映射变更后的开关滞后窗口。
+ * 本函数不适用 AGENTS.md §5 Fail-Fast 准则，属渐进增强型设计（对齐 updateTemplateCache 先例）。
+ */
+export function syncMeituanBizSplitBestEffort(enabled: boolean): void {
+  const host = window.host;
+  if (typeof host?.duty?.setMeituanBizSplitEnabled !== 'function') {
+    return;
+  }
+  void host.duty
+    .setMeituanBizSplitEnabled(enabled)
+    .then((result) => {
+      if (!result.success) {
+        logger.warn(`[商旅分流] 映射变更同步开关失败: ${result.error || '未知错误'}`);
+      }
+    })
+    .catch((err: unknown) => {
+      logger.warn(
+        `[商旅分流] 映射变更同步开关异常: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
 }
 
 export async function queryDutyStatus(since?: number): Promise<{

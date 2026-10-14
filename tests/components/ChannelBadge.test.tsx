@@ -17,7 +17,7 @@ describe('ChannelBadge 渠道图徽通用组件', () => {
 
   it('正确渲染美团商旅渠道图徽 [商] 与科技蓝样式，绝非 OTA', () => {
     const html = renderToStaticMarkup(
-      <ChannelBadge channel={{ otaChannelId: 'meituan_biz' }} size="sm" />
+      <ChannelBadge channel={{ otaChannelId: 'meituanbiz' }} size="sm" />
     );
 
     expect(html).toContain('>商</div>');

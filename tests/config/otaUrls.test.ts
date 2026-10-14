@@ -49,25 +49,25 @@ describe('otaUrls config & single source of truth', () => {
       process.env[APP_ENV_KEYS.otaCatalogMeituanBiz] = 'http://127.0.0.1:18080/mock-biz';
 
       expect(getOtaChannelUrl('meituan')).toBe('http://127.0.0.1:18080/mock-meituan');
-      expect(getOtaChannelUrl('MEITUAN_BIZ')).toBe('http://127.0.0.1:18080/mock-biz');
+      expect(getOtaChannelUrl('MEITUANBIZ')).toBe('http://127.0.0.1:18080/mock-biz');
       expect(getOtaChannelUrl('MEITUAN-BIZ')).toBe('http://127.0.0.1:18080/mock-biz');
       expect(getOtaChannelUrl('meituanbiz')).toBe('http://127.0.0.1:18080/mock-biz');
     });
 
-    it('supports MEITUAN_BIZ falling back to MEITUAN URL if biz specific is empty', () => {
+    it('supports MEITUANBIZ falling back to MEITUAN URL if biz specific is empty', () => {
       process.env[APP_ENV_KEYS.otaCatalogMeituan] =
         'http://127.0.0.1:18080/ebooking/merchant/product/batch-price';
       delete process.env[APP_ENV_KEYS.otaCatalogMeituanBiz];
 
-      expect(getOtaChannelUrl('MEITUAN_BIZ')).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
+      expect(getOtaChannelUrl('MEITUANBIZ')).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
       expect(getOtaChannelUrl('meituanbiz')).toBe('http://127.0.0.1:18080/ebooking/merchant/product/batch-price');
     });
 
-    it('throws explicit error when both MEITUAN_BIZ and MEITUAN catalog URLs are missing', () => {
+    it('throws explicit error when both MEITUANBIZ and MEITUAN catalog URLs are missing', () => {
       delete process.env[APP_ENV_KEYS.otaCatalogMeituanBiz];
       delete process.env[APP_ENV_KEYS.otaCatalogMeituan];
 
-      expect(() => getOtaChannelUrl('MEITUAN_BIZ')).toThrow(
+      expect(() => getOtaChannelUrl('MEITUANBIZ')).toThrow(
         `未配置美团商旅或美团的产品采集地址，请在环境变量中配置 ${APP_ENV_KEYS.otaCatalogMeituanBiz} 或 ${APP_ENV_KEYS.otaCatalogMeituan}`
       );
     });
@@ -123,11 +123,11 @@ describe('otaUrls config & single source of truth', () => {
       );
     });
 
-    it('supports MEITUAN_BIZ sharing MEITUAN_ORDER_URL', () => {
+    it('supports MEITUANBIZ sharing MEITUAN_ORDER_URL', () => {
       process.env[APP_ENV_KEYS.otaOrderMeituan] =
         'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled';
 
-      expect(getOtaOrderUrl('MEITUAN_BIZ')).toBe(
+      expect(getOtaOrderUrl('MEITUANBIZ')).toBe(
         'http://127.0.0.1:18080/ebooking/order-gx/index.html?scenario=empty#/unhandled'
       );
       expect(getOtaOrderUrl('meituanbiz')).toBe(
@@ -135,11 +135,11 @@ describe('otaUrls config & single source of truth', () => {
       );
     });
 
-    it('throws explicit error when MEITUAN_BIZ order URL is not set', () => {
+    it('throws explicit error when MEITUANBIZ order URL is not set', () => {
       delete process.env[APP_ENV_KEYS.otaOrderMeituan];
 
-      expect(() => getOtaOrderUrl('MEITUAN_BIZ')).toThrow(
-        `未配置渠道「MEITUAN_BIZ」的订单值守地址，请在环境变量中配置 ${APP_ENV_KEYS.otaOrderMeituan}`
+      expect(() => getOtaOrderUrl('MEITUANBIZ')).toThrow(
+        `未配置渠道「MEITUANBIZ」的订单值守地址，请在环境变量中配置 ${APP_ENV_KEYS.otaOrderMeituan}`
       );
     });
   });

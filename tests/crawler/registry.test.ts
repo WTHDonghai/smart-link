@@ -3,15 +3,15 @@ import { hotelCollectorRegistry, productCollectorRegistry } from '../../src/craw
 import type { ChannelHotelCollector, ChannelProductCollector } from '../../src/crawler/collectors/base';
 
 describe('hotelCollectorRegistry', () => {
-  it('registers MEITUAN and MEITUAN_BIZ by default', () => {
+  it('registers MEITUAN and MEITUANBIZ by default', () => {
     const meituan = hotelCollectorRegistry.get('MEITUAN');
     expect(meituan).not.toBeNull();
     expect(meituan?.channelCode).toBe('MEITUAN');
     expect(meituan?.defaultTargetUrl).toContain('me.meituan.com');
 
-    const meituanbiz = hotelCollectorRegistry.get('MEITUAN_BIZ');
+    const meituanbiz = hotelCollectorRegistry.get('MEITUANBIZ');
     expect(meituanbiz).not.toBeNull();
-    expect(meituanbiz?.channelCode).toBe('MEITUAN_BIZ');
+    expect(meituanbiz?.channelCode).toBe('MEITUANBIZ');
   });
 
   it('is case-insensitive when querying channels', () => {
@@ -44,20 +44,20 @@ describe('hotelCollectorRegistry', () => {
   it('returns supported channel codes list dynamically', () => {
     const codes = hotelCollectorRegistry.getSupportedChannelCodes();
     expect(codes).toContain('MEITUAN');
-    expect(codes).toContain('MEITUAN_BIZ');
+    expect(codes).toContain('MEITUANBIZ');
     expect(codes).toContain('MOCK_CHANNEL');
   });
 });
 
 describe('productCollectorRegistry', () => {
-  it('registers MEITUAN, MEITUAN_BIZ, and DOUYIN by default', () => {
+  it('registers MEITUAN, MEITUANBIZ, and DOUYIN by default', () => {
     const meituan = productCollectorRegistry.get('MEITUAN');
     expect(meituan).not.toBeNull();
     expect(meituan?.channelCode).toBe('MEITUAN');
 
-    const meituanbiz = productCollectorRegistry.get('MEITUAN_BIZ');
+    const meituanbiz = productCollectorRegistry.get('MEITUANBIZ');
     expect(meituanbiz).not.toBeNull();
-    expect(meituanbiz?.channelCode).toBe('MEITUAN_BIZ');
+    expect(meituanbiz?.channelCode).toBe('MEITUANBIZ');
 
     const douyin = productCollectorRegistry.get('DOUYIN');
     expect(douyin).not.toBeNull();

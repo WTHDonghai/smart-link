@@ -4,6 +4,7 @@
  */
 
 import type { ChannelProtocolSchema, IChannelOrderProtocol } from '../../types/template';
+import { normalizeOtaChannelCode } from '@/src/config/otaUrls';
 import {
   DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
   MEITUAN_RAW_SAMPLE_ORDER,
@@ -56,10 +57,12 @@ export function cleanChannelOrder(
   customSchema?: ChannelProtocolSchema | null,
   targetOrderId?: string
 ): IChannelOrderProtocol {
-  const normalized = String(channelCode || '').trim().toUpperCase();
+  // 复用全局渠道码归一化：MTBIZ / MEITUAN_BUSINESS 等全部别名变体统一收敛为规范码，
+  // 杜绝本路由器自行维护别名级联导致覆盖不全（如 MEITUANBIZ 能识别而 MTBIZ 漏过）
+  const normalized = normalizeOtaChannelCode(channelCode);
 
-  if (normalized === 'MEITUAN' || normalized === 'MEITUANBIZ' || normalized.includes('MEITUAN')) {
-    return cleanMeituanOrder(rawPayload, customSchema, targetOrderId);
+  if (normalized.includes('MEITUAN')) {
+    return cleanMeituanOrder(rawPayload, customSchema, targetOrderId, normalized);
   }
 
   if (normalized === 'DOUYIN' || normalized.includes('DOUYIN')) {

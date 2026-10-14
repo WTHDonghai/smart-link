@@ -38,6 +38,7 @@ describe('application entry host guard', () => {
         stopAllDuty: () => Promise.reject(new Error('not called')),
         getStatus: () => Promise.reject(new Error('not called')),
         setConfirmImportEnabled: () => Promise.reject(new Error('not called')),
+        setMeituanBizSplitEnabled: () => Promise.reject(new Error('not called')),
         syncTokens: () => Promise.reject(new Error('not called')),
         clearTokens: () => Promise.reject(new Error('not called')),
         updateTemplateCache: () => Promise.reject(new Error('not called')),

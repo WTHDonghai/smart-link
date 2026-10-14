@@ -5,6 +5,7 @@ import {
   saveChannelMappingsBatch,
   saveChannelRemarkTemplate,
   fetchChannelRemarkTemplate,
+  deleteChannelMapping,
   extractDataItems,
   normalizeCulturalTourismChannel,
   normalizeOTAChannelMappingRecord,
@@ -747,6 +748,98 @@ describe('channelApi - 文旅渠道与 OTA 渠道映射服务层', () => {
 
       await expect(fetchChannelRemarkTemplate('MEITUAN')).rejects.toThrow(
         '获取渠道备注模板失败: 远端服务异常: 数据库连接丢失'
+      );
+    });
+  });
+
+  describe('deleteChannelMapping (DELETE /toolkit/channel-mappings/{id})', () => {
+    it('成功发起 DELETE /toolkit/channel-mappings/{id} 请求', async () => {
+      let capturedUrl = '';
+      let capturedMethod = '';
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        capturedUrl = url;
+        capturedMethod = init?.method || 'GET';
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ code: 0, msg: '删除成功' }),
+        } as unknown as Response;
+      });
+
+      await deleteChannelMapping('map-001');
+
+      expect(capturedUrl).toBe(`https://pms.example.com${CHANNEL_ENDPOINTS.OTA_CHANNEL_MAPPINGS}/map-001`);
+      expect(capturedMethod).toBe('DELETE');
+    });
+
+    it('删除成功但响应体为空时视为成功（undefined 信封不误判为业务失败）', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          text: async () => '',
+        } as unknown as Response;
+      });
+
+      await expect(deleteChannelMapping('map-001')).resolves.toBeUndefined();
+    });
+
+    it('当后端返回业务失败信封（code: 500, success: false）时 Fail-Fast 抛错，绝不伪造成功', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            code: 500,
+            success: false,
+            msg: '映射记录不存在',
+          }),
+        } as unknown as Response;
+      });
+
+      await expect(deleteChannelMapping('map-001')).rejects.toThrow(
+        '删除渠道映射失败: 映射记录不存在'
+      );
+    });
+
+    it('当后端返回字符串业务失败状态码（如 code: "500"）时 Fail-Fast 抛错，杜绝字符串 code 逃逸', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ code: '500', msg: '服务内部异常' }),
+        } as unknown as Response;
+      });
+
+      await expect(deleteChannelMapping('map-001')).rejects.toThrow(
+        '删除渠道映射失败: 服务内部异常'
+      );
+    });
+
+    it('当缺少映射记录 ID 时 Fail-Fast 阻断，不发起网络调用', async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      await expect(deleteChannelMapping('   ')).rejects.toThrow('缺少要删除的渠道映射记录 ID');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('当远端返回 HTTP 500 时 Fail-Fast 抛出平台接口异常', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 500,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ code: 500, msg: '服务器内部错误' }),
+        } as unknown as Response;
+      });
+
+      await expect(deleteChannelMapping('map-001')).rejects.toThrow(
+        '平台接口调用失败 (500): 服务器内部错误'
       );
     });
   });

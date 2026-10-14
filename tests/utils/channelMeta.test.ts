@@ -18,7 +18,7 @@ describe('resolveChannelMeta 统一渠道图徽与元数据解析纯函数', () 
     {
       id: 'meituanbiz',
       name: '美团商旅',
-      code: 'MEITUAN_BIZ',
+      code: 'MEITUANBIZ',
       short: '商',
       bgColor: 'bg-[#eef2ff]',
       textColor: 'text-[#004ac6]',
@@ -74,14 +74,14 @@ describe('resolveChannelMeta 统一渠道图徽与元数据解析纯函数', () 
     const fromStringCode = resolveChannelMeta('MEITUAN', mockConfiguredChannels);
     expect(fromStringCode.short).toBe('美');
 
-    const fromStringBiz = resolveChannelMeta('MEITUAN_BIZ', mockConfiguredChannels);
+    const fromStringBiz = resolveChannelMeta('MEITUANBIZ', mockConfiguredChannels);
     expect(fromStringBiz.short).toBe('商');
   });
 
   it('针对带有破折号/下划线的 ID/CODE 进行归一化模糊匹配', () => {
-    // meituan_biz 匹配 meituanbiz
+    // meituanbiz 匹配 meituanbiz
     const matchedWithUnderscore = resolveChannelMeta(
-      { otaChannelId: 'meituan_biz' },
+      { otaChannelId: 'meituanbiz' },
       mockConfiguredChannels
     );
     expect(matchedWithUnderscore.short).toBe('商');
@@ -103,7 +103,7 @@ describe('resolveChannelMeta 统一渠道图徽与元数据解析纯函数', () 
     expect(mt.bgColor).toBe('bg-[#fff1e0]');
     expect(mt.textColor).toBe('text-[#ff7d00]');
 
-    const mtBiz = resolveChannelMeta({ otaChannelCode: 'MEITUAN_BIZ' });
+    const mtBiz = resolveChannelMeta({ otaChannelCode: 'MEITUANBIZ' });
     expect(mtBiz.short).toBe('商');
     expect(mtBiz.name).toBe('美团商旅');
     expect(mtBiz.bgColor).toBe('bg-[#eef2ff]');
