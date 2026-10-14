@@ -62,10 +62,27 @@ export const ChannelDutyPanel: React.FC = () => {
   // 纯函数动态计算当前用户已映射的渠道配置列表
   const mappedChannels = useMemo(() => deriveMappedDutyChannels(mappings), [mappings]);
 
-  // 统计已映射渠道中处于运行态的数量
+  // 呈现层聚合：商旅映射存在时，MEITUANBIZ 作为美团值守的派生渠道折叠进美团行（无独立开关）；
+  // 仅当商旅映射存在而美团映射缺失时保留商旅行（其开关会被引擎拒绝并给出指引文案）
+  const displayChannels = useMemo(() => {
+    const hasBiz = mappedChannels.some((c) => c.code === 'MEITUANBIZ');
+    const hasMeituan = mappedChannels.some((c) => c.code === 'MEITUAN');
+    if (!hasBiz || !hasMeituan) {
+      return mappedChannels;
+    }
+    return mappedChannels
+      .filter((c) => c.code !== 'MEITUANBIZ')
+      .map((c) =>
+        c.code === 'MEITUAN'
+          ? { ...c, desc: `${c.desc}（已映射商旅，值守含商旅分流）` }
+          : c
+      );
+  }, [mappedChannels]);
+
+  // 统计已映射渠道中处于运行态的数量（按呈现行统计，派生渠道不单独计数）
   const activeCount = useMemo(
-    () => mappedChannels.filter((c) => channelDuty[c.code]?.status === 'RUNNING').length,
-    [mappedChannels, channelDuty]
+    () => displayChannels.filter((c) => channelDuty[c.code]?.status === 'RUNNING').length,
+    [displayChannels, channelDuty]
   );
 
   const coordinatorBadge = formatCoordinatorBadge(coordinatorStatus);
@@ -108,7 +125,7 @@ export const ChannelDutyPanel: React.FC = () => {
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-[#0b1c30]">渠道自动化值守</h3>
               <span className="text-[11px] text-[#737686] bg-[#f8f9ff] px-2 py-0.5 border border-[#e2e8f0] rounded-full font-mono">
-                {activeCount} / {mappedChannels.length} 运行中
+                {activeCount} / {displayChannels.length} 运行中
               </span>
             </div>
             <p className="text-[11px] text-[#737686]">按需多渠道 CDP 协同与中台任务长轮询调度</p>
@@ -204,7 +221,7 @@ export const ChannelDutyPanel: React.FC = () => {
       {!collapsed && (
         <div className="mt-2.5">
           {/* 状态 1: 正在加载映射数据且尚未有本地缓存 */}
-          {isMappingsLoading && mappedChannels.length === 0 && (
+          {isMappingsLoading && displayChannels.length === 0 && (
             <div className="flex items-center justify-center p-6 border border-[#e2e8f0] rounded-lg bg-[#f8f9ff] text-[#737686] text-xs gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-[#004ac6]" />
               <span>正在从文旅中台同步已映射渠道...</span>
@@ -212,7 +229,7 @@ export const ChannelDutyPanel: React.FC = () => {
           )}
 
           {/* 状态 2: 映射数据加载失败且无已映射渠道 */}
-          {!isMappingsLoading && mappingsError && mappedChannels.length === 0 && (
+          {!isMappingsLoading && mappingsError && displayChannels.length === 0 && (
             <div className="p-4 border border-rose-200 rounded-lg bg-rose-50/60 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-rose-700 text-xs">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -230,7 +247,7 @@ export const ChannelDutyPanel: React.FC = () => {
           )}
 
           {/* 状态 3: 接口成功返回但未映射任何渠道 (空状态) */}
-          {!isMappingsLoading && !mappingsError && mappedChannels.length === 0 && (
+          {!isMappingsLoading && !mappingsError && displayChannels.length === 0 && (
             <div className="border border-[#e2e8f0] rounded-lg bg-white p-6">
               <EmptyState
                 title="暂未映射任何 OTA 渠道"
@@ -242,9 +259,9 @@ export const ChannelDutyPanel: React.FC = () => {
           )}
 
           {/* 状态 4: 渲染真实已映射渠道列表 */}
-          {mappedChannels.length > 0 && (
+          {displayChannels.length > 0 && (
             <div className="divide-y divide-[#edf2f9] border border-[#e2e8f0] rounded-lg overflow-hidden bg-white">
-              {mappedChannels.map(({ code, name, desc }) => {
+              {displayChannels.map(({ code, name, desc }) => {
                 const info = channelDuty[code] || { channelCode: code, status: 'STOPPED' };
                 const isRunning = info.status === 'RUNNING';
                 const isStarting = info.status === 'STARTING';

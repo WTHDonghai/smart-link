@@ -11,7 +11,7 @@ import type {
  * 渠道酒店采集器抽象接口 (Channel Hotel Collector Contract)
  */
 export interface ChannelHotelCollector {
-  /** 渠道业务唯一编码（全大写），如 'MEITUAN', 'MEITUAN_BIZ', 'DOUYIN', 'CTRIP' */
+  /** 渠道业务唯一编码（全大写），如 'MEITUAN', 'MEITUANBIZ', 'DOUYIN', 'CTRIP' */
   readonly channelCode: string;
 
   /** 渠道默认的门店/调价目标 URL */
@@ -46,7 +46,7 @@ export interface ProductCollectorOptions {
  * 渠道产品采集器抽象接口 (Channel Product Collector Contract)
  */
 export interface ChannelProductCollector {
-  /** 渠道业务唯一编码（全大写），如 'MEITUAN', 'MEITUAN_BIZ', 'DOUYIN' */
+  /** 渠道业务唯一编码（全大写），如 'MEITUAN', 'MEITUANBIZ', 'DOUYIN' */
   readonly channelCode: string;
 
   /**

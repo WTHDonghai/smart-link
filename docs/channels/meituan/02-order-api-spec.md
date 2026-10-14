@@ -102,7 +102,7 @@
 | :--- | :--- |
 | `ALLOW` | 允许进入自动化流水线处理（由下游消费方根据 `cancelOrder` 等状态分发执行） |
 | `MANUAL_ATTENTION` | 关键分类字段契约异常，或识别为改签/改期订单，转后台人工核对 |
-| `CHANNEL_MISMATCH` | 渠道分流拦截：商旅分流开启时，MEITUAN 工位跳过 TMC 订单 / MEITUAN_BIZ 工位跳过非 TMC 订单（见下方商旅分流开关） |
+| `CHANNEL_MISMATCH` | 渠道分流拦截：商旅分流开启时，MEITUAN 工位跳过 TMC 订单 / MEITUANBIZ 工位跳过非 TMC 订单（见下方商旅分流开关） |
 
 - 业务过滤跳过的记录输出 `MEITUAN_ORDER_FILTER_SKIPPED` / `WARN`，包含 `orderNo`、`meta.action`、`meta.orderType`、`meta.reason` 与 `meta.evidence`。
 - `evidence` 保留人工在美团后台核对必需的客人姓名 (`guestName`)、房型 (`roomName`) 及命中规则的特征实际值，拒绝过度技术脱敏，为前台运营排查提供清晰可读的事实上下文。
@@ -111,7 +111,7 @@
 
 ##### 过滤规则配置与表达式 DSL
 
-过滤规则以 **单文件多渠道 JSON** 声明：顶层 `channels` 映射以规范渠道码（`MEITUAN` / `MEITUAN_BIZ`）为键，每个渠道节持有独立 `rules` 数组。运行时按数组顺序求值，首条命中即止并返回其 `action`；`enabled: false` 的规则跳过；全部未命中则 `ALLOW`。规则字段：
+过滤规则以 **单文件多渠道 JSON** 声明：顶层 `channels` 映射以规范渠道码（`MEITUAN` / `MEITUANBIZ`）为键，每个渠道节持有独立 `rules` 数组。运行时按数组顺序求值，首条命中即止并返回其 `action`；`enabled: false` 的规则跳过；全部未命中则 `ALLOW`。规则字段：
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -146,10 +146,10 @@
 
 ##### 商旅分流开关（按映射存在性决定过滤行为）
 
-过滤行为以**用户是否配置了有效 `MEITUAN_BIZ` 渠道映射**为唯一事实源（运行时开关，非规则文件内容）：
+过滤行为以**用户是否配置了有效 `MEITUANBIZ` 渠道映射**为唯一事实源（运行时开关，非规则文件内容）：
 
-- **未配置商旅映射**：MEITUAN 渠道在配置解析时**剥离全部 `orderType === 'TMC'` 规则**（含运营自定义 TMC 规则），TMC 订单照常 ALLOW 走散客渠道，杜绝无人承接的丢单；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUAN_BIZ 渠道不受开关影响（未配置映射时其值守无从启动）。
-- **配置了商旅映射**：双侧互斥分流（MEITUAN 拒 TMC、MEITUAN_BIZ 拒非 TMC）。
+- **未配置商旅映射**：MEITUAN 渠道在配置解析时**剥离全部 `orderType === 'TMC'` 规则**（含运营自定义 TMC 规则），TMC 订单照常 ALLOW 走散客渠道，杜绝无人承接的丢单；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUANBIZ 渠道不受开关影响（未配置映射时其值守无从启动）。
+- **配置了商旅映射**：双侧互斥分流（MEITUAN 拒 TMC、MEITUANBIZ 拒非 TMC）。
 - 同步链路：启动值守时强制同步；映射拉取/保存时 best-effort 即时推送。机制详见架构文档 §3.7/§3.8。
 
 - **真实脱敏样例**：参考 [`samples/list-task-response.json`](./samples/list-task-response.json)

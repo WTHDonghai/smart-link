@@ -14,9 +14,9 @@ class HotelCollectorRegistry {
     const meituanCollector = new MeituanHotelCollector();
     this.register(meituanCollector);
 
-    // 美团商旅复用美团底层体系 (支持 MEITUAN_BIZ 及 MEITUANBIZ)
+    // 美团商旅复用美团底层体系 (支持 MEITUANBIZ 及 MEITUANBIZ)
     const meituanBizCollector: ChannelHotelCollector = {
-      channelCode: 'MEITUAN_BIZ',
+      channelCode: 'MEITUANBIZ',
       get defaultTargetUrl() {
         return meituanCollector.defaultTargetUrl;
       },
@@ -60,7 +60,7 @@ class ProductCollectorRegistry {
 
     // 美团商旅复用美团产品采集器
     const meituanBizProductCollector: ChannelProductCollector = {
-      channelCode: 'MEITUAN_BIZ',
+      channelCode: 'MEITUANBIZ',
       resolveTargetUrl: (url, poiId, partnerId) =>
         meituanProductCollector.resolveTargetUrl(url, poiId, partnerId),
       collect: (page, ctx, req, opts) =>

@@ -564,7 +564,7 @@ describe('orderGuardianSlice reducer', () => {
   });
 
   describe('toggleChannelDutyThunk 商旅分流开关联动', () => {
-    it('启动值守前应按 MEITUAN_BIZ 渠道映射存在与否推送分流开关（已配置 → true）', async () => {
+    it('启动值守前应按 MEITUANBIZ 渠道映射存在与否推送分流开关（已配置 → true）', async () => {
       const { setMeituanBizSplitEnabled: mockSplit, startDutyByChannel } = await import(
         '../../../src/services/dutyBridge'
       );
@@ -575,7 +575,7 @@ describe('orderGuardianSlice reducer', () => {
         channel: {
           mappings: [
             { otaChannelCode: 'MEITUAN', status: 'A' },
-            { otaChannelCode: 'MEITUAN_BIZ', status: 'A' },
+            { otaChannelCode: 'MEITUANBIZ', status: 'A' },
           ],
         },
       });
@@ -590,7 +590,7 @@ describe('orderGuardianSlice reducer', () => {
       );
     });
 
-    it('未配置 MEITUAN_BIZ 映射时推送分流关闭（false），且失效映射不计入', async () => {
+    it('未配置 MEITUANBIZ 映射时推送分流关闭（false），且失效映射不计入', async () => {
       const { setMeituanBizSplitEnabled: mockSplit } = await import(
         '../../../src/services/dutyBridge'
       );
@@ -601,7 +601,7 @@ describe('orderGuardianSlice reducer', () => {
         channel: {
           mappings: [
             { otaChannelCode: 'MEITUAN', status: 'A' },
-            { otaChannelCode: 'MEITUAN_BIZ', status: 'I' },
+            { otaChannelCode: 'MEITUANBIZ', status: 'I' },
           ],
         },
       });
@@ -619,7 +619,7 @@ describe('orderGuardianSlice reducer', () => {
       const dispatch = vi.fn();
       const getState = vi.fn().mockReturnValue({
         orderGuardian: { channelDuty: { MEITUAN: { status: 'RUNNING' } } },
-        channel: { mappings: [{ otaChannelCode: 'MEITUAN_BIZ', status: 'A' }] },
+        channel: { mappings: [{ otaChannelCode: 'MEITUANBIZ', status: 'A' }] },
       });
 
       await toggleChannelDutyThunk('MEITUAN')(dispatch, getState, undefined);

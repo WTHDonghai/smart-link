@@ -8,7 +8,7 @@ import { APP_ENV_KEYS, type AppEnvKey } from '../types/env';
 
 export const OTA_CATALOG_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   MEITUAN: APP_ENV_KEYS.otaCatalogMeituan,
-  MEITUAN_BIZ: APP_ENV_KEYS.otaCatalogMeituanBiz,
+  MEITUANBIZ: APP_ENV_KEYS.otaCatalogMeituanBiz,
   DOUYIN: APP_ENV_KEYS.otaCatalogDouyin,
   CTRIP: APP_ENV_KEYS.otaCatalogCtrip,
   TONGCHENG: APP_ENV_KEYS.otaCatalogTongcheng,
@@ -19,7 +19,7 @@ export const OTA_CATALOG_ENV_KEY_MAP: Record<string, AppEnvKey> = {
 
 export const OTA_ORDER_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   MEITUAN: APP_ENV_KEYS.otaOrderMeituan,
-  MEITUAN_BIZ: APP_ENV_KEYS.otaOrderMeituan,
+  MEITUANBIZ: APP_ENV_KEYS.otaOrderMeituan,
   DOUYIN: APP_ENV_KEYS.otaOrderDouyin,
   CTRIP: APP_ENV_KEYS.otaOrderCtrip,
   TONGCHENG: APP_ENV_KEYS.otaOrderTongcheng,
@@ -29,7 +29,7 @@ export const OTA_ORDER_ENV_KEY_MAP: Record<string, AppEnvKey> = {
 
 export const OTA_PRODUCT_ENV_KEY_MAP: Record<string, AppEnvKey> = {
   MEITUAN: APP_ENV_KEYS.otaProductMeituan,
-  MEITUAN_BIZ: APP_ENV_KEYS.otaProductMeituan,
+  MEITUANBIZ: APP_ENV_KEYS.otaProductMeituan,
   DOUYIN: APP_ENV_KEYS.otaProductDouyin,
 };
 
@@ -48,7 +48,7 @@ const OTA_URL_CONFIG: Record<OtaUrlType, OtaUrlTypeConfig> = {
     unsupportedMessagePrefix: '不支持的 OTA',
     envKeyMap: OTA_CATALOG_ENV_KEY_MAP,
     fallbackEnvKeyMap: {
-      MEITUAN_BIZ: APP_ENV_KEYS.otaCatalogMeituan,
+      MEITUANBIZ: APP_ENV_KEYS.otaCatalogMeituan,
     },
   },
   order: {
@@ -80,7 +80,7 @@ function resolveOtaUrl(channelCode: string, urlType: OtaUrlType): string {
     const fallbackValue = getAppEnv(fallbackKey);
     if (fallbackValue) return fallbackValue;
 
-    if (normalizedCode === 'MEITUAN_BIZ') {
+    if (normalizedCode === 'MEITUANBIZ') {
       throw new Error(
         `未配置美团商旅或美团的${config.subject}，请在环境变量中配置 ${envKey} 或 ${fallbackKey}`
       );
@@ -102,7 +102,7 @@ export function normalizeOtaChannelCode(channelCode: string): string {
   const stripped = cleanCode.replace(/[-_]/g, '');
 
   if (stripped === 'MEITUANBIZ' || stripped === 'MEITUANBUSINESS' || stripped === 'MTBIZ') {
-    return 'MEITUAN_BIZ';
+    return 'MEITUANBIZ';
   }
   if (stripped === 'MEITUAN' || stripped === 'MEITUANHOTEL' || stripped === 'MT') {
     return 'MEITUAN';
@@ -131,7 +131,7 @@ export function normalizeOtaChannelCode(channelCode: string): string {
 /**
  * 根据渠道编码规范化获取该渠道配置的目标 URL (门店改价/目录中心)
  * 遵循 Fail-Fast 原则：绝不使用隐式 fallback 兜底默认值，未配置时立即显式抛出异常
- * 支持大写或规范化编码 (如 MEITUAN, MEITUAN_BIZ, MEITUANBIZ, DOUYIN 等)
+ * 支持大写或规范化编码 (如 MEITUAN, MEITUANBIZ, DOUYIN 等)
  */
 export function getOtaChannelUrl(channelCode: string): string {
   return resolveOtaUrl(channelCode, 'catalog');

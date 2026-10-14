@@ -11,7 +11,7 @@ export interface DutyChannelConfig {
 
 const KNOWN_DUTY_DESCRIPTIONS: Record<string, string> = {
   MEITUAN: '美团待处理订单自动发现与导入',
-  MEITUAN_BIZ: '美团商旅订单自动发现与导入（复用美团值守会话，仅处理企业商旅订单）',
+  MEITUANBIZ: '美团商旅订单自动发现与导入（复用美团值守会话，仅处理企业商旅订单）',
   DOUYIN: '抖音新订/退款订单业务协同值守',
   CTRIP: '携程管家订单同步与确认号回填',
   TONGCHENG: '同程艺龙订单实时监听与回填',
@@ -21,13 +21,13 @@ const KNOWN_DUTY_DESCRIPTIONS: Record<string, string> = {
 };
 
 /**
- * 判定当前映射记录集中是否存在有效的美团商旅 (MEITUAN_BIZ) 渠道映射。
- * 商旅分流开关的唯一事实源：存在 → MEITUAN/MEITUAN_BIZ 双侧互斥分流；不存在 → MEITUAN 全量接单。
+ * 判定当前映射记录集中是否存在有效的美团商旅 (MEITUANBIZ) 渠道映射。
+ * 商旅分流开关的唯一事实源：存在 → MEITUAN/MEITUANBIZ 双侧互斥分流；不存在 → MEITUAN 全量接单。
  */
 export function hasMeituanBizMapping(
   mappings: readonly OTAChannelMappingRecord[] | null | undefined
 ): boolean {
-  return deriveMappedDutyChannels(mappings).some((c) => c.code === 'MEITUAN_BIZ');
+  return deriveMappedDutyChannels(mappings).some((c) => c.code === 'MEITUANBIZ');
 }
 
 /**

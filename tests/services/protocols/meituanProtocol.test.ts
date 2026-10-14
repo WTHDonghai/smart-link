@@ -351,11 +351,11 @@ describe('meituanProtocol (Channel Protocol & Unified Import Baseline)', () => {
       expect(channelOrder.channelCode).toBe('MEITUAN');
     });
 
-    it('全部美团系别名变体应经全局归一化收敛为规范码 (MTBIZ / MEITUAN_BUSINESS / MEITUANBIZ → MEITUAN_BIZ)', () => {
-      for (const alias of ['MTBIZ', 'MEITUAN_BUSINESS', 'MEITUANBIZ', 'meituan_biz']) {
+    it('全部美团系别名变体应经全局归一化收敛为规范码 (MTBIZ / MEITUAN_BUSINESS / MEITUANBIZ → MEITUANBIZ)', () => {
+      for (const alias of ['MTBIZ', 'MEITUAN_BUSINESS', 'MEITUANBIZ', 'meituanbiz']) {
         const channelOrder = cleanChannelOrder(alias, MEITUAN_RAW_SAMPLE_ORDER);
         expect(channelOrder).toBeInstanceOf(MeituanOrderProtocol);
-        expect(channelOrder.channelCode).toBe('MEITUAN_BIZ');
+        expect(channelOrder.channelCode).toBe('MEITUANBIZ');
       }
     });
 

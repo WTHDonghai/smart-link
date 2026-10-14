@@ -24,7 +24,7 @@
         }
       ]
     },
-    "MEITUAN_BIZ": {
+    "MEITUANBIZ": {
       "rules": [
         {
           "id": "meituan-biz-rescheduled",

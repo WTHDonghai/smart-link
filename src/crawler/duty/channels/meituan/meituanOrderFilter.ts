@@ -20,9 +20,9 @@ export type {
 } from '../../orderFilterContracts';
 
 /**
- * 美团系过滤渠道身份：普通散客 (MEITUAN) 与企业商旅 (MEITUAN_BIZ)
+ * 美团系过滤渠道身份：普通散客 (MEITUAN) 与企业商旅 (MEITUANBIZ)
  */
-export type MeituanFilterChannelId = 'MEITUAN' | 'MEITUAN_BIZ';
+export type MeituanFilterChannelId = 'MEITUAN' | 'MEITUANBIZ';
 
 /**
  * 规范化美团系过滤渠道身份：复用全局渠道码归一化 (normalizeOtaChannelCode) 后仅校验美团系自档，
@@ -30,10 +30,10 @@ export type MeituanFilterChannelId = 'MEITUAN' | 'MEITUAN_BIZ';
  */
 export function normalizeMeituanFilterChannel(channelId?: string): MeituanFilterChannelId {
   const normalized = normalizeOtaChannelCode(channelId || 'MEITUAN');
-  if (normalized === 'MEITUAN' || normalized === 'MEITUAN_BIZ') {
+  if (normalized === 'MEITUAN' || normalized === 'MEITUANBIZ') {
     return normalized;
   }
-  throw new Error(`未知的美团系过滤渠道: ${channelId} (仅支持 MEITUAN / MEITUAN_BIZ)`);
+  throw new Error(`未知的美团系过滤渠道: ${channelId} (仅支持 MEITUAN / MEITUANBIZ)`);
 }
 
 export function getDefaultMeituanFilterConfigPath(): string {
@@ -50,10 +50,10 @@ function loadBundledDefaultConfig(channel: MeituanFilterChannelId): ChannelFilte
   return extractFilterRuleChannelConfig(defaultFamilyRulesJson, channel, '随包默认过滤规则文件');
 }
 
-// 按渠道维度维护的内存配置缓存：MEITUAN 与 MEITUAN_BIZ 各自独立，互不覆盖（缓存原始规则，剥离策略在返回时应用）
+// 按渠道维度维护的内存配置缓存：MEITUAN 与 MEITUANBIZ 各自独立，互不覆盖（缓存原始规则，剥离策略在返回时应用）
 const activeFilterConfigs = new Map<MeituanFilterChannelId, ChannelFilterConfig>();
 
-// 商旅分流开关：用户配置 MEITUAN_BIZ 渠道映射时开启；
+// 商旅分流开关：用户配置 MEITUANBIZ 渠道映射时开启；
 // 未配置时 MEITUAN 不做商旅分流过滤（TMC 订单照常走散客渠道，杜绝无人承接的丢单）
 let meituanBizSplitEnabled = false;
 
@@ -65,7 +65,7 @@ export function setMeituanBizSplitEnabled(enabled: boolean): void {
  * 商旅分流策略：分流关闭时剥离 MEITUAN 渠道全部 TMC 类规则
  * （无商旅渠道承接时拒 TMC 即丢单，属正确性约束，运营自定义的 TMC 规则同样剥离）；
  * 改签 (RESCHEDULED) 等安全规则与渠道分流无关，保留。
- * MEITUAN_BIZ 渠道不受开关影响（未配置映射时其值守无法启动，配置不生效亦无害）。
+ * MEITUANBIZ 渠道不受开关影响（未配置映射时其值守无法启动，配置不生效亦无害）。
  */
 function applyMeituanBizSplitPolicy(
   config: ChannelFilterConfig,

@@ -296,7 +296,7 @@ export const toggleChannelDutyThunk = createAsyncThunk(
         await stopDutyByChannel(code);
         dispatch(showToast({ type: 'info', title: `渠道「${code}」值守已停止` }));
       } else {
-        // 启动前强制同步商旅分流开关：用户配置了 MEITUAN_BIZ 渠道映射才启用商旅/散客分流过滤
+        // 启动前强制同步商旅分流开关：用户配置了 MEITUANBIZ 渠道映射才启用商旅/散客分流过滤
         // （权威路径；映射变更时的 best-effort 即时推送见 channelSlice 拉取钩子）
         await setMeituanBizSplitEnabled(hasMeituanBizMapping(state.channel?.mappings));
 

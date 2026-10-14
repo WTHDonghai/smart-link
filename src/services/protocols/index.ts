@@ -61,7 +61,7 @@ export function cleanChannelOrder(
   // 杜绝本路由器自行维护别名级联导致覆盖不全（如 MEITUANBIZ 能识别而 MTBIZ 漏过）
   const normalized = normalizeOtaChannelCode(channelCode);
 
-  if (normalized === 'MEITUAN' || normalized === 'MEITUAN_BIZ' || normalized.includes('MEITUAN')) {
+  if (normalized.includes('MEITUAN')) {
     return cleanMeituanOrder(rawPayload, customSchema, targetOrderId, normalized);
   }
 

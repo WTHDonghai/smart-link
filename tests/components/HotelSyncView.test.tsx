@@ -28,7 +28,7 @@ describe('resolveChannelMeta 渠道徽标解析引擎', () => {
     {
       id: 'meituanbiz',
       name: '美团商旅',
-      code: 'MEITUAN_BIZ',
+      code: 'MEITUANBIZ',
       short: '商',
       bgColor: 'bg-[#eef2ff]',
       textColor: 'text-[#004ac6]',
@@ -53,10 +53,10 @@ describe('resolveChannelMeta 渠道徽标解析引擎', () => {
     expect(metaOnlyCode.short).toBe('美');
   });
 
-  it('准确将 MEITUAN_BIZ、meituanbiz 以及 meituan_biz 解析为美团商旅徽标 [商]，绝非 OTA', () => {
-    // 典型后端返回格式：code: MEITUAN_BIZ, id: meituan_biz
+  it('准确将 MEITUANBIZ、meituanbiz 以及 meituanbiz 解析为美团商旅徽标 [商]，绝非 OTA', () => {
+    // 典型后端返回格式：code: MEITUANBIZ, id: meituanbiz
     const metaWithUnderscore = resolveChannelMeta(
-      { otaChannelCode: 'MEITUAN_BIZ', otaChannelId: 'meituan_biz' },
+      { otaChannelCode: 'MEITUANBIZ', otaChannelId: 'meituanbiz' },
       mockConfiguredChannels
     );
     expect(metaWithUnderscore.short).toBe('商');
@@ -66,12 +66,12 @@ describe('resolveChannelMeta 渠道徽标解析引擎', () => {
 
     // 无全局 channels 时仍能通过内置规则匹配美团商旅
     const metaFallback = resolveChannelMeta(
-      { otaChannelCode: 'MEITUAN_BIZ', otaChannelId: '' },
+      { otaChannelCode: 'MEITUANBIZ', otaChannelId: '' },
       []
     );
     expect(metaFallback.short).toBe('商');
     expect(metaFallback.name).toBe('美团商旅');
-    expect(metaFallback).toEqual(KNOWN_CHANNEL_METAS.MEITUAN_BIZ);
+    expect(metaFallback).toEqual(KNOWN_CHANNEL_METAS.MEITUANBIZ);
   });
 
   it('准确识别抖音、携程、同程等主流渠道徽标', () => {
@@ -125,7 +125,7 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
   it('选中美团商旅渠道后：文案动态切换为「启动「美团商旅」门店采集」', () => {
     const store = createAppStore();
     store.dispatch(addChannelById('meituanbiz'));
-    store.dispatch(setSelectedCrawlChannel('MEITUAN_BIZ'));
+    store.dispatch(setSelectedCrawlChannel('MEITUANBIZ'));
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -165,8 +165,8 @@ describe('HotelSyncView 渠道选择与采集按钮强联动交互', () => {
         source: 'collector-meituan',
       },
       {
-        otaChannelId: 'meituan_biz',
-        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelId: 'meituanbiz',
+        otaChannelCode: 'MEITUANBIZ',
         otaHotelId: 'mtbiz-002',
         otaHotelName: '美团商旅签约酒店',
         source: 'collector-meituanbiz',

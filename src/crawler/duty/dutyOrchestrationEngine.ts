@@ -99,6 +99,10 @@ export function buildTaskResultPayload(
 export class DutyOrchestrationEngine {
   private runners = new Map<string, ChannelDutyRunner>();
   private channelStates = new Map<string, ChannelDutyInfo>();
+  /** 别名渠道 → 主渠道 映射（别名是主渠道的派生值守状态，无独立启停入口） */
+  private aliasToPrimary = new Map<string, string>();
+  /** 商旅分流开关（引擎侧副本：作为主渠道启停时联动激活别名渠道的触发信号） */
+  private meituanBizSplitEnabled = false;
   private coordinatorStatus: DutyCoordinatorStatus = 'STOPPED';
   private stationCoordinator = new StationCoordinator();
   private isClaimingLoopRunning = false;
@@ -110,11 +114,11 @@ export class DutyOrchestrationEngine {
 
   constructor() {
     // 注册内置渠道执行器（美团酒店、抖音生活服务）；
-    // 美团商旅 (MEITUAN_BIZ) 与美团共用同一浏览器值守会话：单浏览器 + 别名路由，
-    // MEITUAN_BIZ 任务路由至美团 Runner 执行，采集时按任务渠道选用商旅过滤规则
+    // 美团商旅 (MEITUANBIZ) 与美团共用同一浏览器值守会话：单浏览器 + 别名路由，
+    // MEITUANBIZ 任务路由至美团 Runner 执行，采集时按任务渠道选用商旅过滤规则
     const meituanRunner = new MeituanDutyRunner();
     this.registerRunner(meituanRunner);
-    this.registerRunnerAlias('MEITUAN_BIZ', meituanRunner);
+    this.registerRunnerAlias('MEITUANBIZ', meituanRunner);
     this.registerRunner(new DouyinDutyRunner());
 
     // 绑定工位调度器的日志回调至本地日志系统
@@ -148,10 +152,12 @@ export class DutyOrchestrationEngine {
   }
 
   /**
-   * 商旅分流开关（由渲染层根据用户是否配置 MEITUAN_BIZ 渠道映射推送）：
-   * 关闭时 MEITUAN 值守不做商旅分流过滤（TMC 订单照常走散客渠道），开启时双侧互斥分流
+   * 商旅分流开关（由渲染层根据用户是否配置 MEITUANBIZ 渠道映射推送）：
+   * 关闭时 MEITUAN 值守不做商旅分流过滤（TMC 订单照常走散客渠道），
+   * 开启时双侧互斥分流；同时作为美团值守启动时联动激活商旅别名渠道的触发信号
    */
   public setMeituanBizSplitEnabled(enabled: boolean): void {
+    this.meituanBizSplitEnabled = Boolean(enabled);
     setMeituanBizSplitEnabled(enabled);
   }
 
@@ -172,7 +178,8 @@ export class DutyOrchestrationEngine {
 
   /**
    * 注册渠道别名：将别名渠道路由至已有 Runner 实例（共享同一浏览器值守会话），
-   * 别名渠道拥有独立的值守开关状态与工位上报目标，但停止时仅在无其他共享受渠道时才真正关闭浏览器
+   * 别名渠道是主渠道的派生值守状态：不提供独立启动/停止入口，
+   * 由主渠道启停时按分流开关联动置位，用于接受后台按渠道下发的任务与工位目标上报
    */
   public registerRunnerAlias(aliasCode: string, runner: ChannelDutyRunner): void {
     const code = aliasCode.trim().toUpperCase();
@@ -184,6 +191,7 @@ export class DutyOrchestrationEngine {
       channelCode: code,
       status: 'STOPPED',
     });
+    this.aliasToPrimary.set(code, runner.channelCode.trim().toUpperCase());
   }
 
   public getCoordinatorStatus(): DutyCoordinatorStatus {
@@ -281,6 +289,61 @@ export class DutyOrchestrationEngine {
   }
 
   /**
+   * 主渠道启动成功后联动激活其别名渠道派生态（当前触发信号：商旅分流开关）。
+   * 返回被联动激活的别名渠道码列表（未激活返回空数组）。
+   */
+  private linkAliasChannelsForPrimary(primaryCode: string): string[] {
+    const linked: string[] = [];
+    if (!this.meituanBizSplitEnabled) {
+      return linked;
+    }
+    for (const [alias, primary] of this.aliasToPrimary) {
+      if (primary !== primaryCode) continue;
+      this.channelStates.set(alias, {
+        channelCode: alias,
+        status: 'RUNNING',
+        lastStartedAt: Date.now(),
+      });
+      linked.push(alias);
+      this.appendDutyLog({
+        level: 'INFO',
+        module: 'DUTY_TASK',
+        channelId: alias,
+        message: `[值守联动] 渠道「${alias}」随主渠道「${primaryCode}」联动激活（商旅分流开启，工位上报双目标，接受后台按渠道下发任务）`,
+        details: `主渠道: ${primaryCode} | 派生渠道: ${alias} | 状态: RUNNING`,
+      });
+    }
+    return linked;
+  }
+
+  /**
+   * 主渠道停止时无条件连带清理其全部别名渠道派生态。
+   * 返回被连带停止的别名渠道码列表（原本不在运行态的不计入）。
+   */
+  private stopAliasChannelsForPrimary(primaryCode: string): string[] {
+    const stopped: string[] = [];
+    for (const [alias, primary] of this.aliasToPrimary) {
+      if (primary !== primaryCode) continue;
+      const wasOn = this.isChannelDutyOn(alias);
+      this.channelStates.set(alias, {
+        channelCode: alias,
+        status: 'STOPPED',
+      });
+      if (wasOn) {
+        stopped.push(alias);
+        this.appendDutyLog({
+          level: 'INFO',
+          module: 'DUTY_TASK',
+          channelId: alias,
+          message: `[值守联动] 渠道「${alias}」随主渠道「${primaryCode}」联动停止（派生值守状态清理）`,
+          details: `主渠道: ${primaryCode} | 派生渠道: ${alias} | 状态: STOPPED`,
+        });
+      }
+    }
+    return stopped;
+  }
+
+  /**
    * 渠道值守开关是否已开启（含启动过渡态 STARTING）。
    * 与 Runner 存活语义 (isChannelActive) 分离：共享 Runner 存活不代表该渠道开关已开。
    */
@@ -290,7 +353,9 @@ export class DutyOrchestrationEngine {
   }
 
   /**
-   * 启动指定渠道值守（支持别名渠道：共享 Runner 已运行时复用浏览器会话，仅激活该渠道开关）
+   * 启动指定渠道值守。
+   * 别名渠道（如 MEITUANBIZ）是主渠道的派生值守状态，不提供独立启动入口：
+   * 由主渠道启动时按商旅分流开关联动激活，共享同一浏览器会话并接受后台按渠道下发的任务。
    */
   public async startDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
@@ -299,17 +364,16 @@ export class DutyOrchestrationEngine {
       throw new Error(`暂不支持渠道「${code}」自动化值守`);
     }
 
-    if (hotelCollectionEngine.isChannelActive(channelCode)) {
+    const aliasPrimary = this.aliasToPrimary.get(code);
+    if (aliasPrimary) {
       throw new Error(
-        `渠道「${channelCode}」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启值守。`
+        `渠道「${code}」为渠道「${aliasPrimary}」的共享值守别名，不提供独立值守启动，请启动主渠道「${aliasPrimary}」值守`
       );
     }
 
-    // 别名渠道与主渠道共享同一浏览器 Profile：任一共享渠道正在执行采集作业时均必须阻断值守启动
-    const primaryCode = runner.channelCode.trim().toUpperCase();
-    if (primaryCode !== code && hotelCollectionEngine.isChannelActive(primaryCode)) {
+    if (hotelCollectionEngine.isChannelActive(channelCode)) {
       throw new Error(
-        `渠道「${primaryCode}」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启「${code}」值守。`
+        `渠道「${channelCode}」当前正在执行自动化采集作业（门店或产品采集），请等待采集完成后再开启值守。`
       );
     }
 
@@ -335,6 +399,9 @@ export class DutyOrchestrationEngine {
         status: 'RUNNING',
         lastStartedAt: Date.now(),
       });
+
+      // 主渠道启动成功：商旅分流开启时联动激活别名渠道派生态（工位上报双目标，接受后台按渠道下发的任务）
+      const linkedAliases = this.linkAliasChannelsForPrimary(code);
 
       this.appendDutyLog({
         level: 'PLAYWRIGHT',
@@ -390,7 +457,8 @@ export class DutyOrchestrationEngine {
   }
 
   /**
-   * 停止指定渠道值守（支持别名渠道：共享 Runner 仍被其他渠道使用时保留浏览器会话，仅关闭该渠道开关）
+   * 停止指定渠道值守。
+   * 别名渠道为派生状态无独立停止入口；停止主渠道时无条件连带清理其全部别名渠道派生态。
    */
   public async stopDuty(channelCode: string): Promise<DesktopOperationResult> {
     const code = (channelCode || '').trim().toUpperCase();
@@ -399,16 +467,26 @@ export class DutyOrchestrationEngine {
       throw new Error(`未知渠道「${code}」`);
     }
 
+    const aliasPrimary = this.aliasToPrimary.get(code);
+    if (aliasPrimary) {
+      throw new Error(
+        `渠道「${code}」为渠道「${aliasPrimary}」的共享值守别名，不提供独立值守停止，请停止主渠道「${aliasPrimary}」值守`
+      );
+    }
+
     this.channelStates.set(code, {
       channelCode: code,
       status: 'STOPPED',
     });
 
+    // 派生清理：主渠道停止时，其别名渠道派生态无条件一并停止（无论分流开关当前取值）
+    const stoppedAliases = this.stopAliasChannelsForPrimary(code);
+
     this.appendDutyLog({
       level: 'INFO',
       module: 'DUTY_TASK',
       channelId: code,
-      message: `[值守停止] 渠道「${code}」值守已安全终止`,
+      message: `[值守停止] 渠道「${code}」值守已安全终止${stoppedAliases.length > 0 ? `（连带停止派生渠道: ${stoppedAliases.join('、')}）` : ''}`,
       details: `渠道: ${code} | 状态: STOPPED`,
     });
 

@@ -128,7 +128,7 @@ describe('deriveMappedDutyChannels 渠道映射向值守配置派生工具测试
 });
 
 describe('hasMeituanBizMapping 商旅映射存在性判定（商旅分流开关唯一事实源）', () => {
-  it('存在有效 MEITUAN_BIZ 映射时返回 true', () => {
+  it('存在有效 MEITUANBIZ 映射时返回 true', () => {
     const mappings: OTAChannelMappingRecord[] = [
       {
         id: 'map-mt',
@@ -143,7 +143,7 @@ describe('hasMeituanBizMapping 商旅映射存在性判定（商旅分流开关�
       {
         id: 'map-biz',
         mappingId: 'map-biz',
-        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelCode: 'MEITUANBIZ',
         otaChannelName: '美团商旅',
         channelId: 'pms-2',
         channelCode: 'MTBIZ',
@@ -180,7 +180,7 @@ describe('hasMeituanBizMapping 商旅映射存在性判定（商旅分流开关�
       {
         id: 'map-biz',
         mappingId: 'map-biz',
-        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelCode: 'MEITUANBIZ',
         otaChannelName: '美团商旅',
         channelId: 'pms-2',
         channelCode: 'MTBIZ',

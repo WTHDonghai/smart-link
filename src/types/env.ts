@@ -3,7 +3,7 @@ import processEnvKeysJson from './processEnvKeys.json' with { type: 'json' };
 export const APP_ENV_KEYS = {
   platformBaseUrl: 'SMARTLINK_PLATFORM_BASE_URL',
   otaCatalogMeituan: 'SMARTLINK_OTA_MEITUAN_URL',
-  otaCatalogMeituanBiz: 'SMARTLINK_OTA_MEITUAN_BIZ_URL',
+  otaCatalogMeituanBiz: 'SMARTLINK_OTA_MEITUANBIZ_URL',
   otaCatalogDouyin: 'SMARTLINK_OTA_DOUYIN_URL',
   otaCatalogCtrip: 'SMARTLINK_OTA_CTRIP_URL',
   otaCatalogTongcheng: 'SMARTLINK_OTA_TONGCHENG_URL',

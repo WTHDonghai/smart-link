@@ -185,7 +185,7 @@ describe('meituanListCollector', () => {
       expect(res1).toEqual(res2);
     });
 
-    it('并发不同渠道身份的采集不得互相合并结果（MEITUAN 与 MEITUAN_BIZ 各自独立过滤）', async () => {
+    it('并发不同渠道身份的采集不得互相合并结果（MEITUAN 与 MEITUANBIZ 各自独立过滤）', async () => {
       setMeituanBizSplitEnabled(true);
       const collector = new MeituanListCollector();
       const mockPage = {
@@ -234,7 +234,7 @@ describe('meituanListCollector', () => {
 
       const [regularOrders, bizOrders] = await Promise.all([
         collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUAN'),
-        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUAN_BIZ'),
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
       ]);
 
       // 不同渠道身份的采集各自独立执行列表刷新，绝不合并结果
@@ -280,8 +280,8 @@ describe('meituanListCollector', () => {
       });
 
       const [res1, res2] = await Promise.all([
-        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUAN_BIZ'),
-        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUAN_BIZ'),
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
+        collector.collectUnhandledOrders(mockPage, runWithMutex, refreshFn, undefined, 'MEITUANBIZ'),
       ]);
 
       expect(callCount).toBe(1);

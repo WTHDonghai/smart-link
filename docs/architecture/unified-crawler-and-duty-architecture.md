@@ -105,7 +105,7 @@ flowchart TD
 ### 3.1 渠道身份标识全链路大写归一化 (`channelCode`)
 - 全链路（UI、Store、Bridge、IPC、Runner、Collector）统一以**大写 `channelCode`** 作为唯一法定凭证：
   - 美团酒店：`MEITUAN`
-  - 美团商旅：`MEITUAN_BIZ`
+  - 美团商旅：`MEITUANBIZ`
   - 抖音生活服务：`DOUYIN`
   - 携程：`CTRIP`
   - 飞猪：`FLIGGY`
@@ -168,29 +168,30 @@ flowchart TD
 3. `dutyTaskContext` 对 `OTA_CANCEL_ORDER` 只从 `payload.channelCode` 提取渠道，缺失即 Fail-Fast；
 4. `dutyTaskDispatcher` 将 `OTA_CANCEL_ORDER` 与 `OTA_CONFIRM_CANCEL` 一样路由到渠道 runner 的 `confirmCancel` 能力。
 
-### 3.7 美团商旅单浏览器别名路由 (MEITUAN_BIZ Alias Routing)
+### 3.7 美团商旅单浏览器别名路由 (MEITUANBIZ Alias Routing)
 
-美团商旅 (`MEITUAN_BIZ`) 与美团 (`MEITUAN`) **共用同一个浏览器值守会话**（单浏览器、单 Tab、同一 Profile），通过过滤规则按任务渠道分流订单：
+美团商旅 (`MEITUANBIZ`) 与美团 (`MEITUAN`) **共用同一个浏览器值守会话**（单浏览器、单 Tab、同一 Profile），通过过滤规则按任务渠道分流订单：
 
-1. **别名注册**：`DutyOrchestrationEngine` 经 `registerRunnerAlias('MEITUAN_BIZ', meituanRunner)` 将两个渠道码指向同一 `MeituanDutyRunner` 实例。别名渠道拥有**独立的值守开关状态**（`channelStates` 条目）：
-   - `startDuty`：共享 Runner 已运行时复用会话不重复唤起；主渠道采集作业进行中时阻断别名启动；
-   - `stopDuty`：共享 Runner 仍被其他渠道使用时保留浏览器，仅关该渠道开关并更新工位上报；
-   - 工位上报 `otaCollectionTargets` 从开关状态派生（含别名渠道），中台据此只派发已开启渠道的采集任务；
-   - 滞留任务按**开关语义**（而非 Runner 存活语义）拒单 `TASK_ROUTE_UNAVAILABLE`。
+1. **别名注册与派生态模型**：`DutyOrchestrationEngine` 经 `registerRunnerAlias('MEITUANBIZ', meituanRunner)` 将两个渠道码指向同一 `MeituanDutyRunner` 实例。别名渠道是主渠道的**派生值守状态**（无独立启动/停止入口，UI 不渲染独立开关）：
+   - `startDuty('MEITUAN')`：商旅分流开启时**联动激活** `MEITUANBIZ` 派生态（单 Runner 单会话仅启动一次）；`startDuty/stopDuty('MEITUANBIZ')` 直接拒绝并指引操作主渠道；
+   - `stopDuty('MEITUAN')`：**无条件连带清理**别名派生态（无论分流开关当前取值）并停止共享 Runner；
+   - 工位上报 `otaCollectionTargets` 从渠道状态派生（联动激活后含别名渠道），后台据此下发美团 + 商旅双采集任务；
+   - 滞留任务按**开关语义**（而非 Runner 存活语义）拒单 `TASK_ROUTE_UNAVAILABLE`；
+   - 面板呈现：映射商旅后 MEITUANBIZ 行折叠进美团行（副标题标注"已映射商旅，值守含商旅分流"）。
 2. **渠道身份全链路穿参**：采集结果 `otaChannelCode`、下游派发 payload、协议清洗 `channelCode`、`otaChannel` 标记与备注模板路由均以**任务渠道** (`context.channelCode`) 为准而非 Runner 主渠道，商旅单正确落 PMS 渠道映射（`meituanbiz`）。
 3. **统一多渠道过滤规则**：随包 `meituanFilterRules.json` 与持久化 `<userDataDir>/filter-rules/meituan.json` 均为**单文件多渠道格式**（顶层 `channels` 映射，键为规范渠道码）；保存为读-改-写（仅替换对应渠道节）。渠道无关的规则契约（类型/守卫/渠道节提取）统一下沉 [`src/crawler/duty/orderFilterContracts.ts`](../../src/crawler/duty/orderFilterContracts.ts) 供未来渠道复用。
 
 ### 3.8 商旅分流开关 (按映射存在性决定过滤行为)
 
-商旅/散客分流以**用户是否配置了有效 `MEITUAN_BIZ` 渠道映射**为唯一事实源：
+商旅/散客分流以**用户是否配置了有效 `MEITUANBIZ` 渠道映射**为唯一事实源：
 
 | 商户配置 | 语义 | 过滤行为 |
 | :--- | :--- | :--- |
 | 未配置商旅映射 | 不区分商旅/散客，单一渠道提交 | MEITUAN **不做商旅分流过滤**（TMC 订单照常 ALLOW 走散客渠道，杜绝无人承接的丢单） |
-| 配置了商旅映射 | 双渠道分 ID 提交 | 双侧互斥分流：MEITUAN 拒 TMC、MEITUAN_BIZ 拒非 TMC |
+| 配置了商旅映射 | 双渠道分 ID 提交 | 双侧互斥分流：MEITUAN 拒 TMC、MEITUANBIZ 拒非 TMC |
 
 实现为**运行时开关**（非改写规则文件——派生状态不持久化，每次从映射重算）：
 
-1. 过滤模块持有开关（默认关闭），配置解析返回时对 MEITUAN 渠道剥离全部 `orderType === 'TMC'` 规则（含运营自定义 TMC 规则）；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUAN_BIZ 渠道不受开关影响；
+1. 过滤模块持有开关（默认关闭），配置解析返回时对 MEITUAN 渠道剥离全部 `orderType === 'TMC'` 规则（含运营自定义 TMC 规则）；改签 (`RESCHEDULED`) 安全规则与渠道分流无关，始终保留；MEITUANBIZ 渠道不受开关影响；
 2. 同步链路：渲染层 `toggleChannelDutyThunk` 启动值守前**强制同步**（`hasMeituanBizMapping(mappings)` → IPC `duty:set-meituan-biz-split-enabled` → 引擎门面 → 过滤模块）；`fetchChannelMappingData` 成功后与 `saveChannelMapping` 成功触发映射重拉时 **best-effort 即时推送**（宿主不支持时静默跳过，启动时的强制同步仍是权威路径）；
 3. 采集器在途合并按渠道身份隔离，不同渠道并发采集不互相合并结果。

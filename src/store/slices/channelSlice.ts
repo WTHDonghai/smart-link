@@ -114,17 +114,17 @@ export const BASE_CHANNELS_CATALOG: readonly Omit<OTAChannel, 'todayOrders' | 'l
   {
     id: 'meituanbiz',
     name: '美团商旅',
-    code: 'MEITUAN_BIZ',
+    code: 'MEITUANBIZ',
     short: '商',
     bgColor: 'bg-[#eef2ff]',
     textColor: 'text-[#004ac6]',
     targetSystem: 'meituanbiz',
     targetSystemOptions: [
-      { val: 'meituanbiz', label: '美团商旅 (MEITUAN_BIZ)' },
+      { val: 'meituanbiz', label: '美团商旅 (MEITUANBIZ)' },
       { val: 'meituanbiz_vip', label: '美团企业采购 VIP (MEITUAN_CORP)' }
     ],
     remarkTemplate: '',
-    storeCrawlUrl: getOtaChannelUrl('MEITUAN_BIZ'),
+    storeCrawlUrl: getOtaChannelUrl('MEITUANBIZ'),
     status: 'active',
     crawlerStatus: 'online'
   },
@@ -293,7 +293,7 @@ export const fetchChannelMappingData = createAsyncThunk<
       fetchChannelMappings(),
     ]);
 
-    // 映射集已刷新：按 MEITUAN_BIZ 映射存在性同步商旅分流开关（best-effort，不阻断拉取主流程）
+    // 映射集已刷新：按 MEITUANBIZ 映射存在性同步商旅分流开关（best-effort，不阻断拉取主流程）
     syncMeituanBizSplitBestEffort(hasMeituanBizMapping(mappings));
 
     return { culturalTourismChannels, mappings };

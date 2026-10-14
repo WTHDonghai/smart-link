@@ -26,7 +26,7 @@ describe('channelSlice thunks 商旅分流开关联动', () => {
     vi.clearAllMocks();
   });
 
-  it('fetchChannelMappingData 成功后应按 MEITUAN_BIZ 映射存在性推送分流开关（best-effort）', async () => {
+  it('fetchChannelMappingData 成功后应按 MEITUANBIZ 映射存在性推送分流开关（best-effort）', async () => {
     const { fetchChannelMappings } = await import('../../../src/services/channelApi');
     vi.mocked(fetchChannelMappings).mockResolvedValueOnce([
       {
@@ -42,7 +42,7 @@ describe('channelSlice thunks 商旅分流开关联动', () => {
       {
         id: 'map-biz',
         mappingId: 'map-biz',
-        otaChannelCode: 'MEITUAN_BIZ',
+        otaChannelCode: 'MEITUANBIZ',
         otaChannelName: '美团商旅',
         channelId: 'pms-2',
         channelCode: 'MTBIZ',
@@ -90,7 +90,7 @@ describe('channelSlice thunks 商旅分流开关联动', () => {
         {
           id: 'map-biz',
           mappingId: 'map-biz',
-          otaChannelCode: 'MEITUAN_BIZ',
+          otaChannelCode: 'MEITUANBIZ',
           otaChannelName: '美团商旅',
           channelId: 'pms-2',
           channelCode: 'MTBIZ',
@@ -103,7 +103,7 @@ describe('channelSlice thunks 商旅分流开关联动', () => {
     const dispatch = vi.fn();
     const result = await saveChannelMapping({
       channelId: 'meituanbiz',
-      otaChannelCode: 'MEITUAN_BIZ',
+      otaChannelCode: 'MEITUANBIZ',
       otaChannelName: '美团商旅',
       pmsChannelId: 'pms-2',
       channelCode: 'MTBIZ',

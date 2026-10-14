@@ -116,7 +116,7 @@ function logSkippedOrder(order: SkippedOrder, audit?: DutyTaskLogSink): void {
 export class MeituanListCollector {
   private lastListRefreshTime = 0;
   private inFlightListPromise: Promise<DutyUnhandledOrderSummary[]> | null = null;
-  // 在途合并仅对同一渠道身份生效：MEITUAN 与 MEITUAN_BIZ 共享页面但过滤规则不同，
+  // 在途合并仅对同一渠道身份生效：MEITUAN 与 MEITUANBIZ 共享页面但过滤规则不同，
   // 不同渠道的并发采集绝不能互相合并结果，交由任务互斥锁串行执行
   private inFlightFilterChannelId: string | undefined;
 
@@ -214,7 +214,7 @@ export class MeituanListCollector {
 
   /**
    * 刷新美团待处理列表并返回待处理订单概要（权威网络响应为唯一源，带防抖补偿与请求合并）
-   * @param filterChannelId 过滤规则选用的渠道身份（MEITUAN 散客 / MEITUAN_BIZ 商旅），缺省为 MEITUAN
+   * @param filterChannelId 过滤规则选用的渠道身份（MEITUAN 散客 / MEITUANBIZ 商旅），缺省为 MEITUAN
    */
   public async collectUnhandledOrders(
     page: Page,

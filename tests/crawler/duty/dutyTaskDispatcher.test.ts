@@ -158,9 +158,9 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
     });
   });
 
-  describe('OTA_COLLECT_ORDER / OTA_IMPORT_ORDER 渠道身份透传 (MEITUAN_BIZ 别名路由)', () => {
-    it('should thread MEITUAN_BIZ task channel into collectUnhandledOrders and result otaChannelCode', async () => {
-      const taskPayload = { otaChannelCode: 'MEITUAN_BIZ' };
+  describe('OTA_COLLECT_ORDER / OTA_IMPORT_ORDER 渠道身份透传 (MEITUANBIZ 别名路由)', () => {
+    it('should thread MEITUANBIZ task channel into collectUnhandledOrders and result otaChannelCode', async () => {
+      const taskPayload = { otaChannelCode: 'MEITUANBIZ' };
       const task: DutyClaimedTask = {
         id: 'task-coll-biz',
         businessId: 'biz-coll-biz',
@@ -175,18 +175,18 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
 
       expect(result.status).toBe('SUCCEEDED');
       // 任务渠道身份必须透传至 Runner 采集调用（用于选用商旅过滤规则）
-      expect(runner.collectChannelIds).toEqual(['MEITUAN_BIZ']);
+      expect(runner.collectChannelIds).toEqual(['MEITUANBIZ']);
       // 采集回执必须携带任务真实渠道而非 Runner 主渠道
-      expect(result.result?.otaChannelCode).toBe('MEITUAN_BIZ');
+      expect(result.result?.otaChannelCode).toBe('MEITUANBIZ');
     });
 
-    it('should tag imported order with otaChannel MEITUAN_BIZ when task channel is meituan_biz', async () => {
+    it('should tag imported order with otaChannel MEITUANBIZ when task channel is meituanbiz', async () => {
       const importSpy = vi.spyOn(dutyRuntimeApi, 'importToolkitOrder').mockResolvedValue({
         success: true,
         pmsOrderId: 'PMS-BIZ-100',
       });
 
-      const taskPayload = { channel: 'meituan_biz', otaOrderId: 'OTA-BIZ-77', unitId: 'HOTEL-U1' };
+      const taskPayload = { channel: 'meituanbiz', otaOrderId: 'OTA-BIZ-77', unitId: 'HOTEL-U1' };
       const task: DutyClaimedTask = {
         id: 'task-imp-biz',
         businessId: 'OTA-BIZ-77',
@@ -201,11 +201,11 @@ describe('dutyTaskDispatcher (Top-Level Multi-Channel Task Orchestration)', () =
 
       expect(result.status).toBe('SUCCEEDED');
       expect(importSpy).toHaveBeenCalledTimes(1);
-      // 协议清洗必须以任务渠道身份透传：商旅单 otaChannel 落 MEITUAN_BIZ，而非 Runner 主渠道 MEITUAN
+      // 协议清洗必须以任务渠道身份透传：商旅单 otaChannel 落 MEITUANBIZ，而非 Runner 主渠道 MEITUAN
       const importPayload = importSpy.mock.calls[0][0] as {
         orders: Array<{ otaChannel: string; otaOrderId: string }>;
       };
-      expect(importPayload.orders[0].otaChannel).toBe('MEITUAN_BIZ');
+      expect(importPayload.orders[0].otaChannel).toBe('MEITUANBIZ');
       expect(importPayload.orders[0].otaOrderId).toBe('ORD-1');
     });
   });

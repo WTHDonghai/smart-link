@@ -34,13 +34,13 @@ export function normalizeRemoteHotelMapping(
       ''
   ).trim().toUpperCase();
 
-  // 规范化渠道代码与统一渠道 ID（支持 MEITUAN、MEITUAN_BIZ、DOUYIN 等主流渠道识别）
+  // 规范化渠道代码与统一渠道 ID（支持 MEITUAN、MEITUANBIZ、DOUYIN 等主流渠道识别）
   let otaChannelCode = rawChannelCode;
   let otaChannelId = rawChannelCode.toLowerCase();
 
   const stripped = rawChannelCode.replace(/[-_]/g, '');
   if (stripped === 'MEITUANBIZ' || stripped === 'MEITUANBUSINESS' || stripped === 'MTBIZ') {
-    otaChannelCode = 'MEITUAN_BIZ';
+    otaChannelCode = 'MEITUANBIZ';
     otaChannelId = 'meituanbiz';
   } else if (stripped === 'MEITUAN' || stripped === 'MEITUANHOTEL' || stripped === 'MT') {
     otaChannelCode = 'MEITUAN';

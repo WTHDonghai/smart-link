@@ -80,7 +80,7 @@ export async function setConfirmImportEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
- * 推送商旅分流开关至主进程（用户是否配置 MEITUAN_BIZ 渠道映射决定）：
+ * 推送商旅分流开关至主进程（用户是否配置 MEITUANBIZ 渠道映射决定）：
  * 关闭时 MEITUAN 值守不做商旅分流过滤，开启时双侧互斥分流
  */
 export async function setMeituanBizSplitEnabled(enabled: boolean): Promise<void> {

@@ -29,7 +29,7 @@ export interface ExtractMeituanOrdersOptions {
 
 export interface ParseMeituanOrderOptions extends ExtractMeituanOrdersOptions {
   onFilterResult?: (result: OrderFilterResult) => void;
-  /** 过滤规则选用的渠道身份（MEITUAN 散客 / MEITUAN_BIZ 商旅），缺省为 MEITUAN */
+  /** 过滤规则选用的渠道身份（MEITUAN 散客 / MEITUANBIZ 商旅），缺省为 MEITUAN */
   filterChannelId?: string;
 }
 

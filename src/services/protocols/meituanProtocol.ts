@@ -588,7 +588,7 @@ export const DEFAULT_MEITUAN_PROTOCOL_SCHEMA: ChannelProtocolSchema = {
   ],
 };
 
-/** 美团订单协议实现类 (实现 IChannelOrderProtocol)；channelCode 支持美团系渠道身份透传 (MEITUAN / MEITUAN_BIZ) */
+/** 美团订单协议实现类 (实现 IChannelOrderProtocol)；channelCode 支持美团系渠道身份透传 (MEITUAN / MEITUANBIZ) */
 export class MeituanOrderProtocol implements IChannelOrderProtocol {
   constructor(
     public readonly context: CleanOrderContext,
