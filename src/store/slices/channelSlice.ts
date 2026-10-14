@@ -13,6 +13,7 @@ import {
   saveChannelMappingsBatch,
   saveChannelRemarkTemplate,
   fetchChannelRemarkTemplate,
+  deleteChannelMapping,
 } from '../../services/channelApi';
 import {
   DEFAULT_MEITUAN_PROTOCOL_SCHEMA,
@@ -245,6 +246,8 @@ export interface ChannelState {
   isLoading: boolean;
   isSaving: boolean;
   savingChannelId: string | null;
+  isDeleting: boolean;
+  deletingChannelId: string | null;
   error: string | null;
   selectedChannelForTemplate: string | null;
   isSavingTemplate: boolean;
@@ -266,6 +269,8 @@ const initialState: ChannelState = {
   isLoading: false,
   isSaving: false,
   savingChannelId: null,
+  isDeleting: false,
+  deletingChannelId: null,
   error: null,
   channels: createInitialChannels(),
   isSavingTemplate: false,
@@ -352,6 +357,31 @@ export const saveChannelMapping = createAsyncThunk<
       message: res.message,
       mappingId: returnedMappingId,
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return rejectWithValue(message);
+  }
+});
+
+// 异步 Thunk：删除渠道映射 (DELETE /toolkit/channel-mappings/{id})
+export const deleteChannelMappingThunk = createAsyncThunk<
+  { channelId: string },
+  { channelId: string; mappingId?: string },
+  { rejectValue: string }
+>('channel/deleteChannelMapping', async (param, { dispatch, rejectWithValue }) => {
+  try {
+    // 映射已持久化至服务端时先真实调用远端删除，失败立即阻断，绝不本地假删
+    if (param.mappingId) {
+      await deleteChannelMapping(param.mappingId);
+    }
+
+    // 远端删除成功后移除本地渠道行与映射缓存
+    dispatch(removeChannel(param.channelId));
+
+    // 映射集已变更：重拉全量映射以同步 Redux 状态与商旅分流开关
+    void dispatch(fetchChannelMappingData());
+
+    return { channelId: param.channelId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return rejectWithValue(message);
@@ -759,6 +789,22 @@ export const channelSlice = createSlice({
         state.isSaving = false;
         state.savingChannelId = null;
         state.error = action.payload || action.error.message || '保存渠道映射失败';
+      })
+
+      // deleteChannelMappingThunk
+      .addCase(deleteChannelMappingThunk.pending, (state, action) => {
+        state.isDeleting = true;
+        state.deletingChannelId = action.meta.arg.channelId;
+        state.error = null;
+      })
+      .addCase(deleteChannelMappingThunk.fulfilled, (state) => {
+        state.isDeleting = false;
+        state.deletingChannelId = null;
+      })
+      .addCase(deleteChannelMappingThunk.rejected, (state, action) => {
+        state.isDeleting = false;
+        state.deletingChannelId = null;
+        state.error = action.payload || action.error.message || '删除渠道映射失败';
       })
 
       // saveRemarkTemplateAsync
