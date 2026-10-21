@@ -1,5 +1,6 @@
 import type { Page, Locator, FrameLocator } from 'playwright';
 import { logger } from '@/src/services/logger';
+import { serializeDouyinOriginalError } from '@/src/utils/douyinRiskDiagnostics';
 import { updateVisualTrackerStatus, visualClickLocator } from '@/src/crawler/visualTracker';
 import {
   DouyinDutyErrorCode,
@@ -12,12 +13,11 @@ import {
   humanDelay,
   isElementVisible,
 } from '../../dutyTimingConfig';
-import { assertNoDouyinPageRisk } from './douyinRiskGuard';
+import { assertNoDouyinPageRisk, assertNoDouyinResponseRisk, recordDouyinResponseFailure } from './douyinRiskGuard';
 import { dismissDouyinNoticeModals } from './douyinModalGuard';
 import { getDouyinOrderScope, locateDouyinOrderCard } from './douyinCardLocator';
 import {
   isDouyinOrderDetailUrl,
-  isDouyinRiskControlText,
   isDouyinSecretNumUrl,
   parseDouyinSecretNumResponse,
   DOUYIN_REVEAL_PHONE_SELECTOR,
@@ -52,15 +52,11 @@ function parseDouyinDetailPayload(text: string, cleanOrderId: string): Record<st
     throw new Error('详情接口响应体为空');
   }
 
-  if (isDouyinRiskControlText(text)) {
-    throw new Error('详情接口报文命中安全验证/风控特征');
-  }
-
   let json: Record<string, unknown>;
   try {
     json = JSON.parse(text);
   } catch (err) {
-    throw new Error(`详情响应 JSON 反序列化失败: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`详情响应 JSON 反序列化失败: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 
   if (!json || typeof json !== 'object') {
@@ -91,7 +87,7 @@ export class DouyinDetailInspector {
     otaOrderId: string,
     options: DouyinDetailInspectorOptions
   ): Promise<Record<string, unknown>> {
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, '详情采集入口');
 
     const cleanOrderId = String(otaOrderId || '').trim();
     if (!cleanOrderId) {
@@ -133,11 +129,12 @@ export class DouyinDetailInspector {
         response = await detailResponsePromise;
       } catch (err) {
         if (err instanceof DutyExecutionError) throw err;
-        await assertNoDouyinPageRisk(page);
+        await assertNoDouyinPageRisk(page, '详情响应等待失败', err);
         throw new DutyExecutionError(
           `抖音订单「${cleanOrderId}」详情网络响应超时或未捕获到原始报文（诊断原因: ${err instanceof Error ? err.message : String(err)}）`,
           DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
-          true
+          true,
+          { cause: err }
         );
       }
 
@@ -150,7 +147,21 @@ export class DouyinDetailInspector {
           httpStatus: response.status(),
           apiUrl: response.url(),
         });
-        await assertNoDouyinPageRisk(page);
+        const errorBody = await response.text().catch((error: unknown) => {
+          throw new DutyExecutionError(
+            `抖音详情接口返回 HTTP ${response.status()}，响应体读取失败: ${error instanceof Error ? error.message : String(error)}`,
+            DouyinDutyErrorCode.ORDER_DETAIL_HTTP_ERROR,
+            false,
+            { cause: error }
+          );
+        });
+        assertNoDouyinResponseRisk(errorBody, {
+          apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+        }, '详情接口 HTTP 异常');
+        recordDouyinResponseFailure(errorBody, {
+          apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+        }, '详情接口 HTTP 异常');
+        await assertNoDouyinPageRisk(page, '详情接口 HTTP 异常');
         throw new DutyExecutionError(
           `抖音订单「${cleanOrderId}」详情接口返回异常 HTTP 状态码: ${response.status()}`,
           DouyinDutyErrorCode.ORDER_DETAIL_HTTP_ERROR,
@@ -159,22 +170,34 @@ export class DouyinDetailInspector {
       }
 
       // 6. 反序列化与业务校验
+      let responseText: string | undefined;
       try {
         const text = await response.text().catch((err) => {
-          throw new Error(`读取响应文本失败: ${err instanceof Error ? err.message : String(err)}`);
+          throw new Error(`读取响应文本失败: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
         });
+        responseText = text;
+        assertNoDouyinResponseRisk(text, {
+          apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+        }, '详情接口报文检查');
         rawDetail = parseDouyinDetailPayload(text, cleanOrderId);
       } catch (err) {
+        if (err instanceof DutyExecutionError && err.errorCode === DouyinDutyErrorCode.RISK_VERIFICATION_REQUIRED) throw err;
+        if (responseText !== undefined) {
+          recordDouyinResponseFailure(responseText, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+          }, '详情报文解析失败', err);
+        }
         logger.error(`[抖音详情] 订单「${cleanOrderId}」详情解析失败: ${err instanceof Error ? err.message : String(err)}`, {
           module: 'DUTY_TASK',
           channelId: 'DOUYIN',
           orderNo: cleanOrderId,
         });
-        await assertNoDouyinPageRisk(page);
+        await assertNoDouyinPageRisk(page, '详情报文解析失败', err);
         throw new DutyExecutionError(
           `抖音订单「${cleanOrderId}」详情解析失败（诊断原因: ${err instanceof Error ? err.message : String(err)}）`,
           DouyinDutyErrorCode.ORDER_DETAIL_FIELD_MISSING,
-          false
+          false,
+          { cause: err }
         );
       }
 
@@ -216,7 +239,8 @@ export class DouyinDetailInspector {
         throw new DutyExecutionError(
           `抖音订单「${cleanOrderId}」详情响应等待超时：等待窗口内未捕获到包含目标单号的详情报文（诊断原因: ${err instanceof Error ? err.message : String(err)}）`,
           DouyinDutyErrorCode.ORDER_DETAIL_TIMEOUT,
-          true
+          true,
+          { cause: err }
         );
       }
 
@@ -225,7 +249,9 @@ export class DouyinDetailInspector {
         return response;
       }
 
-      const text = await response.text().catch(() => '');
+      const text = await response.text().catch((error: unknown) => {
+        throw new DutyExecutionError('抖音详情响应体读取失败', DouyinDutyErrorCode.ORDER_DETAIL_FIELD_MISSING, false, { cause: error });
+      });
       if (text && text.includes(cleanOrderId)) {
         return response;
       }
@@ -238,7 +264,10 @@ export class DouyinDetailInspector {
             return response;
           }
         } catch {
-          // 非 JSON 文本按非目标响应处理，交出循环丢弃
+          // 验证页可能不含目标单号，记录实际内容；其他非 JSON 响应继续按非目标处理。
+          assertNoDouyinResponseRisk(text, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+          }, '详情非 JSON 响应');
         }
       }
 
@@ -283,7 +312,7 @@ export class DouyinDetailInspector {
     }
 
     if (!orderCard || !await isElementVisible(orderCard, ACTION_TIMEOUT.QUICK_ACTION)) {
-      await assertNoDouyinPageRisk(page);
+      await assertNoDouyinPageRisk(page, '详情订单卡片未找到');
       throw new DutyExecutionError(
         `待处理列表中未找到抖音订单「${cleanOrderId}」卡片，订单可能已被处理或取消`,
         DouyinDutyErrorCode.ORDER_CARD_NOT_FOUND,
@@ -332,7 +361,13 @@ export class DouyinDetailInspector {
               (res) => isDouyinSecretNumUrl(res.url()) && res.status() === 200,
               { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
             )
-            .catch(() => null)
+            .catch((error: unknown) => {
+              logger.warn('抖音隐私号接口等待失败，原始异常已记录', {
+                module: 'DUTY_TASK', channelId: 'DOUYIN', orderNo: cleanOrderId,
+                meta: { originalError: serializeDouyinOriginalError(error) },
+              });
+              return null;
+            })
         : Promise.resolve(null);
 
       // 3. 拟人化点击电话图标
@@ -350,10 +385,11 @@ export class DouyinDetailInspector {
         return rawDetail;
       }
 
-      const responseText = await secretResponse.text().catch(() => '');
-      if (!responseText || isDouyinRiskControlText(responseText)) {
-        return rawDetail;
-      }
+      const responseText = await secretResponse.text();
+      assertNoDouyinResponseRisk(responseText, {
+        apiUrl: secretResponse.url(), httpStatus: secretResponse.status(), method: secretResponse.request().method(),
+      }, '隐私号接口响应');
+      if (!responseText) return rawDetail;
 
       const decryptedPhone = parseDouyinSecretNumResponse(responseText);
       if (decryptedPhone) {
@@ -402,10 +438,12 @@ export class DouyinDetailInspector {
         return resultDetail;
       }
     } catch (err) {
+      if (err instanceof DutyExecutionError && err.errorCode === DouyinDutyErrorCode.RISK_VERIFICATION_REQUIRED) throw err;
       logger.warn(`[抖音详情] 订单「${cleanOrderId}」尝试获取联系电话异常: ${err instanceof Error ? err.message : String(err)}`, {
         module: 'DUTY_TASK',
         channelId: 'DOUYIN',
         orderNo: cleanOrderId,
+        meta: { originalError: serializeDouyinOriginalError(err) },
       });
     } finally {
       await dismissDouyinNoticeModals(page, scope).catch(() => false);

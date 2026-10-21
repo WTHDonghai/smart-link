@@ -150,7 +150,9 @@ function createMockEnvironment(options: MockPageOptions = {}) {
   const mockPage = {
     url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
     frames: () => [],
-    evaluate: vi.fn().mockResolvedValue(Boolean(options.riskDetected)),
+    evaluate: vi.fn().mockResolvedValue(options.riskDetected
+      ? { source: 'body', matched: '验证码', snippet: '验证码' }
+      : null),
     keyboard: mockKeyboard,
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     mouse: {

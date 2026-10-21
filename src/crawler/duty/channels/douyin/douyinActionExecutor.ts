@@ -51,7 +51,7 @@ export class DouyinActionExecutor {
     otaOrderId: string,
     options: DouyinActionExecutorOptions
   ): Promise<DutyActionVerificationResult | void> {
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, '确认号回填入口');
 
     const cleanConfirmNo = String(confirmNo || '').trim();
     if (!cleanConfirmNo) {
@@ -82,7 +82,7 @@ export class DouyinActionExecutor {
     }
 
     if (!orderCard || !await isElementVisible(orderCard, ACTION_TIMEOUT.QUICK_ACTION)) {
-      await assertNoDouyinPageRisk(page);
+      await assertNoDouyinPageRisk(page, '回填订单卡片未找到');
       throw new DutyExecutionError(
         `未找到抖音订单「${cleanOrderId}」卡片，无法回填确认号`,
         DouyinDutyErrorCode.ORDER_CARD_NOT_FOUND,
@@ -376,7 +376,7 @@ export class DouyinActionExecutor {
     }
     const cleanOrderId = otaOrderId.trim();
 
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, '取消确认入口');
 
     await updateVisualTrackerStatus(
       page,

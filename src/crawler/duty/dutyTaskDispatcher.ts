@@ -6,7 +6,9 @@ import type {
 import type {
   IChannelOrderProtocol,
 } from '../../types/template';
-import { parseDutyTaskContext, isRiskControlError, type ParsedDutyTaskContext } from './dutyTaskContext';
+import { parseDutyTaskContext, isRiskControlError, RISK_CONTROL_PATTERN, type ParsedDutyTaskContext } from './dutyTaskContext';
+import type { DouyinExceptionRiskEvidence } from '@/src/types/douyinRisk';
+import { douyinRiskSnippet, serializeDouyinOriginalError } from '@/src/utils/douyinRiskDiagnostics';
 import { createTaskLogger } from './dutyTaskLogger';
 import { importToolkitOrder } from '../../services/dutyRuntimeApi';
 import { cleanChannelOrder } from '../../services/protocols';
@@ -89,6 +91,35 @@ export async function dispatchDutyTask(
     recordLog
   );
 
+  // 原始异常与人性化提示分开存储；守卫已有来源证据时不再二次归类。
+  const riskErrorMessage = (err: unknown, message: string, isRisk: boolean): string => {
+    if (runner.channelCode !== 'DOUYIN') return message;
+    const originalError = serializeDouyinOriginalError(err);
+    taskLogger.log({
+      level: 'ERROR', event: 'DOUYIN_TASK_EXECUTION_ERROR',
+      message: '抖音任务执行失败，原始异常已记录',
+      details: JSON.stringify(originalError), meta: { originalError },
+    });
+    if (!isRisk) return message;
+    const candidate = typeof err === 'object' && err !== null ? err as Record<string, unknown> : { message };
+    if (candidate.riskEvidence) return message;
+    const field = ['message', 'name', 'errorMessage', 'errorCode', 'code', 'details']
+      .find((key) => typeof candidate[key] === 'string' && RISK_CONTROL_PATTERN.test(candidate[key]));
+    if (!field) return message;
+    const text = String(candidate[field]);
+    const match = RISK_CONTROL_PATTERN.exec(text)!;
+    const riskEvidence: DouyinExceptionRiskEvidence = {
+      origin: 'exception',
+      match: { source: 'exception-text', fieldPath: field, matched: match[0], snippet: douyinRiskSnippet(text, match.index) },
+    };
+    taskLogger.log({
+      level: 'ERROR', event: 'DOUYIN_RISK_CONTROL_MATCHED',
+      message: '抖音异常文本命中风控关键词，未确认页面或接口来源',
+      details: JSON.stringify(riskEvidence), meta: { riskEvidence, originalError },
+    });
+    return `${message}；异常文本归类，未确认页面或接口来源；命中信息：${JSON.stringify(riskEvidence)}`;
+  };
+
   switch (task.msgType) {
     case 'OTA_COLLECT_ORDER': {
       try {
@@ -106,8 +137,8 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const errMsg = riskErrorMessage(err, err instanceof Error ? err.message : String(err), isRisk);
         const customCode = (err as { errorCode?: string })?.errorCode;
         const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {
@@ -134,8 +165,8 @@ export async function dispatchDutyTask(
       try {
         rawDetail = await runner.inspectOrderDetail(orderId);
       } catch (inspectErr) {
-        const errMsg = inspectErr instanceof Error ? inspectErr.message : String(inspectErr);
         const isRisk = isRiskControlError(inspectErr);
+        const errMsg = riskErrorMessage(inspectErr, inspectErr instanceof Error ? inspectErr.message : String(inspectErr), isRisk);
         const customCode = (inspectErr as { errorCode?: string })?.errorCode;
         const customRetryable = (inspectErr as { retryable?: boolean })?.retryable;
         return {
@@ -255,8 +286,8 @@ export async function dispatchDutyTask(
           },
         };
       } catch (importErr) {
-        const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
         const isRisk = isRiskControlError(importErr);
+        const errMsg = riskErrorMessage(importErr, importErr instanceof Error ? importErr.message : String(importErr), isRisk);
         const customCode = (importErr as { errorCode?: string })?.errorCode;
         const customRetryable = (importErr as { retryable?: boolean })?.retryable;
 
@@ -335,8 +366,8 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const errMsg = riskErrorMessage(err, err instanceof Error ? err.message : String(err), isRisk);
         const customCode = (err as { errorCode?: string })?.errorCode;
         const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {
@@ -378,8 +409,8 @@ export async function dispatchDutyTask(
           },
         };
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
         const isRisk = isRiskControlError(err);
+        const errMsg = riskErrorMessage(err, err instanceof Error ? err.message : String(err), isRisk);
         const customCode = (err as { errorCode?: string })?.errorCode;
         const customRetryable = (err as { retryable?: boolean })?.retryable;
         return {

@@ -21,7 +21,7 @@ import {
   humanDelay,
   getScaledTimeout,
 } from '../../dutyTimingConfig';
-import { assertNoDouyinPageRisk } from './douyinRiskGuard';
+import { assertNoDouyinPageRisk, assertNoDouyinResponseRisk, recordDouyinResponseFailure } from './douyinRiskGuard';
 import { dismissDouyinNoticeModals, clickWithModalBypass } from './douyinModalGuard';
 
 export const TAB_TEXT_NEW = '新订/变更';
@@ -84,6 +84,20 @@ export async function waitForDouyinListResponse(
       { timeout: getScaledTimeout(DOUYIN_API_RESPONSE_TIMEOUT_MS) }
     );
     if (response.status() !== 200) {
+      const text = await response.text().catch((error: unknown) => {
+        throw new DutyExecutionError(
+          `抖音「${phase}」列表接口返回 HTTP ${response.status()}，响应体读取失败: ${error instanceof Error ? error.message : String(error)}`,
+          DouyinDutyErrorCode.LIST_HTTP_ERROR,
+          false,
+          { cause: error }
+        );
+      });
+      assertNoDouyinResponseRisk(text, {
+        apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+      }, `列表接口 HTTP 异常：${phase}`);
+      recordDouyinResponseFailure(text, {
+        apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+      }, `列表接口 HTTP 异常：${phase}`);
       throw new DutyExecutionError(
         `抖音「${phase}」列表接口返回 HTTP ${response.status()}: ${response.url()}`,
         DouyinDutyErrorCode.LIST_HTTP_ERROR,
@@ -93,7 +107,7 @@ export async function waitForDouyinListResponse(
     return response;
   } catch (error) {
     if (error instanceof DutyExecutionError) throw error;
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, `列表响应等待失败：${phase}`, error);
 
     const statusDetail = typeof lastObservedStatus === 'number'
       ? `（接口曾返回 HTTP ${lastObservedStatus}）`
@@ -106,7 +120,8 @@ export async function waitForDouyinListResponse(
     throw new DutyExecutionError(
       `抖音「${phase}」列表响应超时或异常: ${error instanceof Error ? error.message : String(error)} ${statusDetail}`,
       DouyinDutyErrorCode.LIST_RESPONSE_TIMEOUT,
-      true
+      true,
+      { cause: error }
     );
   } finally {
     if (canObserveRequests) {
@@ -146,18 +161,19 @@ export class DouyinListCollector {
     const responsePromise = waitForDouyinListResponse(page, isTargetUrl, tabText);
 
     try {
-      await assertNoDouyinPageRisk(page);
+      await assertNoDouyinPageRisk(page, `列表 Tab 点击前：${tabText}`);
       await dismissDouyinNoticeModals(page);
 
       const tabLocator = this.getTabLocator(page, tabText);
       try {
         await tabLocator.waitFor({ state: 'visible', timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) });
       } catch (error) {
-        await assertNoDouyinPageRisk(page);
+        await assertNoDouyinPageRisk(page, `列表 Tab 等待失败：${tabText}`, error);
         throw new DutyExecutionError(
           `未找到可用的「${tabText}」Tab: ${error instanceof Error ? error.message : String(error)}`,
           DouyinDutyErrorCode.LIST_TRIGGER_UNAVAILABLE,
-          false
+          false,
+          { cause: error }
         );
       }
 
@@ -238,7 +254,7 @@ export class DouyinListCollector {
     refreshFn: (page: Page, status: DutyOrderStatus) => Promise<Response> = (p, s) => this.refreshOrderList(p, s),
     audit?: DutyTaskLogSink
   ): Promise<DutyUnhandledOrderSummary[]> {
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, `采集入口：${orderStatus}`);
 
     // 1. 在途请求合并门禁 (Request Coalescing)：若已有正在刷新的在途 Promise，直接复用其结果
     if (this.inFlightListPromise) {
@@ -257,23 +273,42 @@ export class DouyinListCollector {
 
       // 3. 在互斥锁保护下执行单页面 Tab 交互与网络拦截
       return await runWithMutex(async () => {
-        await assertNoDouyinPageRisk(page);
+        await assertNoDouyinPageRisk(page, `采集获得页面锁：${orderStatus}`);
 
         const tabLabel = orderStatus === DutyOrderStatus.CANCEL ? TAB_TEXT_CANCEL : TAB_TEXT_NEW;
         await updateVisualTrackerStatus(page, `📥 正在执行订单采集并刷新抖音「${tabLabel}」列表...`, 'action');
 
         // 4. 调用底层 Page Action 获取权威网络响应
         const response = await refreshFn(page, orderStatus);
-        const text = await response.text().catch(() => '');
+        const text = await response.text().catch((error: unknown) => {
+          throw new DutyExecutionError('抖音列表接口响应体读取失败', DouyinDutyErrorCode.LIST_BUSINESS_FAILED, false, { cause: error });
+        });
         let parsedPayload: unknown;
         try {
           parsedPayload = JSON.parse(text);
-        } catch {
+        } catch (error) {
+          assertNoDouyinResponseRisk(text, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+          }, `列表响应非 JSON：${tabLabel}`);
+          recordDouyinResponseFailure(text, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+          }, `列表响应非 JSON：${tabLabel}`, error);
           throw new DutyExecutionError(
             `抖音「${tabLabel}」列表响应非合法 JSON`,
             DouyinDutyErrorCode.LIST_BUSINESS_FAILED,
-            false
+            false,
+            { cause: error }
           );
+        }
+
+        // 仅在业务状态失败时检查列表响应，避免正常订单备注中的词扩大拦截范围。
+        if (parsedPayload && typeof parsedPayload === 'object' && (parsedPayload as Record<string, unknown>).status_code !== 0) {
+          assertNoDouyinResponseRisk(text, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+          }, `列表业务状态异常：${tabLabel}`, 'status_msg');
+          recordDouyinResponseFailure(text, {
+            apiUrl: response.url(), httpStatus: response.status(), method: response.request().method(),
+          }, `列表业务状态异常：${tabLabel}`);
         }
 
         // 5. 业务解析归集

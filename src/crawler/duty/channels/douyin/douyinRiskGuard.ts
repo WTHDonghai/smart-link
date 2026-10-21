@@ -1,72 +1,169 @@
-import type { Page, Frame } from 'playwright';
+import type { Page } from 'playwright';
+import type { DouyinPageRiskEvidence, DouyinResponseRiskContext, DouyinRiskEvidence, DouyinRiskMatch } from '@/src/types/douyinRisk';
+import { findDouyinResponseRisk, redactDouyinDiagnosticText, redactDouyinDiagnosticUrl, serializeDouyinOriginalError } from '@/src/utils/douyinRiskDiagnostics';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+import { logger } from '@/src/services/logger';
 import { DutyExecutionError, DouyinDutyErrorCode } from './douyinDutyContracts';
 
-/**
- * 页面级风控门禁断言器：若检测到人机验证/滑块/风控，立即更新 VisualTracker 并抛出结构化不可重试错误
- */
-export async function assertNoDouyinPageRisk(page: Page): Promise<void> {
-  if (await checkDouyinPageRisk(page)) {
-    await updateVisualTrackerStatus(page, '⚠️ 抖音提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
-    throw new DutyExecutionError(
-      '抖音页面提示安全验证或操作频繁，需要人工在浏览器中完成验证',
-      DouyinDutyErrorCode.RISK_VERIFICATION_REQUIRED,
-      false
-    );
-  }
+/** 命中证据随错误文案经过现有调度与回执链路，不改变 ackData 契约。 */
+function throwDouyinRisk(riskEvidence: DouyinRiskEvidence, checkpoint: string, originalError?: unknown, rawResponse?: string): never {
+  const details = JSON.stringify({ checkpoint, ...riskEvidence });
+  const description = riskEvidence.origin === 'page'
+    ? '抖音页面提示安全验证或操作频繁，需要人工在浏览器中完成验证；页面特征命中'
+    : '抖音接口响应特征命中安全验证或操作频繁，已停止当前操作';
+  const error = new DutyExecutionError(
+    `${description}；命中信息：${details}`,
+    DouyinDutyErrorCode.RISK_VERIFICATION_REQUIRED,
+    false
+  );
+  Object.assign(error, { riskEvidence });
+  if (originalError !== undefined) error.cause = originalError;
+  const original = originalError === undefined ? undefined : serializeDouyinOriginalError(originalError);
+  logger.track('DOUYIN_RISK_CONTROL_MATCHED', {
+    level: 'ERROR',
+    module: 'DUTY_TASK',
+    channelId: 'DOUYIN',
+    message: description,
+    details: JSON.stringify({
+      checkpoint, ...riskEvidence, originalError: original,
+    }),
+    ...(riskEvidence.origin === 'api-response' ? {
+      apiUrl: riskEvidence.apiUrl, apiMethod: riskEvidence.method, httpStatus: riskEvidence.httpStatus,
+      apiResponse: rawResponse === undefined ? undefined : redactDouyinDiagnosticText(rawResponse),
+    } : {}),
+    meta: {
+      checkpoint, riskEvidence, stack: error.stack, originalError: original,
+    },
+  });
+  throw error;
 }
 
-/**
- * 页面级人机验证、滑块与风控拦截嗅探函数（跨顶层与所有子 Frame 深度检测）
- */
+export async function assertNoDouyinPageRisk(page: Page, checkpoint = '页面风控检查', originalError?: unknown): Promise<void> {
+  const riskEvidence = await findDouyinPageRisk(page);
+  if (!riskEvidence) return;
+  await updateVisualTrackerStatus(page, '⚠️ 抖音提示安全验证/滑块，需要人工在浏览器中完成验证', 'warn');
+  throwDouyinRisk(riskEvidence, checkpoint, originalError);
+}
+
+/** 调用方已确定需要检查的响应范围；正常列表业务数据不因备注中的词新增拦截。 */
+export function assertNoDouyinResponseRisk(
+  text: string, context: DouyinResponseRiskContext, checkpoint: string, field: 'body' | 'status_msg' = 'body'
+): void {
+  const riskEvidence = findDouyinResponseRisk(text, context, field);
+  if (riskEvidence) throwDouyinRisk(riskEvidence, checkpoint, undefined, text);
+}
+
+/** 非风控接口错误同样保留报文，便于定位真实业务失败，不伪造风控证据。 */
+export function recordDouyinResponseFailure(
+  text: string, context: DouyinResponseRiskContext, checkpoint: string, error?: unknown
+): void {
+  const originalError = error === undefined ? undefined : serializeDouyinOriginalError(error);
+  logger.track('DOUYIN_API_RESPONSE_FAILED', {
+    level: 'ERROR', module: 'DUTY_TASK', channelId: 'DOUYIN',
+    message: '抖音接口处理失败，原始响应已记录',
+    apiUrl: redactDouyinDiagnosticUrl(context.apiUrl), apiMethod: context.method, httpStatus: context.httpStatus,
+    apiResponse: redactDouyinDiagnosticText(text),
+    details: JSON.stringify({ checkpoint, originalError }),
+    meta: { checkpoint, originalError },
+  });
+}
+
+/** 保留现有布尔探测接口；断言与证据采集只执行同一轮页面检查。 */
 export async function checkDouyinPageRisk(page: Page): Promise<boolean> {
-  if (!page) return false;
+  return (await findDouyinPageRisk(page)) !== null;
+}
+
+/** 检查顺序与原门禁一致：主页面 URL → 每个 Frame 的 URL、DOM、文本。 */
+async function findDouyinPageRisk(page: Page): Promise<DouyinPageRiskEvidence | null> {
+  if (!page) return null;
   try {
-    // 1. 检查页面 URL 本身是否包含风控/验证重定向
     const pageUrl = typeof page.url === 'function' ? page.url() : '';
-    if (pageUrl && /(?:verify|captcha|secsdk)\.douyin\.com|secsdk|captcha/i.test(pageUrl)) {
-      return true;
+    const urlPattern = /(?:verify|captcha|secsdk)\.douyin\.com|secsdk|captcha/i;
+    const pageUrlMatch = pageUrl.match(urlPattern);
+    if (pageUrlMatch) {
+      return {
+        origin: 'page',
+        pageUrl: redactDouyinDiagnosticUrl(pageUrl),
+        frameUrl: redactDouyinDiagnosticUrl(pageUrl),
+        frameIndex: null,
+        match: { source: 'page-url', matched: pageUrlMatch[0] },
+      };
     }
 
-    // 2. 检查顶层及所有子 Frame
     const rawFrames = typeof page.frames === 'function' ? page.frames() : [];
-    const frames = rawFrames.length > 0 ? rawFrames : [page as unknown as Frame];
-    for (const frame of frames) {
+    const frames = rawFrames.length > 0 ? rawFrames : [page];
+    for (const [frameIndex, frame] of frames.entries()) {
+      let frameUrl = '';
       try {
-        const frameUrl = typeof frame.url === 'function' ? frame.url() : '';
-        if (frameUrl && /(?:verify|captcha|secsdk)\.douyin\.com|secsdk|captcha/i.test(frameUrl)) {
-          return true;
-        }
+        frameUrl = typeof frame.url === 'function' ? frame.url() : '';
       } catch {
-        // 忽略跨域或已销毁 frame
+        // Frame 已销毁时仍尝试 evaluate；导航竞争不改变原探测行为。
+      }
+      const frameUrlMatch = frameUrl.match(urlPattern);
+      if (frameUrlMatch) {
+        return {
+          origin: 'page',
+          pageUrl: redactDouyinDiagnosticUrl(pageUrl),
+          frameUrl: redactDouyinDiagnosticUrl(frameUrl),
+          frameIndex,
+          match: { source: 'frame-url', matched: frameUrlMatch[0] },
+        };
       }
 
-      if (typeof frame.evaluate === 'function') {
-        const riskFound = await frame.evaluate(() => {
-          // A. 检查风控 iframe、容器或滑块 DOM 节点
-          const hasCaptchaEl = Boolean(
-            document.querySelector(
-              'iframe[src*="captcha"], iframe[src*="verify"], iframe[src*="secsdk"], ' +
-              '#captcha-verify-image, .secsdk-captcha-drag-wrapper, .captcha-verify-container, ' +
-              'div[id*="captcha"], div[class*="captcha"], div[class*="secsdk"]'
-            )
-          );
-          if (hasCaptchaEl) return true;
+      if (typeof frame.evaluate !== 'function') continue;
+      const match = await frame.evaluate((): DouyinRiskMatch | null => {
+        const norm = (text: string | null | undefined): string => String(text || '').replace(/\s+/g, ' ').trim();
+        // 只采集命中附近短文本；隐去手机号、订单号等连续数字，不采集整页 HTML。
+        const snippet = (text: string): string => text.replace(/\d{6,}/g, '[数字已隐藏]').slice(0, 160);
+        const selectors = [
+          'iframe[src*="captcha"]', 'iframe[src*="verify"]', 'iframe[src*="secsdk"]',
+          '#captcha-verify-image', '.secsdk-captcha-drag-wrapper', '.captcha-verify-container',
+          'div[id*="captcha"]', 'div[class*="captcha"]', 'div[class*="secsdk"]',
+        ];
+        const element = document.querySelector(selectors.join(', '));
+        if (element) {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return {
+            source: 'dom',
+            selector: selectors.find((selector) => element.matches(selector))!,
+            tagName: element.tagName,
+            elementId: element.id.slice(0, 160),
+            className: (element.getAttribute('class') || '').slice(0, 160),
+            src: element.getAttribute('src')?.replace(/\?[^#]*/g, '?redacted').replace(/#.*/, '#redacted').slice(0, 500) ?? null,
+            // 记录布局尺寸与 visibility 判定的可见性，不作为拦截条件。
+            visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.visibility !== 'collapse',
+            snippet: snippet(norm(element.textContent)),
+          };
+        }
 
-          // B. 嗅探页面主体、标题与特征文本
-          const norm = (str: string | null | undefined) => String(str || '').replace(/\s+/g, ' ').trim();
-          const bodyText = norm(document.body ? document.body.innerText || document.body.textContent : '');
-          const title = norm(document.title);
-          const url = String(window.location.href || '');
-          const combined = `${title}\n${url}\n${bodyText.slice(0, 3000)}`;
-          return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|secsdk|captcha/i.test(combined);
-        }).catch(() => false);
+        const pattern = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|secsdk|captcha/i;
+        const title = norm(document.title);
+        const titleMatch = pattern.exec(title);
+        if (titleMatch) {
+          return { source: 'title', matched: titleMatch[0], snippet: snippet(title.slice(Math.max(0, titleMatch.index - 40))) };
+        }
+        const urlMatch = String(window.location.href || '').match(pattern);
+        if (urlMatch) return { source: 'url', matched: urlMatch[0] };
 
-        if (riskFound === true) return true;
+        const textSource = document.body?.innerText ? 'innerText' : 'textContent';
+        const bodyText = norm(document.body ? document.body.innerText || document.body.textContent : '').slice(0, 3000);
+        const bodyMatch = pattern.exec(bodyText);
+        return bodyMatch ? {
+          source: 'body',
+          textSource,
+          matched: bodyMatch[0],
+          snippet: snippet(bodyText.slice(Math.max(0, bodyMatch.index - 40))),
+        } : null;
+      }).catch(() => null);
+
+      if (match) {
+        return { origin: 'page', pageUrl: redactDouyinDiagnosticUrl(pageUrl), frameUrl: redactDouyinDiagnosticUrl(frameUrl), frameIndex, match };
       }
     }
-    return false;
+    return null;
   } catch {
-    return false;
+    // 保留原探测器对页面导航/销毁的处理；本次只增强命中诊断，不调整拦截策略。
+    return null;
   }
 }

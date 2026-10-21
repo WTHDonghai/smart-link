@@ -402,7 +402,7 @@ export class DutyOrchestrationEngine {
       });
 
       // 主渠道启动成功：商旅分流开启时联动激活别名渠道派生态（工位上报双目标，接受后台按渠道下发的任务）
-      const linkedAliases = this.linkAliasChannelsForPrimary(code);
+      this.linkAliasChannelsForPrimary(code);
 
       this.appendDutyLog({
         level: 'PLAYWRIGHT',
@@ -968,8 +968,8 @@ export class DutyOrchestrationEngine {
         level: 'WARN',
         event: 'DUTY_TASK_RISK_CONTROL_INTERCEPTED',
         taskActionStage: 'execute',
-        message: `[风控拦截熔断] 页面遭遇${channelLabel}安全验证/滑块/人机拦截，已自动熔断阻断机器重试`,
-        details: `渠道: ${targetChannel} | 请人工在浏览器窗口中完成验证`,
+        message: `[风控拦截熔断] ${channelLabel}任务命中安全校验相关规则，已阻断自动重试`,
+        details: `渠道: ${targetChannel} | ${execRes.errorMessage || '查看风控命中日志确认具体来源与内容'}`,
       });
     }
 

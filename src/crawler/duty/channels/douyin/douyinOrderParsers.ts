@@ -7,6 +7,7 @@ import {
   DutyExecutionError,
 } from './douyinDutyContracts';
 import { fmtDate } from '@/src/utils/template/filters';
+import { DOUYIN_RISK_TEXT_PATTERN } from '@/src/utils/douyinRiskDiagnostics';
 import { isDouyinVoucherOrder } from '@/src/services/protocols/douyinProtocol';
 
 export const DOUYIN_BOOK_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/book/query/list';
@@ -140,7 +141,7 @@ export function isDouyinOrderListUrl(url: string): boolean {
 export function isDouyinRiskControlText(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
   const norm = text.replace(/\s+/g, ' ').trim();
-  return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|secsdk|captcha/i.test(norm);
+  return DOUYIN_RISK_TEXT_PATTERN.test(norm);
 }
 
 /**

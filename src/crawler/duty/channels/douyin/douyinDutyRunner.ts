@@ -59,7 +59,7 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
   public async waitForPageReady(page: Page, options?: { timeout?: number }): Promise<void> {
     const timeout = options?.timeout ?? DEFAULT_DUTY_TIMING.action.PAGE_CONTAINER_READY;
 
-    await assertNoDouyinPageRisk(page);
+    await assertNoDouyinPageRisk(page, '页面就绪入口');
 
     await updateVisualTrackerStatus(page, '⏳ 正在等待抖音商家后台骨架与元素加载就绪...', 'action');
 
@@ -73,11 +73,12 @@ export class DouyinDutyRunner extends BaseChannelDutyRunner {
         await coreContainer.waitFor({ state: 'attached', timeout: getScaledTimeout(timeout) });
       }
     } catch (error) {
-      await assertNoDouyinPageRisk(page);
+      await assertNoDouyinPageRisk(page, '页面核心容器等待失败', error);
       throw new DutyExecutionError(
         `抖音商家后台页面元素加载超时 (${timeout}ms): ${error instanceof Error ? error.message : String(error)}`,
         DouyinDutyErrorCode.TARGET_PAGE_NOT_READY,
-        true
+        true,
+        { cause: error }
       );
     }
 

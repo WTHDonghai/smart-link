@@ -50,7 +50,10 @@ describe('douyinDutyRunner', () => {
         frames: () => [
           {
             url: () => 'https://life.douyin.com/frame1',
-            evaluate: async () => true,
+            evaluate: async () => ({
+              source: 'dom', selector: '.captcha-verify-container', tagName: 'DIV',
+              elementId: '', className: 'captcha-verify-container', src: null, visible: true, snippet: '',
+            }),
           },
         ],
       } as unknown as import('playwright').Page;
@@ -445,6 +448,7 @@ describe('douyinDutyRunner', () => {
             url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
             status: () => 500,
             request: () => ({ method: () => 'POST' }),
+            text: async () => 'Internal Server Error',
           } as unknown as PlaywrightResponse;
 
           if (predicate(mockRes)) {

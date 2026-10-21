@@ -66,8 +66,8 @@ export class DutyExecutionError extends Error {
   public readonly errorCode: string;
   public readonly retryable?: boolean;
 
-  constructor(message: string, errorCode: string, retryable?: boolean) {
-    super(message.includes(errorCode) ? message : `[${errorCode}] ${message}`);
+  constructor(message: string, errorCode: string, retryable?: boolean, options?: ErrorOptions) {
+    super(message.includes(errorCode) ? message : `[${errorCode}] ${message}`, options);
     this.name = 'DutyExecutionError';
     this.errorCode = errorCode;
     this.retryable = retryable;

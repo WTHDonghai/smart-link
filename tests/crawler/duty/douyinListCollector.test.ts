@@ -60,6 +60,7 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
         url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/list',
         status: () => 500,
         request: () => ({ method: () => 'POST' }),
+        text: async () => 'Internal Server Error',
       } as unknown as Response;
 
       const mockPage = {

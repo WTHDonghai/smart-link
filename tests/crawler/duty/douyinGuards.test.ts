@@ -70,7 +70,10 @@ describe('douyinGuards (Single Responsibility Principle & Benchmark against Meit
       const mockPage = {
         url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
         frames: () => [],
-        evaluate: vi.fn().mockResolvedValue(true),
+        evaluate: vi.fn().mockResolvedValue({
+          source: 'dom', selector: '.captcha-verify-container', tagName: 'DIV',
+          elementId: '', className: 'captcha-verify-container', src: null, visible: true, snippet: '',
+        }),
       } as unknown as Page;
 
       expect(await checkDouyinPageRisk(mockPage)).toBe(true);
