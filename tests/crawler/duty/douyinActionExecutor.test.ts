@@ -724,20 +724,26 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
     });
 
     it('should click orderCard, but throw CONFIRM_SUBMIT_NOT_FOUND if ack button is not visible', async () => {
-      const executor = new DouyinActionExecutor();
-      const { mockPage, mockCard, mockAckBtn } = createMockEnvironment({ ackBtnVisible: false });
+      // 压缩轮询预算（按钮有界轮询等待引入，预算默认 8s 会超出单测 5s 超时）
+      vi.stubEnv('SMARTLINK_TIMING_SCALE', '0.001');
+      try {
+        const executor = new DouyinActionExecutor();
+        const { mockPage, mockCard, mockAckBtn } = createMockEnvironment({ ackBtnVisible: false });
 
-      await expect(
-        executor.confirmCancel(mockPage, 'DY-ORDER-888', {
-          refreshOrderList: vi.fn(),
-        })
-      ).rejects.toMatchObject({
-        errorCode: DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
-        retryable: false,
-      });
+        await expect(
+          executor.confirmCancel(mockPage, 'DY-ORDER-888', {
+            refreshOrderList: vi.fn(),
+          })
+        ).rejects.toMatchObject({
+          errorCode: DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
+          retryable: false,
+        });
 
-      expect(mockCard.click).toHaveBeenCalled();
-      expect(mockAckBtn.click).not.toHaveBeenCalled();
+        expect(mockCard.click).toHaveBeenCalled();
+        expect(mockAckBtn.click).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('should perform dryRun safely for confirmCancel: click card, verify ack button visibility, and return verification without clicking ack button', async () => {
@@ -791,6 +797,28 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
       expect(result).toBeUndefined();
       expect(mockCard.click).toHaveBeenCalled();
       expect(mockAckBtn.click).toHaveBeenCalled();
+    });
+
+    it('生产事故回归：「我知道了」按钮抽屉延迟渲染时应轮询等待而非竞态误报 CONFIRM_SUBMIT_NOT_FOUND', async () => {
+      const executor = new DouyinActionExecutor();
+      const { mockPage, mockCard, mockAckBtn } = createMockEnvironment({
+        orderStatusText: '已取消',
+      });
+      // 模拟生产实测时序：抽屉挂载+详情接口+渲染约 1s，前两次探测不可见、第三次可见
+      let probeCount = 0;
+      mockAckBtn.isVisible = vi.fn().mockImplementation(async () => {
+        probeCount++;
+        return probeCount >= 3;
+      });
+
+      const result = await executor.confirmCancel(mockPage, 'DY-ORDER-888', {
+        refreshOrderList: vi.fn(),
+      });
+
+      // 严密断言：轮询吸收了渲染延迟，最终点击了按钮而非误报失败
+      expect(result).toBeUndefined();
+      expect(mockAckBtn.isVisible).toHaveBeenCalledTimes(3);
+      expect(mockAckBtn.click).toHaveBeenCalledTimes(1);
     });
   });
 });

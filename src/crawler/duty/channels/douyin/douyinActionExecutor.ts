@@ -438,7 +438,19 @@ export class DouyinActionExecutor {
       '[role="button"]:has-text("我知道了")'
     ).first();
 
-    if (!await isElementVisible(ackBtn, ACTION_TIMEOUT.QUICK_ACTION)) {
+    // 抽屉按钮异步渲染有界轮询：点击卡片后按钮需经 抽屉挂载 + 详情接口 + 渲染 才出现
+    // （生产实测约 1s，慢尾更长）；isVisible 为零等待瞬时探测（timeout 参数被 Playwright 忽略），
+    // 单次探测必有竞态误报 CONFIRM_SUBMIT_NOT_FOUND（生产事故 2026-10-23），
+    // 对齐 confirmImport 触发按钮的轮询范式
+    const ackDeadline = Date.now() + getScaledTimeout(ACTION_TIMEOUT.NETWORK);
+    let ackBtnVisible = false;
+    while (Date.now() <= ackDeadline) {
+      ackBtnVisible = await isElementVisible(ackBtn, ACTION_TIMEOUT.PROBE);
+      if (ackBtnVisible) break;
+      await humanDelay(page, 300, 500);
+    }
+
+    if (!ackBtnVisible) {
       throw new DutyExecutionError(
         `订单「${cleanOrderId}」未找到「我知道了」操作按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
