@@ -19,8 +19,9 @@ import { getDouyinOrderScope, locateDouyinOrderCard } from './douyinCardLocator'
 import {
   isDouyinOrderDetailUrl,
   isDouyinSecretNumUrl,
-  parseDouyinSecretNumResponse,
-  DOUYIN_REVEAL_PHONE_SELECTOR,
+  extractDouyinRealPhoneFromSecretNumResponse,
+  applyDouyinDecryptedPhone,
+  DOUYIN_COPY_ORDER_BUTTON_SELECTOR,
 } from './douyinOrderParsers';
 import { DOUYIN_API_RESPONSE_TIMEOUT_MS } from './douyinListCollector';
 
@@ -211,8 +212,8 @@ export class DouyinDetailInspector {
       await dismissDouyinNoticeModals(page, scope).catch(() => false);
     }
 
-    // 7. 敏感信息脱敏解除：定位界面元素并点击触发，拦截 get_secret_num 接口响应
-    return await this.revealAndCapturePhone(page, scope, rawDetail, cleanOrderId);
+    // 7. 真实手机号获取：点击详情区「一键复制」触发 get_secret_num 接口并拦截响应
+    return await this.copyAndCaptureRealPhone(page, scope, rawDetail, cleanOrderId);
   }
 
   /**
@@ -339,107 +340,63 @@ export class DouyinDetailInspector {
 
 
   /**
-   * 定位页面电话图标并点击，通过 Playwright waitForResponse 拦截 get_secret_num 接口响应获取联系电话
+   * 点击详情区「一键复制」触发 get_secret_num 接口，拦截响应提取真实手机号
+   * 生产通道依据 docs/channels/douyin/02-order-api-spec.md §4 同接口双语义结论：
+   * 电话图标通道返回隐私虚拟号（带「转」分机）已废弃；「一键复制」触发同接口返回真实手机号。
+   * 实测点击后接口会被连续调用两次、仅一次携带手机号，必须循环收集丢弃空响应。
    */
-  private async revealAndCapturePhone(
+  private async copyAndCaptureRealPhone(
     page: Page,
     scope: Page | FrameLocator,
     rawDetail: Record<string, unknown>,
     cleanOrderId: string
   ): Promise<Record<string, unknown>> {
     try {
-      // 1. 定位脱敏解除元素（图标/按钮），不可见则直接返回
-      const revealPhoneBtn = scope.locator(DOUYIN_REVEAL_PHONE_SELECTOR).first();
-      if (!await isElementVisible(revealPhoneBtn, ACTION_TIMEOUT.SENSITIVE_FIELD)) {
-        return rawDetail;
-      }
-
-      // 2. 声明式监听 get_secret_num 接口响应
-      const secretResponsePromise = typeof page.waitForResponse === 'function'
-        ? page
-            .waitForResponse(
-              (res) => isDouyinSecretNumUrl(res.url()) && res.status() === 200,
-              { timeout: getScaledTimeout(ACTION_TIMEOUT.NETWORK) }
-            )
-            .catch((error: unknown) => {
-              logger.warn('抖音隐私号接口等待失败，原始异常已记录', {
-                module: 'DUTY_TASK', channelId: 'DOUYIN', orderNo: cleanOrderId,
-                meta: { originalError: serializeDouyinOriginalError(error) },
-              });
-              return null;
-            })
-        : Promise.resolve(null);
-
-      // 3. 拟人化点击电话图标
-      await updateVisualTrackerStatus(
-        page,
-        `正在点击订单「${cleanOrderId}」联系电话图标获取隐私号码...`,
-        'action'
-      );
-      await visualClickLocator(page, revealPhoneBtn, `点击订单「${cleanOrderId}」联系电话图标获取隐私号码`);
-      await humanDelay(page, ...HUMAN_DELAY.SENSITIVE_REVEAL);
-
-      // 4. 等待拦截到的网络响应
-      const secretResponse = await secretResponsePromise;
-      if (!secretResponse) {
-        return rawDetail;
-      }
-
-      const responseText = await secretResponse.text();
-      assertNoDouyinResponseRisk(responseText, {
-        apiUrl: secretResponse.url(), httpStatus: secretResponse.status(), method: secretResponse.request().method(),
-      }, '隐私号接口响应');
-      if (!responseText) return rawDetail;
-
-      const decryptedPhone = parseDouyinSecretNumResponse(responseText);
-      if (decryptedPhone) {
-        logger.info(`[抖音详情] 订单「${cleanOrderId}」联系电话获取成功: ${decryptedPhone}`, {
+      // 1. 定位详情区「一键复制」按钮；订单类型无此入口时，联系电话由协议层按空值策略置空
+      const copyBtn = scope.locator(DOUYIN_COPY_ORDER_BUTTON_SELECTOR).first();
+      if (!await isElementVisible(copyBtn, ACTION_TIMEOUT.SENSITIVE_FIELD)) {
+        logger.warn(`[抖音详情] 订单「${cleanOrderId}」详情区未找到「一键复制」入口，联系电话将按空值策略处理`, {
           module: 'DUTY_TASK',
           channelId: 'DOUYIN',
           orderNo: cleanOrderId,
         });
-
-        const resultDetail = JSON.parse(JSON.stringify(rawDetail)) as Record<string, unknown>;
-        resultDetail.decryptedPhone = decryptedPhone;
-
-        // 若根级有 guest_info
-        if (resultDetail.guest_info && typeof resultDetail.guest_info === 'object') {
-          const guestInfo = resultDetail.guest_info as Record<string, unknown>;
-          const userList = Array.isArray(guestInfo.user_list) ? guestInfo.user_list : [];
-          if (userList[0] && typeof userList[0] === 'object') {
-            (userList[0] as Record<string, unknown>).phone = decryptedPhone;
-          }
-          if (guestInfo.buyer && typeof guestInfo.buyer === 'object') {
-            (guestInfo.buyer as Record<string, unknown>).phone = decryptedPhone;
-          }
-        }
-
-        // 若为抖音标准嵌套字符串结构 data.data，同步更新内部实体
-        const innerDataObj = resultDetail.data as Record<string, unknown> | undefined;
-        if (innerDataObj && typeof innerDataObj.data === 'string') {
-          try {
-            const parsedInner = JSON.parse(innerDataObj.data);
-            if (parsedInner && typeof parsedInner === 'object') {
-              const innerGuest = (parsedInner.guest_info || {}) as Record<string, unknown>;
-              const innerUsers = Array.isArray(innerGuest.user_list) ? innerGuest.user_list : [];
-              if (innerUsers[0] && typeof innerUsers[0] === 'object') {
-                (innerUsers[0] as Record<string, unknown>).phone = decryptedPhone;
-              }
-              if (innerGuest.buyer && typeof innerGuest.buyer === 'object') {
-                (innerGuest.buyer as Record<string, unknown>).phone = decryptedPhone;
-              }
-              innerDataObj.data = JSON.stringify(parsedInner);
-            }
-          } catch {
-            // 忽略嵌套反序列化异常
-          }
-        }
-
-        return resultDetail;
+        return rawDetail;
       }
+
+      // 2. 监听前置：先启动响应收集循环再点击，消除迟到竞态
+      const realPhonePromise = this.waitForRealPhoneResponse(page, cleanOrderId);
+      // 避免在点击路径异常提前退出时，后台网络等待产生未捕获的 Promise Rejection
+      realPhonePromise.catch(() => {});
+
+      // 3. 拟人化点击「一键复制」
+      await updateVisualTrackerStatus(
+        page,
+        `正在点击订单「${cleanOrderId}」一键复制获取真实手机号...`,
+        'action'
+      );
+      await visualClickLocator(page, copyBtn, `点击订单「${cleanOrderId}」一键复制获取真实手机号`);
+      await humanDelay(page, ...HUMAN_DELAY.SENSITIVE_REVEAL);
+
+      // 4. 等待循环收集结果（首次响应可能为空，循环内已丢弃继续等待）
+      const realPhone = await realPhonePromise;
+      if (!realPhone) {
+        logger.warn(`[抖音详情] 订单「${cleanOrderId}」真实手机号获取失败：等待窗口内未捕获到携带真实手机号的接口响应，联系电话将按空值策略处理`, {
+          module: 'DUTY_TASK',
+          channelId: 'DOUYIN',
+          orderNo: cleanOrderId,
+        });
+        return rawDetail;
+      }
+
+      logger.info(`[抖音详情] 订单「${cleanOrderId}」真实手机号获取成功: ${realPhone}`, {
+        module: 'DUTY_TASK',
+        channelId: 'DOUYIN',
+        orderNo: cleanOrderId,
+      });
+      return applyDouyinDecryptedPhone(rawDetail, realPhone);
     } catch (err) {
       if (err instanceof DutyExecutionError && err.errorCode === DouyinDutyErrorCode.RISK_VERIFICATION_REQUIRED) throw err;
-      logger.warn(`[抖音详情] 订单「${cleanOrderId}」尝试获取联系电话异常: ${err instanceof Error ? err.message : String(err)}`, {
+      logger.warn(`[抖音详情] 订单「${cleanOrderId}」获取真实手机号异常: ${err instanceof Error ? err.message : String(err)}`, {
         module: 'DUTY_TASK',
         channelId: 'DOUYIN',
         orderNo: cleanOrderId,
@@ -450,5 +407,52 @@ export class DouyinDetailInspector {
     }
 
     return rawDetail;
+  }
+
+  /**
+   * 循环等待携带真实手机号的 get_secret_num 响应：
+   * 实测点击「一键复制」后接口连续调用两次、仅一次 secret_nums 携带手机号（首次可能为空），
+   * 空响应丢弃继续等待；每个响应先过风控断言（命中验证特征立即阻断），响应体读取失败立即上抛交由外层异常路径，预算耗尽返回 null。
+   */
+  private async waitForRealPhoneResponse(page: Page, cleanOrderId: string): Promise<string | null> {
+    const deadline = Date.now() + getScaledTimeout(ACTION_TIMEOUT.NETWORK);
+
+    while (Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      let response: ResponseLike;
+      try {
+        response = await page.waitForResponse(
+          (res) => isDouyinSecretNumUrl(res.url()),
+          { timeout: remainingMs }
+        );
+      } catch {
+        // 等待预算耗尽：窗口内未捕获到携带真实手机号的响应
+        return null;
+      }
+
+      const responseText = await response.text().catch((error: unknown) => {
+        throw new DutyExecutionError(
+          `读取真实手机号接口响应体失败: ${error instanceof Error ? error.message : String(error)}`,
+          DouyinDutyErrorCode.ORDER_DETAIL_FIELD_MISSING,
+          false,
+          { cause: error }
+        );
+      });
+      assertNoDouyinResponseRisk(responseText, {
+        apiUrl: response.url(), httpStatus: response.status(), method: response.request?.().method(),
+      }, '真实手机号接口响应');
+
+      const realPhone = extractDouyinRealPhoneFromSecretNumResponse(responseText);
+      if (realPhone) {
+        return realPhone;
+      }
+
+      logger.warn(
+        `[抖音详情] 订单「${cleanOrderId}」捕获到未携带真实手机号的 get_secret_num 响应，丢弃并继续等待`,
+        { module: 'DUTY_TASK', channelId: 'DOUYIN', orderNo: cleanOrderId, apiUrl: response.url() }
+      );
+    }
+
+    return null;
   }
 }

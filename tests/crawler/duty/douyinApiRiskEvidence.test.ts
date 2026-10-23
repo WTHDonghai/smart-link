@@ -37,7 +37,7 @@ function pageFixture(detail?: Response, secret?: Response): Page {
     locator: (selector: string) => ({
       count: async () => 0,
       first: () => ({
-        isVisible: async () => !selector.includes('.byted-modal') && (!selector.includes('hideStroke') || Boolean(secret)),
+        isVisible: async () => !selector.includes('.byted-modal') && (!selector.includes('一键复制') || Boolean(secret)),
         scrollIntoViewIfNeeded: async () => undefined,
       }),
     }),
@@ -198,7 +198,7 @@ describe('抖音接口与异常归类的具体命中证据', () => {
     expect(entries.filter((entry) => entry.event === 'DOUYIN_RISK_CONTROL_MATCHED')).toEqual([]);
   });
 
-  it('隐私号接口命中保留实际提示并阻断，不再无诊断地返回原始详情', async () => {
+  it('真实手机号接口（get_secret_num）命中风控时保留实际提示并阻断，不再无诊断地返回原始详情', async () => {
     const response = responseFixture(DOUYIN_BOOK_ORDER_DETAIL_PATH, { status_code: 0, data: { order_id: ORDER_ID } });
     const secret = responseFixture(DOUYIN_SECRET_NUM_PATH, { status_code: 9001, status_msg: '访问频繁，请完成验证' });
     await expect(new DouyinDetailInspector().inspectOrderDetail(pageFixture(response, secret), ORDER_ID, { refreshOrderList: vi.fn() }))

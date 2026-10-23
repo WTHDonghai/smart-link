@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page } from 'playwright';
 import { DouyinDetailInspector } from '@/src/crawler/duty/channels/douyin/douyinDetailInspector';
 import { DouyinDutyErrorCode } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
+import { logger } from '@/src/services/logger';
 
 describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meituan)', () => {
   beforeEach(() => {
@@ -335,13 +336,14 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
     expect(mockCard.click).toHaveBeenCalled();
   });
 
-  it('should locate element and intercept get_secret_num response when phone is masked', async () => {
+  it('should click copy button and collect real phone across two get_secret_num calls (first empty)', async () => {
     const inspector = new DouyinDetailInspector();
 
     const mockRawWithCipher = {
       order_base_info: { order_id: '1112769276121338025' },
       book_detail_info: { hotel_name: '测试酒店' },
       guest_info: {
+        buyer: { name: ' ', phone: '', phone_ciphertext: 'CIPHERTEXT_BUYER' },
         user_list: [
           { name: '张三', phone: '*******5678', phone_ciphertext: 'CIPHERTEXT_123' },
         ],
@@ -356,21 +358,30 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       request: () => ({ method: () => 'POST' }),
     };
 
-    const mockSecretNumResponse = {
+    // 实测结论 (docs/channels/douyin/02-order-api-spec.md §4.2)：
+    // 点击「一键复制」后 get_secret_num 连续调用两次，首次 secret_nums 为空，仅第二次携带真实手机号
+    const secretUrl = 'https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896';
+    const mockSecretEmptyResponse = {
       status: () => 200,
-      url: () => 'https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896',
+      url: () => secretUrl,
+      text: async () => JSON.stringify({ status_code: 0, status_msg: '', secret_nums: {} }),
+      request: () => ({ method: () => 'GET' }),
+    };
+    const mockSecretRealResponse = {
+      status: () => 200,
+      url: () => secretUrl,
       text: async () => JSON.stringify({
+        BaseResp: { StatusCode: 0, StatusMessage: '' },
         status_code: 0,
         status_msg: '',
         secret_nums: {
-          CIPHERTEXT_123: {
-            phone: '15782987061转3308',
-            show_type: 1,
-          },
+          CIPHERTEXT_123: { phone: '18082151396', show_type: 2 },
         },
       }),
       request: () => ({ method: () => 'GET' }),
     };
+
+    let secretCallCount = 0;
 
     const mockCard = {
       isVisible: vi.fn().mockResolvedValue(true),
@@ -378,7 +389,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       click: vi.fn().mockResolvedValue(undefined),
     };
 
-    const mockRevealBtn = {
+    const mockCopyBtn = {
       isVisible: vi.fn().mockResolvedValue(true),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       click: vi.fn().mockResolvedValue(undefined),
@@ -388,6 +399,7 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
       frames: () => [],
       evaluate: vi.fn().mockResolvedValue(false),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
       locator: vi.fn((sel: string) => {
         if (sel.includes('.byted-modal')) {
           return { count: vi.fn().mockResolvedValue(0) };
@@ -398,10 +410,10 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
             last: () => mockCard,
           };
         }
-        if (sel.includes('hideStroke') || sel.includes('M4.385') || sel.includes('SecretNumV2')) {
+        if (sel.includes('一键复制')) {
           return {
-            first: () => mockRevealBtn,
-            last: () => mockRevealBtn,
+            first: () => mockCopyBtn,
+            last: () => mockCopyBtn,
           };
         }
         return {
@@ -413,8 +425,9 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
         if (predicate(mockDetailResponse)) {
           return mockDetailResponse;
         }
-        if (predicate(mockSecretNumResponse)) {
-          return mockSecretNumResponse;
+        if (predicate(mockSecretEmptyResponse)) {
+          secretCallCount += 1;
+          return secretCallCount === 1 ? mockSecretEmptyResponse : mockSecretRealResponse;
         }
         throw new Error('Unexpected response predicate');
       }),
@@ -426,10 +439,174 @@ describe('DouyinDetailInspector (Single Responsibility & Benchmark against Meitu
       refreshOrderList: vi.fn(),
     });
 
-    expect(mockRevealBtn.click).toHaveBeenCalled();
-    expect(result.decryptedPhone).toBe('15782987061转3308');
+    // 点击的是「一键复制」按钮而非已废弃的电话图标通道
+    expect(mockCopyBtn.click).toHaveBeenCalled();
+    // 循环收集确实消费了两次接口响应（首次空、二次真实号）
+    expect(secretCallCount).toBe(2);
+    // 真实手机号注入根级与嵌套结构（生产详情报文的 guest_info 位于嵌套 data.data 字符串内）
+    expect(result.decryptedPhone).toBe('18082151396');
     const innerData = JSON.parse((result.data as { data: string }).data);
-    expect(innerData.guest_info.user_list[0].phone).toBe('15782987061转3308');
+    expect(innerData.guest_info.user_list[0].phone).toBe('18082151396');
+    expect(innerData.guest_info.buyer.phone).toBe('18082151396');
+  });
+
+  it('get_secret_num 响应体读取失败时应 Fail-Fast 上抛外层告警并按空值策略返回原始详情（禁止吞为空串续等）', async () => {
+    const inspector = new DouyinDetailInspector();
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    const mockRawWithCipher = {
+      order_base_info: { order_id: '1112769276121338025' },
+      book_detail_info: { hotel_name: '测试酒店' },
+      guest_info: {
+        buyer: { name: ' ', phone: '', phone_ciphertext: 'CIPHERTEXT_BUYER' },
+        user_list: [
+          { name: '张三', phone: '*******5678', phone_ciphertext: 'CIPHERTEXT_123' },
+        ],
+      },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawWithCipher) } };
+
+    const mockDetailResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
+      text: async () => JSON.stringify(mockPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
+    // 模拟底层网络层响应体读取失败（如连接中断），读取异常必须显式暴露而非兜底为空串继续等待
+    const secretUrl = 'https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896';
+    const mockSecretReadFailResponse = {
+      status: () => 200,
+      url: () => secretUrl,
+      text: async () => {
+        throw new Error('Response body is unavailable');
+      },
+      request: () => ({ method: () => 'GET' }),
+    };
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockCopyBtn = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1112769276121338025')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        if (sel.includes('一键复制')) {
+          return {
+            first: () => mockCopyBtn,
+            last: () => mockCopyBtn,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      waitForResponse: vi.fn(async (predicate: (res: unknown) => boolean) => {
+        if (predicate(mockDetailResponse)) {
+          return mockDetailResponse;
+        }
+        return mockSecretReadFailResponse;
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as Page;
+
+    const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
+      refreshOrderList: vi.fn(),
+    });
+
+    // 读取失败被显式上抛到外层异常路径告警（携带失败原因），而非吞掉后续等
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('读取真实手机号接口响应体失败: Response body is unavailable'),
+      expect.objectContaining({ orderNo: '1112769276121338025' })
+    );
+    // 按空值策略返回原始详情：未注入 decryptedPhone，联系人保持脱敏原样
+    expect(result.decryptedPhone).toBeUndefined();
+    const innerData = JSON.parse((result.data as { data: string }).data);
+    expect(innerData.guest_info.user_list[0].phone).toBe('*******5678');
+  });
+
+  it('should return detail unchanged when copy button is absent (phone stays empty by protocol policy)', async () => {
+    const inspector = new DouyinDetailInspector();
+
+    const mockRawData = {
+      order_base_info: { order_id: '1112769276121338025' },
+      guest_info: { user_list: [{ name: '张三', phone: '*******5678' }] },
+    };
+    const mockPayload = { data: { data: JSON.stringify(mockRawData) } };
+
+    const mockDetailResponse = {
+      status: () => 200,
+      url: () => 'https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?order_id=1112769276121338025',
+      text: async () => JSON.stringify(mockPayload),
+      request: () => ({ method: () => 'POST' }),
+    };
+
+    const mockCard = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockPage = {
+      url: () => 'https://life.douyin.com/p/liteapp/fulfillment-workbench/hotel-book/list',
+      frames: () => [],
+      evaluate: vi.fn().mockResolvedValue(false),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn((sel: string) => {
+        if (sel.includes('.byted-modal')) {
+          return { count: vi.fn().mockResolvedValue(0) };
+        }
+        if (sel.includes('1112769276121338025')) {
+          return {
+            first: () => mockCard,
+            last: () => mockCard,
+          };
+        }
+        return {
+          first: () => ({ isVisible: vi.fn().mockResolvedValue(false) }),
+          count: vi.fn().mockResolvedValue(0),
+        };
+      }),
+      waitForResponse: vi.fn(async (predicate: (res: unknown) => boolean) => {
+        if (predicate(mockDetailResponse)) {
+          return mockDetailResponse;
+        }
+        throw new Error('Unexpected response predicate');
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as Page;
+
+    const result = await inspector.inspectOrderDetail(mockPage, '1112769276121338025', {
+      refreshOrderList: vi.fn(),
+    });
+
+    // 无「一键复制」入口：不注入 decryptedPhone，联系电话由协议层按空值策略置空
+    expect(result.decryptedPhone).toBeUndefined();
+    const innerData = JSON.parse((result.data as { data: string }).data);
+    expect(innerData.guest_info.user_list[0].phone).toBe('*******5678');
   });
 
   it('should capture order detail via waitForResponse when network latency is simulated', async () => {

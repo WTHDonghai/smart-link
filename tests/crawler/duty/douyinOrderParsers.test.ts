@@ -13,8 +13,9 @@ import {
   parseDouyinRefundOrderListResponse,
   extractDouyinOrderFromResponse,
   isDouyinSecretNumUrl,
-  parseDouyinSecretNumResponse,
-  DOUYIN_REVEAL_PHONE_SELECTOR,
+  extractDouyinRealPhoneFromSecretNumResponse,
+  applyDouyinDecryptedPhone,
+  DOUYIN_COPY_ORDER_BUTTON_SELECTOR,
 } from '@/src/crawler/duty/channels/douyin/douyinOrderParsers';
 import { DutyExecutionError } from '@/src/crawler/duty/dutyContracts';
 import { DouyinDutyErrorCode } from '@/src/crawler/duty/channels/douyin/douyinDutyContracts';
@@ -421,7 +422,7 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
     });
   });
 
-  describe('isDouyinSecretNumUrl, parseDouyinSecretNumResponse & DOUYIN_REVEAL_PHONE_SELECTOR', () => {
+  describe('isDouyinSecretNumUrl, extractDouyinRealPhoneFromSecretNumResponse & DOUYIN_COPY_ORDER_BUTTON_SELECTOR', () => {
     it('isDouyinSecretNumUrl should match get_secret_num endpoint', () => {
       expect(
         isDouyinSecretNumUrl('https://life.douyin.com/life/trade_view/v1/common/get_secret_num?root_life_account_id=7063009395525584896&life_biz_view_id=22&life_account_biz_ids=')
@@ -435,12 +436,36 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(isDouyinSecretNumUrl('')).toBe(false);
     });
 
-    it('parseDouyinSecretNumResponse should parse real production secret_nums payload', () => {
+    it('DOUYIN_COPY_ORDER_BUTTON_SELECTOR 应限定在详情区作用域内定位一键复制按钮', () => {
+      expect(DOUYIN_COPY_ORDER_BUTTON_SELECTOR).toBe('#detailSection button:has-text("一键复制")');
+    });
+
+    it('extractDouyinRealPhoneFromSecretNumResponse 应解析一键复制触发的真实生产报文 (show_type: 2)', () => {
+      // 真实抓包样本：docs/channels/douyin/samples/get-secret-num-real-phone-response.json
       const realPayload = {
-        BaseResp: {
-          StatusCode: 0,
-          StatusMessage: '',
+        BaseResp: { StatusCode: 0, StatusMessage: '' },
+        log_id: '20261023094710B284BB30FC981449C7BA',
+        now: '1792720030965',
+        secret_nums: {
+          'MEEEDIZyRPOgGbj8nlxIzwQfjjB4wWMwc4Wbhr3CHd6XswT7CKaTaHymq96bBkb2MgQQ0lQzG4RRXpBZ1j1HkQy+Aw==': {
+            phone: '18082151396',
+            show_type: 2,
+          },
         },
+        status_code: 0,
+        status_msg: '',
+      };
+
+      // 1. 传入 JSON 对象
+      expect(extractDouyinRealPhoneFromSecretNumResponse(realPayload)).toBe('18082151396');
+      // 2. 传入 JSON 字符串
+      expect(extractDouyinRealPhoneFromSecretNumResponse(JSON.stringify(realPayload))).toBe('18082151396');
+    });
+
+    it('extractDouyinRealPhoneFromSecretNumResponse 应拒绝电话图标通道的隐私虚拟号 (show_type: 1)', () => {
+      // 真实抓包样本：docs/channels/douyin/samples/get-secret-num-virtual-response.json
+      const virtualPayload = {
+        BaseResp: { StatusCode: 0, StatusMessage: '' },
         log_id: '20260930142831FDEF23439EBFCF1046C6',
         now: '1790749711649',
         secret_nums: {
@@ -453,38 +478,96 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
         status_msg: '',
       };
 
-      // 1. 传入 JSON 对象
-      const phoneFromObj = parseDouyinSecretNumResponse(realPayload);
-      expect(phoneFromObj).toBe('15782987061转3308');
-
-      // 2. 传入 JSON 字符串
-      const phoneFromString = parseDouyinSecretNumResponse(JSON.stringify(realPayload));
-      expect(phoneFromString).toBe('15782987061转3308');
-
-      // 3. 指定期望密文
-      const cipher = 'MEEEDNFQo4YACPPRukcsQAQfMQ6O22SjVuDREqWCgeGZTSjEgP8jarXhsXAe4yij/wQQqE2+1UHH/AesfRnuoR/dlQ==';
-      const phoneWithCipher = parseDouyinSecretNumResponse(realPayload, cipher);
-      expect(phoneWithCipher).toBe('15782987061转3308');
+      expect(extractDouyinRealPhoneFromSecretNumResponse(virtualPayload)).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse(JSON.stringify(virtualPayload))).toBeNull();
     });
 
-    it('parseDouyinSecretNumResponse should fail-fast when status_code is non-zero or data is invalid', () => {
+    it('混合条目场景应跳过虚拟号条目提取真实号', () => {
+      const mixedPayload = {
+        status_code: 0,
+        secret_nums: {
+          cipher_virtual: { phone: '15782987061转3308', show_type: 1 },
+          cipher_invalid: { phone: '*******3150', show_type: 0 },
+          cipher_real: { phone: '18082151396', show_type: 2 },
+        },
+      };
+
+      expect(extractDouyinRealPhoneFromSecretNumResponse(mixedPayload)).toBe('18082151396');
+    });
+
+    it('extractDouyinRealPhoneFromSecretNumResponse should fail-fast when status_code is non-zero or data is invalid', () => {
       // 业务状态码错误
-      expect(parseDouyinSecretNumResponse({ status_code: 10001, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse({ status_code: 10001, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
       // BaseResp 状态码错误
-      expect(parseDouyinSecretNumResponse({ BaseResp: { StatusCode: 500 }, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse({ BaseResp: { StatusCode: 500 }, secret_nums: { a: { phone: '13800000000' } } })).toBeNull();
       // secret_nums 缺失或为空
-      expect(parseDouyinSecretNumResponse({ status_code: 0, secret_nums: {} })).toBeNull();
-      expect(parseDouyinSecretNumResponse({ status_code: 0 })).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse({ status_code: 0, secret_nums: {} })).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse({ status_code: 0 })).toBeNull();
       // 非法输入
-      expect(parseDouyinSecretNumResponse(null)).toBeNull();
-      expect(parseDouyinSecretNumResponse('invalid-json')).toBeNull();
-      expect(parseDouyinSecretNumResponse(12345)).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse(null)).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse('')).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse('invalid-json')).toBeNull();
+      expect(extractDouyinRealPhoneFromSecretNumResponse(12345)).toBeNull();
     });
 
-    it('DOUYIN_REVEAL_PHONE_SELECTOR should include SVG class and SVG path attributes', () => {
-      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('hideStroke-VRjAsE');
-      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('M4.385 7.368');
-      expect(DOUYIN_REVEAL_PHONE_SELECTOR).toContain('SecretNumV2');
+    it('业务状态码双写不一致时任一非 0 即业务失败（status_code=0 不得遮蔽 BaseResp.StatusCode≠0）', () => {
+      // 02-order-api-spec.md §1：status_code 与 BaseResp.StatusCode 双写，任一非 0 即失败
+      const newStyleZeroOldStyleFail = {
+        status_code: 0,
+        BaseResp: { StatusCode: 500, StatusMessage: 'internal error' },
+        secret_nums: { a: { phone: '13800000000', show_type: 2 } },
+      };
+      expect(extractDouyinRealPhoneFromSecretNumResponse(newStyleZeroOldStyleFail)).toBeNull();
+
+      const newStyleFailOldStyleZero = {
+        status_code: 10001,
+        BaseResp: { StatusCode: 0, StatusMessage: '' },
+        secret_nums: { a: { phone: '13800000000', show_type: 2 } },
+      };
+      expect(extractDouyinRealPhoneFromSecretNumResponse(newStyleFailOldStyleZero)).toBeNull();
+
+      // 双零放行对照：不得图双重拦截而误伤合法响应
+      const bothZero = {
+        status_code: 0,
+        BaseResp: { StatusCode: 0, StatusMessage: '' },
+        secret_nums: { a: { phone: '13800000000', show_type: 2 } },
+      };
+      expect(extractDouyinRealPhoneFromSecretNumResponse(bothZero)).toBe('13800000000');
+    });
+
+    it('applyDouyinDecryptedPhone 应同步回写根级、guest_info 联系人与嵌套 data.data 结构', () => {
+      const innerOrder = {
+        order_base_info: { order_id: '1112769276121338025' },
+        guest_info: {
+          buyer: { name: ' ', phone: '', phone_ciphertext: 'BUYER_CIPHER' },
+          user_list: [{ name: '付建平', phone: '*******1396', phone_ciphertext: 'USER_CIPHER' }],
+        },
+      };
+      const rawDetail = {
+        data: { data: JSON.stringify(innerOrder) },
+        guest_info: {
+          buyer: { name: ' ', phone: '' },
+          user_list: [{ name: '付建平', phone: '*******1396' }],
+        },
+      };
+
+      const result = applyDouyinDecryptedPhone(rawDetail, '18082151396');
+
+      // 根级标记
+      expect(result.decryptedPhone).toBe('18082151396');
+      // 根级 guest_info 回写
+      const rootGuest = result.guest_info as { user_list: Array<{ phone: string }>; buyer: { phone: string } };
+      expect(rootGuest.user_list[0].phone).toBe('18082151396');
+      expect(rootGuest.buyer.phone).toBe('18082151396');
+      // 嵌套 data.data 字符串同步回写
+      const innerData = JSON.parse((result.data as { data: string }).data) as {
+        guest_info: { user_list: Array<{ phone: string }>; buyer: { phone: string } };
+      };
+      expect(innerData.guest_info.user_list[0].phone).toBe('18082151396');
+      expect(innerData.guest_info.buyer.phone).toBe('18082151396');
+      // 纯函数：不修改原始输入
+      expect((rawDetail as Record<string, unknown>).decryptedPhone).toBeUndefined();
+      expect((rawDetail.guest_info as { user_list: Array<{ phone: string }> }).user_list[0].phone).toBe('*******1396');
     });
   });
 });

@@ -16,18 +16,19 @@ export const DOUYIN_BOOK_ORDER_DETAIL_PATH = '/life/trade_view/v1/workbench/book
 export const DOUYIN_SECRET_NUM_PATH = '/life/trade_view/v1/common/get_secret_num';
 
 /**
- * 抖音获取联系电话（隐私号）元素定位选择器
- * 基于生产环境真实 DOM 与 SVG 特征：
- * 1. SVG 默认携带 hideStroke-VRjAsE 类名
- * 2. 电话手柄图标路径特征：d^="M4.385 7.368"
- * 3. 所在组件容器为 SecretNumV2
+ * 抖音详情区「一键复制」按钮定位选择器（真实手机号获取通道的唯一触发入口）
+ * 依据 docs/channels/douyin/02-order-api-spec.md §4 同接口双语义调研结论：
+ * 1. 电话图标通道触发 get_secret_num 返回隐私虚拟号（带「转」分机），已废弃；
+ * 2. 「一键复制」触发同接口返回真实手机号（show_type: 2）；
+ * 3. 作用域必须限定 #detailSection，防止误点列表卡片等其他区域的复制控件。
  */
-export const DOUYIN_REVEAL_PHONE_SELECTOR =
-  'svg.hideStroke-VRjAsE, ' +
-  'svg[class*="hideStroke"], ' +
-  'svg:has(path[d^="M4.385 7.368"]), ' +
-  'path[d^="M4.385 7.368"], ' +
-  '[data-sub-type="SecretNumV2"] svg';
+export const DOUYIN_COPY_ORDER_BUTTON_SELECTOR = '#detailSection button:has-text("一键复制")';
+
+/**
+ * 真实大陆手机号格式（11 位、1[3-9] 号段、无分机后缀）
+ * 隐私虚拟号携带「转xxxx」分机后缀，天然被此格式排除
+ */
+const REAL_MAINLAND_MOBILE_PATTERN = /^1[3-9]\d{9}$/;
 
 /**
  * 判断 URL 是否属于抖音隐私号/联系电话接口
@@ -41,16 +42,11 @@ export function isDouyinSecretNumUrl(url: string): boolean {
 }
 
 /**
- * 纯函数：从抖音隐私号/联系电话接口响应中提取手机号
- * 遵循 Fail-Fast 原则：状态码非 0 或结构无效立即返回 null
+ * 纯函数：从 get_secret_num 接口响应中提取真实手机号（仅接受纯大陆手机号格式）
+ * 遵循 Fail-Fast 原则：状态码非 0、结构无效或无合格条目立即返回 null，绝不返回虚拟号或兜底值
  * @param payload 接口响应 JSON 对象或序列化字符串
- * @param expectedCipher 可选的期望密文字符串，若传入则优先匹配该密文键
  */
-export function parseDouyinSecretNumResponse(
-  payload: unknown,
-  expectedCipher?: string
-): string | null {
-  if (!payload) return null;
+export function extractDouyinRealPhoneFromSecretNumResponse(payload: unknown): string | null {
   let json: Record<string, unknown>;
   if (typeof payload === 'string') {
     const trimmed = payload.trim();
@@ -60,14 +56,17 @@ export function parseDouyinSecretNumResponse(
     } catch {
       return null;
     }
-  } else if (typeof payload === 'object') {
+  } else if (payload && typeof payload === 'object') {
     json = payload as Record<string, unknown>;
   } else {
     return null;
   }
 
-  const statusCode = json.status_code ?? (json.BaseResp as Record<string, unknown> | undefined)?.StatusCode;
-  if (statusCode !== 0 && statusCode !== undefined) {
+  // 业务状态码双写校验 (docs/channels/douyin/02-order-api-spec.md §1)：
+  // status_code（新风格）与 BaseResp.StatusCode（旧风格）同时存在，任一非 0 即业务失败
+  const baseRespCode = (json.BaseResp as Record<string, unknown> | undefined)?.StatusCode;
+  if ((json.status_code !== undefined && json.status_code !== 0)
+    || (baseRespCode !== undefined && baseRespCode !== 0)) {
     return null;
   }
 
@@ -76,23 +75,59 @@ export function parseDouyinSecretNumResponse(
     return null;
   }
 
-  const numsMap = secretNums as Record<string, { phone?: unknown; show_type?: unknown }>;
-
-  // 1. 若指定了密文，优先读取匹配的密文对应项
-  if (expectedCipher && numsMap[expectedCipher]?.phone) {
-    const p = String(numsMap[expectedCipher].phone || '').trim();
-    if (p) return p;
-  }
-
-  // 2. 否则遍历所有密文项，提取第一个非空手机号
-  for (const item of Object.values(numsMap)) {
+  // 遍历全部密文条目：跳过虚拟号（带「转」分机）与非真实手机号格式，返回首个真实号
+  for (const item of Object.values(secretNums as Record<string, { phone?: unknown }>)) {
     if (item && typeof item === 'object' && item.phone) {
-      const p = String(item.phone || '').trim();
-      if (p) return p;
+      const phone = String(item.phone).trim();
+      if (REAL_MAINLAND_MOBILE_PATTERN.test(phone)) {
+        return phone;
+      }
     }
   }
 
   return null;
+}
+
+/**
+ * 纯函数：将真实手机号回写进详情报文（根级 decryptedPhone + guest_info 联系人 + 嵌套 data.data 字符串）
+ * 供协议层融合覆盖脱敏电话（docs/channels/douyin/02-order-api-spec.md §4.2 第 5 步）
+ */
+export function applyDouyinDecryptedPhone(
+  rawDetail: Record<string, unknown>,
+  decryptedPhone: string
+): Record<string, unknown> {
+  const resultDetail = JSON.parse(JSON.stringify(rawDetail)) as Record<string, unknown>;
+  resultDetail.decryptedPhone = decryptedPhone;
+
+  const writeGuestInfo = (guestInfo: Record<string, unknown>): void => {
+    const userList = Array.isArray(guestInfo.user_list) ? guestInfo.user_list : [];
+    if (userList[0] && typeof userList[0] === 'object') {
+      (userList[0] as Record<string, unknown>).phone = decryptedPhone;
+    }
+    if (guestInfo.buyer && typeof guestInfo.buyer === 'object') {
+      (guestInfo.buyer as Record<string, unknown>).phone = decryptedPhone;
+    }
+  };
+
+  if (resultDetail.guest_info && typeof resultDetail.guest_info === 'object') {
+    writeGuestInfo(resultDetail.guest_info as Record<string, unknown>);
+  }
+
+  // 抖音标准嵌套字符串结构 data.data 同步回写，保证下游按嵌套路径取数一致
+  const innerDataObj = resultDetail.data as Record<string, unknown> | undefined;
+  if (innerDataObj && typeof innerDataObj.data === 'string') {
+    try {
+      const parsedInner = JSON.parse(innerDataObj.data) as Record<string, unknown>;
+      if (parsedInner && typeof parsedInner === 'object' && parsedInner.guest_info) {
+        writeGuestInfo(parsedInner.guest_info as Record<string, unknown>);
+        innerDataObj.data = JSON.stringify(parsedInner);
+      }
+    } catch {
+      // 嵌套结构非 JSON 时保持原样
+    }
+  }
+
+  return resultDetail;
 }
 
 /**

@@ -772,13 +772,17 @@ export function cleanDouyinOrder(
     context['支付方式'] = context.paytype;
   }
 
-  // 融合由探测器在浏览器会话中解密出的明文手机号
+  // 融合由探测器在浏览器会话中获取的真实手机号 (docs/channels/douyin/02-order-api-spec.md §4.4 空值策略)：
+  // 真实号优先；获取不到时置空，不使用脱敏号，也不使用平台虚拟号
   const decryptedPhone =
     (rawPayload as Record<string, unknown> | undefined)?.decryptedPhone ||
     (rawRecord as Record<string, unknown> | undefined)?.decryptedPhone;
   if (decryptedPhone && (!context.guestPhone || String(context.guestPhone).includes('*'))) {
     context.guestPhone = String(decryptedPhone);
     context['联系电话'] = context.guestPhone;
+  } else if (!decryptedPhone && (!context.guestPhone || String(context.guestPhone).includes('*'))) {
+    context.guestPhone = '';
+    context['联系电话'] = '';
   }
 
   // 提取并归一化备注字段 (兼顾自定义 Schema、原始 remark_info 及各级字段)

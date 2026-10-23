@@ -66,7 +66,8 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(cleanCtx.productName).toContain('错峰大促｜豪华房1晚含早');
     expect(cleanCtx.roomCount).toBe('1');
 
-    // 住客信息
+    // 住客信息（normalizeOrderPayload 为原始归一化层，不应用渠道空值策略，保持平台脱敏原值；
+    // 空值策略由 cleanDouyinOrder 协议层应用，见下方空值策略专项用例）
     expect(cleanCtx.guestName).toBe('刘彩霞');
     expect(cleanCtx.guestPhone).toBe('*******5090');
 
@@ -240,7 +241,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(protocol.get('checkOutDate')).toBe('2026-11-17');
     expect(protocol.get('payAmount')).toBe('494.29');
     expect(protocol.get('guestName')).toBe('赵锴');
-    expect(protocol.get('guestPhone')).toBe('*******3563');
+    expect(protocol.get('guestPhone')).toBe('');
 
     const unified = protocol.toUnifiedOrder('【中台自动导入】');
     expect(unified.otaOrderId).toBe('1111599122141816539');
@@ -248,7 +249,7 @@ describe('douyinProtocol (Douyin Group-Buy & Booking Protocol)', () => {
     expect(unified.unitId).toBe('7130223634133092383');
     expect(unified.unitName).toBe('淮安日月洲度假村(西游乐园店)');
     expect(unified.contact.name).toBe('赵锴');
-    expect(unified.contact.mobile).toBe('*******3563');
+    expect(unified.contact.mobile).toBe('');
     expect(unified.booking.roomTypeName).toBe('豪华大床房');
     expect(unified.booking.roomTypeId).toBe('1874906660640768');
     expect(unified.booking.rateCode).toBe('OTA');
