@@ -178,6 +178,9 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toEqual({
         orderId: '1113572317175416823',
+        bookOrderId: '1113572317175416823',
+        mainOrderId: '1113572432327416823',
+        isVoucher: true,
         hotelId: '7130223634133092383',
         hotelName: '淮安日月洲度假村(西游乐园店)',
         cancelOrder: false,
@@ -194,12 +197,52 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toEqual({
         orderId: '1112767046775414527',
+        bookOrderId: '1112767046775414527',
+        mainOrderId: '1112732801688054527',
+        isVoucher: true,
         hotelId: undefined,
         hotelName: '淮安日月洲度假村(西游乐园店)',
         cancelOrder: true,
         afterSaleId: '768912266776597510130734527',
         orderDisplayLabel: '已取消',
       });
+    });
+
+    it('生产事故回归：列表条目缺失 play_methods_v2 券判定字段时，预约单号仍须作为上报单号（卡片定位键）', () => {
+      // 复现 2026-10-23 客户机事故形态：预售券列表条目缺 play_methods_v2（券判定失效），
+      // 旧规则误报订单编号 order_id，下游卡片定位 ORDER_CARD_NOT_FOUND
+      const misjudgedVoucherPayload = {
+        status_code: 0,
+        status_msg: '',
+        data: {
+          data: [
+            JSON.stringify({
+              order_base_info: { order_id: '1115426899866612368', pay_time: 1792741106 },
+              book_detail_info: {
+                book_order_id: '1115426809866612351',
+                book_start_time: 1794672000,
+                book_end_time: 1794758400,
+                book_night_count: 1,
+                book_room_count: 1,
+                hotel_name: '淮安日月洲度假村(西游乐园店)',
+              },
+              status_info_v2: { title: '待接单' },
+              sale_product_info: { physical_room_name: '豪华家庭房', product_id: '1874905039151108' },
+              amount_info: { pay_amount: 54600 },
+            }),
+          ],
+        },
+      };
+
+      const orders = extractDouyinOrdersFromPayload(misjudgedVoucherPayload, false);
+      expect(orders).toHaveLength(1);
+      // 严密断言：无论券判定如何，只要条目携带预约单号，上报单号必须是预约单号（与卡片埋点键一致）
+      expect(orders[0].orderId).toBe('1115426809866612351');
+      expect(orders[0].mainOrderId).toBe('1115426899866612368');
+      expect(orders[0].isVoucher).toBe(false); // 判定字段缺失时仍为 false，但不再影响上报单号
+
+      const summaries = parseDouyinOrderListResponse(misjudgedVoucherPayload, false);
+      expect(summaries[0].orderId).toBe('1115426809866612351');
     });
 
     it('should extract order_id as orderId for calendar room orders in list response', () => {

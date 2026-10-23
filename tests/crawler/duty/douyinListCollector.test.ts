@@ -349,7 +349,21 @@ describe('DouyinListCollector (Single Responsibility & Benchmark against Meituan
         event: 'DOUYIN_ORDER_COLLECT_RESULT',
         message: expect.stringContaining('1 笔待处理订单'),
         taskActionStage: 'collect-order',
-        meta: { orderStatus: DutyOrderStatus.NEW, tabLabel: TAB_TEXT_NEW, orderCount: 1 },
+        meta: {
+          orderStatus: DutyOrderStatus.NEW,
+          tabLabel: TAB_TEXT_NEW,
+          orderCount: 1,
+          // 双单号遥测：无 play_methods_v2 时 isVoucher 判为 false，上报 orderId 即订单编号，可直接定案
+          orders: [
+            {
+              orderId: '1113572432327416823',
+              bookOrderId: undefined,
+              mainOrderId: '1113572432327416823',
+              isVoucher: false,
+              cancelOrder: false,
+            },
+          ],
+        },
       });
     });
 

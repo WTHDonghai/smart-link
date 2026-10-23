@@ -321,7 +321,20 @@ export class DouyinListCollector {
           event: 'DOUYIN_ORDER_COLLECT_RESULT',
           message: `[抖音订单采集] 「${tabLabel}」列表刷新完成，解析到 ${orders.length} 笔待处理订单`,
           taskActionStage: 'collect-order',
-          meta: { orderStatus, tabLabel, orderCount: orders.length },
+          // 逐单记录双单号与券判定依据：上报单号异常时可直接从日志定案（生产事故：
+          // 上报订单编号而非预约单号导致下游 ORDER_CARD_NOT_FOUND，日亦无法回溯）
+          meta: {
+            orderStatus,
+            tabLabel,
+            orderCount: orders.length,
+            orders: orders.map((o) => ({
+              orderId: o.orderId,
+              bookOrderId: o.bookOrderId,
+              mainOrderId: o.mainOrderId,
+              isVoucher: o.isVoucher,
+              cancelOrder: Boolean(o.cancelOrder),
+            })),
+          },
         });
 
         await updateVisualTrackerStatus(

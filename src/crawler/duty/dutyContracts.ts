@@ -35,6 +35,12 @@ export interface DutyTaskExecutionResult {
 
 export interface DutyUnhandledOrderSummary {
   orderId: string;
+  /** 抖音预约单号（预售券履约单号，列表卡片埋点键；无双单号体系的渠道缺省） */
+  bookOrderId?: string;
+  /** 抖音订单编号（电商层交易单号；无双单号体系的渠道缺省） */
+  mainOrderId?: string;
+  /** 是否抖音预售券单（列表报文 play_methods_v2.is_hotel_presale === true 判定） */
+  isVoucher?: boolean;
   hotelId?: string;
   hotelName?: string;
   cancelOrder?: boolean;

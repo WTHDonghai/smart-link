@@ -46,6 +46,12 @@
 | **「我知道了」按钮** | `button:has-text("我知道了")`（取消单确认） | 真实 DOM 确定性文案 | `visualClickLocator()` |
 | **已填确认号状态** | `#detailSection .max-w-\[200px\]` | 幂等核对与防串单 | `innerText()` 比对 |
 
+### 3.1 卡片定位单号契约 (Canonical Order ID)
+
+- 卡片埋点键 `data-form-insight-meta` 承载预约单号 `book_order_id`（履约工作台为预约维度，见 [02 §2.4](./02-order-api-spec.md)）。
+- **全链路单号必须唯一且一致**：采集上报、中台任务 `businessId`、卡片定位与 PMS 入单均使用同一单号（预约单号优先，无预约单号的日历房回退订单编号），供中台复查核验；严禁执行期做双单号归一或动态换号。
+- 定位失败（单号与卡片键不一致、订单已被处理或取消）一律 `ORDER_CARD_NOT_FOUND` 显式阻断（Fail-Fast），不得猜测或兜底换号。
+
 ---
 
 ## 4. 「一键复制」与真实手机号获取（生产通道）⭐

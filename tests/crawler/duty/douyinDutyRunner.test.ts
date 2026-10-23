@@ -275,6 +275,9 @@ describe('douyinDutyRunner', () => {
       expect(orders).toHaveLength(1);
       expect(orders[0]).toEqual({
         orderId: 'DY-BOOK-001',
+        bookOrderId: undefined,
+        mainOrderId: 'DY-BOOK-001',
+        isVoucher: false,
         hotelId: 'poi-1',
         hotelName: '淮安度假酒店',
         cancelOrder: false,
@@ -363,6 +366,9 @@ describe('douyinDutyRunner', () => {
       expect(orders).toHaveLength(1);
       expect(orders[0]).toEqual({
         orderId: 'DY-REFUND-002',
+        bookOrderId: undefined,
+        mainOrderId: 'DY-REFUND-002',
+        isVoucher: false,
         hotelId: undefined,
         hotelName: '淮安度假酒店',
         cancelOrder: true,

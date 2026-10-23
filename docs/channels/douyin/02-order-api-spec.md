@@ -67,7 +67,7 @@
 | `sale_product_info.product_name` / `.product_id` | `productName` / `productId` | string | 售卖商品（SKU）维度信息 |
 | `meta_data.view_type === 'hotel_after_sale'` 等 | `cancelOrder` | boolean | 多信号合并判定取消单 |
 
-**唯一订单编号规则**：预售券单取 `bookOrderId`（预约单号），非券单取 `mainOrderId`（交易单号）；两者均无的条目直接丢弃。
+**唯一订单编号规则**：条目携带预约单号 `book_order_id` 时一律以**预约单号**为唯一订单编号（即工作台卡片埋点键与中台复查核验单号）；无预约单号的日历房条目回退交易单号 `order_id`；两者均无的条目直接丢弃。**严禁**依赖 `play_methods_v2.is_hotel_presale` 券判定切换单号（生产事故 2026-10-23：列表报文缺失该字段时误报订单编号，下游卡片定位 `ORDER_CARD_NOT_FOUND`）；券判定仅作 `isVoucher` 遥测字段保留。
 
 ### 2.4 抖音三单号体系（领域知识）
 

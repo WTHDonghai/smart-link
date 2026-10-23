@@ -255,8 +255,8 @@ export function extractDouyinOrdersFromPayload(
     const afterSaleInfoV2 = (rec.after_sale_info_v2 || {}) as Record<string, unknown>;
     const afterSaleInner = (afterSaleInfoV2.after_sale_info || {}) as Record<string, unknown>;
 
-    // 预约单号（优先取界面展示的 book_order_id，兜底取 book_id）
-    const bookOrderId = String(bookDetailInfo.book_order_id || bookDetailInfo.book_id || '').trim() || undefined;
+    // 预约单号（界面展示的 book_order_id，即工作台卡片埋点键；book_id 为底层主键非卡片键）
+    const bookOrderId = String(bookDetailInfo.book_order_id || '').trim() || undefined;
     // 抖音交易主单号（订单编号）
     const mainOrderId = String(orderBaseInfo.order_id || '').trim() || undefined;
     // 有after_sale_id 表示是取消单
@@ -265,10 +265,12 @@ export function extractDouyinOrdersFromPayload(
     // 智能识别当前条目是否为预售券/套餐券
     const isVoucher = isDouyinVoucherOrder(rec);
 
-    // 确定唯一订单编号：如果是券取预约单号，否则取订单号
-    const orderId = isVoucher
-      ? (bookOrderId || mainOrderId || '')
-      : (mainOrderId || bookOrderId || '');
+    // 确定唯一订单编号：必须与工作台卡片定位键严格一致（中台复查核验以该单号为准）：
+    // 1. 预约维度条目（预售券）取界面预约单号 book_order_id —— 即卡片 data-form-insight-meta 键值；
+    // 2. 无预约单号的日历房条目回退订单编号 order_id；
+    // 3. 严禁依赖 play_methods_v2.is_hotel_presale 券判定切换单号（生产事故：
+    //    列表报文缺失该字段时误报订单编号，下游卡片定位 ORDER_CARD_NOT_FOUND）。
+    const orderId = bookOrderId || mainOrderId || '';
 
     if (!orderId) continue;
 
@@ -329,7 +331,7 @@ export function extractDouyinOrdersFromPayload(
 
     orders.push({
       orderId,
-      bookId: bookOrderId,
+      bookId: bookOrderId || (String(bookDetailInfo.book_id || '').trim() || undefined),
       mainOrderId,
       isVoucher,
       afterSaleId,
@@ -368,6 +370,9 @@ export function parseDouyinOrderListResponse(
   const rawOrders = extractDouyinOrdersFromPayload(payload, defaultIsCancel);
   return rawOrders.map((o) => ({
     orderId: o.orderId,
+    bookOrderId: o.bookId,
+    mainOrderId: o.mainOrderId,
+    isVoucher: o.isVoucher,
     hotelId: o.hotelId,
     hotelName: o.hotelName,
     cancelOrder: o.cancelOrder,
