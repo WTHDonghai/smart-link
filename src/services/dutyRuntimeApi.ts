@@ -1,4 +1,4 @@
-import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
+import { requestPlatformApi, isTransientPlatformError, TOOLKIT_MODULE } from './platformApi';
 import { logger } from './logger';
 import { SYSTEM_TIMING } from '../config/timing';
 import type {
@@ -162,6 +162,11 @@ export async function createDutyTasks(payload: DutyTaskCreationBatch): Promise<v
 /**
  * 提交任务最终执行结果 (PUT /toolkit/toolbox/tasks/:id/result)
  * 线缆约束：由中台后端 DTO 规定，包含 scope: 'INTERFACE'、station、leaseToken、status ('SUCCESS' | 'FAIL') 及 details[]
+ *
+ * 韧性语义：回执是关键写操作，采用长超时 (TASK_RESULT_TIMEOUT) + 瞬时网络类错误有界重试，
+ * 避免门店出口网络抖动时回执直接丢失、中台 lease 过期重派导致任务重复执行。
+ * 幂等依据：同一 taskId + leaseToken + 相同 payload 的 PUT 重复提交无副作用。
+ * 非瞬时错误（4xx 业务错误等）一次即阻断，维持 Fail-Fast。
  */
 export async function submitDutyTaskResult(
   taskId: string,
@@ -181,29 +186,48 @@ export async function submitDutyTaskResult(
     apiMethod: 'PUT',
     apiParams: payload,
   });
-  try {
-    const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId), {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-    unwrapDutyEnvelope(res);
-    logger.success(`[任务回执] 任务 ${cleanTaskId} 回执提交成功`, {
-      module: 'DUTY_TASK',
-      taskId: cleanTaskId,
-      taskActionStage: 'result',
-      apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
-      apiMethod: 'PUT',
-    });
-  } catch (err) {
-    logger.error(`[任务回执] 任务 ${cleanTaskId} 回执提交失败: ${err instanceof Error ? err.message : String(err)}`, {
-      module: 'DUTY_TASK',
-      taskId: cleanTaskId,
-      taskActionStage: 'result',
-      apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
-      apiMethod: 'PUT',
-      details: err instanceof Error ? err.stack : String(err),
-    });
-    throw err;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await requestPlatformApi<unknown>(DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId), {
+        method: 'PUT',
+        timeoutMs: SYSTEM_TIMING.TASK_RESULT_TIMEOUT,
+        body: JSON.stringify(payload),
+      });
+      unwrapDutyEnvelope(res);
+      logger.success(
+        attempt > 1
+          ? `[任务回执] 任务 ${cleanTaskId} 回执提交成功（第 ${attempt} 次尝试）`
+          : `[任务回执] 任务 ${cleanTaskId} 回执提交成功`,
+        {
+          module: 'DUTY_TASK',
+          taskId: cleanTaskId,
+          taskActionStage: 'result',
+          apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
+          apiMethod: 'PUT',
+        }
+      );
+      return;
+    } catch (err) {
+      const retriable =
+        isTransientPlatformError(err) && attempt < SYSTEM_TIMING.TASK_RESULT_MAX_ATTEMPTS;
+      logger.error(
+        `[任务回执] 任务 ${cleanTaskId} 回执提交失败 (第 ${attempt}/${SYSTEM_TIMING.TASK_RESULT_MAX_ATTEMPTS} 次): ${
+          err instanceof Error ? err.message : String(err)
+        }${retriable ? `，${SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF / 1000} 秒后自动重试` : '，已停止重试'}`,
+        {
+          module: 'DUTY_TASK',
+          taskId: cleanTaskId,
+          taskActionStage: 'result',
+          apiUrl: DUTY_ENDPOINTS.TASK_RESULT(cleanTaskId),
+          apiMethod: 'PUT',
+          details: err instanceof Error ? err.stack : String(err),
+        }
+      );
+      if (!retriable) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF));
+    }
   }
 }
 

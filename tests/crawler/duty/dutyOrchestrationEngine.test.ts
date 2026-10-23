@@ -11,6 +11,7 @@ import type {
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
+import { SYSTEM_TIMING } from '../../../src/config/timing';
 import { hotelCollectionEngine } from '../../../src/crawler/engine';
 import { logger } from '../../../src/services/logger';
 
@@ -692,6 +693,36 @@ describe('dutyOrchestrationEngine', () => {
       expect(loopErrorLog?.level).toBe('ERROR');
       expect(loopErrorLog?.message).toContain('TASK_PAYLOAD_INVALID');
     });
+
+    it('回执提交失败仅触发单轮退避，调度循环存活并继续领取后续任务（不允许一单报错终止认领）', async () => {
+      const task: DutyClaimedTask = {
+        id: 'task-submit-fail-loop',
+        businessId: 'MT-LOOP-01',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-loop-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      const claimSpy = vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+
+      vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockRejectedValueOnce(
+        new Error('请求超时(30000ms): PUT https://pms.example.com/toolkit/toolbox/tasks/task-submit-fail-loop/result')
+      );
+
+      await engine.startDuty('MOCK_OTA');
+      // handleClaimLoopError 退避 CLAIM_BACKOFF (3s) 后循环应恢复认领：真实时钟等待退避窗口 + 余量
+      await new Promise((resolve) => setTimeout(resolve, SYSTEM_TIMING.CLAIM_BACKOFF + 400));
+
+      // 严密断言：首单回执失败后，认领调用次数必须大于 1，证明循环存活并继续领取
+      expect(claimSpy.mock.calls.length).toBeGreaterThan(1);
+      // 值守通道未被错误终止，仍处于运行状态
+      expect(mockRunner.isRunning()).toBe(true);
+      expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('RUNNING');
+    }, 10_000);
 
     it('当任务 businessType 不为 OTA_MIGRATION 时，阻断执行并向中台提交 TASK_PAYLOAD_INVALID 且 retryable=false', async () => {
       const task: DutyClaimedTask = {

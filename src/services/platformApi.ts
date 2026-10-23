@@ -76,6 +76,42 @@ export class PlatformApiError extends Error {
   }
 }
 
+/**
+ * 平台 API 请求超时异常类
+ * 由本地 AbortController 定时器到期主动中止时抛出，携带超时时长、方法与完整 URL。
+ * 替代裸 undici AbortError（"This operation was aborted"），使日志无需跨系统对账即可定性为客户端超时。
+ */
+export class PlatformApiTimeoutError extends Error {
+  public readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, method: string, url: string) {
+    super(`请求超时(${timeoutMs}ms): ${method} ${url}`);
+    this.name = 'PlatformApiTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * 判定是否为可安全重试的瞬时网络类错误（本地超时 / 断连 / 网关 5xx）
+ * 4xx 业务错误不属瞬时错误，应 Fail-Fast 立即阻断，重试无意义
+ */
+export function isTransientPlatformError(err: unknown): boolean {
+  if (err instanceof PlatformApiTimeoutError) return true;
+  if (err instanceof PlatformApiError) {
+    return err.status === 502 || err.status === 503 || err.status === 504;
+  }
+  if (err instanceof Error) {
+    // IPC 跨进程传递后 instanceof 身份丢失，需同时按 name 与消息特征识别
+    return (
+      err.name === 'AbortError' ||
+      err.name === 'PlatformApiTimeoutError' ||
+      err.message.includes('fetch failed') ||
+      err.message.includes('请求超时(')
+    );
+  }
+  return false;
+}
+
 export async function requestPlatformApi<T = unknown>(
   path: string,
   options: PlatformApiOptions = {}
@@ -155,7 +191,10 @@ export async function requestPlatformApi<T = unknown>(
     // 单元测试 / 独立环境回退标准 fetch
     const headers = new Headers(headersRecord);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const timeoutId = setTimeout(
+      () => controller.abort(new PlatformApiTimeoutError(timeoutMs, method, fullUrl)),
+      timeoutMs
+    );
 
     try {
       const response = await fetch(fullUrl, {

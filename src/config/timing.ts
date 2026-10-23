@@ -14,6 +14,13 @@ export const SYSTEM_TIMING = {
   /** 任务空闲轮询随机抖动浮动量: 500ms */
   CLAIM_IDLE_JITTER_SPREAD: 500,
 
+  /** 任务回执提交超时 (PUT /toolkit/toolbox/tasks/:id/result): 30s，回执属关键写操作，较默认 15s 放宽 */
+  TASK_RESULT_TIMEOUT: 30_000,
+  /** 任务回执提交最大尝试次数（含首次）: 3 次，覆盖门店出口网络瞬时抖动 */
+  TASK_RESULT_MAX_ATTEMPTS: 3,
+  /** 任务回执重试退避间隔: 5s */
+  TASK_RESULT_RETRY_BACKOFF: 5_000,
+
   /** 调度器异常退避等待重试时延: 3,000ms */
   CLAIM_BACKOFF: 3_000,
 

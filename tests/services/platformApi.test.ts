@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   requestPlatformApi,
   PlatformApiError,
+  PlatformApiTimeoutError,
+  isTransientPlatformError,
   PLATFORM_MODULES,
   TOOLKIT_MODULE,
 } from '../../src/services/platformApi';
@@ -517,5 +519,100 @@ describe('platformApi - 接口调用、认证注入与 401 透明重试', () => 
     } finally {
       unsubscribe();
     }
+  });
+
+  it('本地超时中止时抛出携带明确超时上下文的 PlatformApiTimeoutError', async () => {
+    saveTokensToStorage({
+      accessToken: 'valid-test-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 3600 * 1000,
+      tokenType: 'bearer',
+      platformBaseUrl: 'https://pms.example.com',
+      tenantId: 'XR-01',
+      authenticatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    vi.useFakeTimers();
+    try {
+      // 模拟悬挂的服务端：请求永不响应，仅在信号中止时拒绝（与真实 undici fetch 行为一致）
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          })
+      );
+
+      const promise = requestPlatformApi('/toolkit/toolbox/tasks/task-9/result', {
+        baseUrl: 'https://pms.example.com',
+        method: 'PUT',
+        timeoutMs: 15000,
+      });
+      promise.catch(() => undefined); // 预注册 rejection 处理，避免 unhandled rejection 干扰定时器推进
+      await vi.advanceTimersByTimeAsync(15000);
+
+      const err = await promise.then(
+        () => {
+          throw new Error('请求应当被超时拒绝');
+        },
+        (e: unknown) => e
+      );
+
+      // 严密断言：错误类型、超时时长与完整超时上下文（方法 + URL）均精确可进
+      expect(err).toBeInstanceOf(PlatformApiTimeoutError);
+      const timeoutErr = err as PlatformApiTimeoutError;
+      expect(timeoutErr.name).toBe('PlatformApiTimeoutError');
+      expect(timeoutErr.timeoutMs).toBe(15000);
+      expect(timeoutErr.message).toBe(
+        '请求超时(15000ms): PUT https://pms.example.com/toolkit/toolbox/tasks/task-9/result'
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('isTransientPlatformError - 瞬时网络错误判定', () => {
+    it('本地超时与 undici AbortError 均属瞬时错误', () => {
+      expect(isTransientPlatformError(new PlatformApiTimeoutError(30000, 'PUT', 'https://pms.example.com/a'))).toBe(
+        true
+      );
+      const abortErr = new Error('This operation was aborted');
+      abortErr.name = 'AbortError';
+      expect(isTransientPlatformError(abortErr)).toBe(true);
+    });
+
+    it('断连类 TypeError: fetch failed 属瞬时错误', () => {
+      expect(isTransientPlatformError(new TypeError('fetch failed'))).toBe(true);
+    });
+
+    it('IPC 跨进程传递后丢失类型身份的超时错误，按消息特征仍可识别', () => {
+      const crossRealmErr = new Error('请求超时(30000ms): PUT https://pms.example.com/toolkit/toolbox/tasks/t-1/result');
+      expect(crossRealmErr.name).toBe('Error');
+      expect(isTransientPlatformError(crossRealmErr)).toBe(true);
+    });
+
+    it('网关 502/503/504 属瞬时错误', () => {
+      for (const status of [502, 503, 504]) {
+        expect(
+          isTransientPlatformError(
+            new PlatformApiError(status, `平台接口调用失败 (${status})`, {
+              url: 'https://pms.example.com/a',
+            })
+          )
+        ).toBe(true);
+      }
+    });
+
+    it('4xx 业务错误与普通异常均非瞬时错误，不触发重试', () => {
+      expect(
+        isTransientPlatformError(
+          new PlatformApiError(400, '平台接口调用失败 (400): 参数非法', {
+            url: 'https://pms.example.com/a',
+          })
+        )
+      ).toBe(false);
+      expect(isTransientPlatformError(new Error('业务处理异常'))).toBe(false);
+      expect(isTransientPlatformError('非错误对象')).toBe(false);
+    });
   });
 });

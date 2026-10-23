@@ -10,6 +10,7 @@ import { remarkTemplateManager } from '../src/crawler/duty/remarkTemplateManager
 import { closeAllBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
 import { getPlatformBaseUrl } from '../src/services/platformAuth';
+import { PlatformApiTimeoutError } from '../src/services/platformApi';
 import { findPlatformAppUpdateDescriptor, type PlatformUpdatePlatform } from '../src/services/platformUpdateApi';
 import {
   initNodePlatformTokens,
@@ -352,7 +353,13 @@ export function registerPlatformIpcHandlers(): void {
     async (_event, options: PlatformBridgeRequestOptions): Promise<PlatformBridgeResponse> => {
       const controller = new AbortController();
       const timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 15000;
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(
+        () =>
+          controller.abort(
+            new PlatformApiTimeoutError(timeoutMs, (options.method || 'GET').toUpperCase(), options.url)
+          ),
+        timeoutMs
+      );
 
       try {
         const response = await fetch(options.url, {

@@ -147,6 +147,19 @@ describe('errorNormalizer - 统一错误智能归一化解析器', () => {
     expect(normalized.retryable).toBe(true);
   });
 
+  it('应当精准识别客户端本地 AbortController 超时（请求超时(Nms)）为 NET_REQUEST_TIMEOUT', () => {
+    // 真实报错样本：PlatformApiTimeoutError 的消息形态（取代不可读的裸 undici AbortError）
+    const sampleError =
+      '请求超时(15000ms): PUT https://xctp-api.devops.foxhis.com/toolkit/toolbox/tasks/9f3c/result';
+    const normalized = normalizeAppError(sampleError);
+
+    expect(normalized.code).toBe('NET_REQUEST_TIMEOUT');
+    expect(normalized.domain).toBe('NET');
+    expect(normalized.userTitle).toBe('网络请求超时');
+    expect(normalized.retryable).toBe(true);
+    expect(normalized.rawMessage).toBe(sampleError);
+  });
+
   it('应当精准识别 Playwright 缺失本地 Chrome 可执行文件为 CRAWLER_CHROME_NOT_FOUND', () => {
     const chromeMissingMsg =
       "browserType.launchPersistentContext: Executable doesn't exist at /Applications/Google Chrome.app/Contents/MacOS/Google Chrome";

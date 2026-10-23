@@ -91,10 +91,11 @@ export function normalizeAppError(
     };
   }
 
-  // 网络超时特征（精准识别网关转发超时，例如 connection timed out after 30000 ms: /10.233.109.82:8090）
+  // 网络超时特征（精准识别网关转发超时与客户端本地 AbortController 超时，例如 请求超时(30000ms): PUT https://... / connection timed out after 30000 ms: /10.233.109.82:8090）
   if (
     lowerMsg.includes('timed out') ||
     lowerMsg.includes('timeout') ||
+    lowerMsg.includes('请求超时') ||
     lowerMsg.includes('etimedout') ||
     statusCode === 504 ||
     statusCode === 408

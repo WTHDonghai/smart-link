@@ -10,12 +10,14 @@ import {
   DUTY_ENDPOINTS,
 } from '../../src/services/dutyRuntimeApi';
 import * as platformApi from '../../src/services/platformApi';
+import { SYSTEM_TIMING } from '../../src/config/timing';
 import type { DutyTaskResultPayload } from '../../src/types';
 
-vi.mock('../../src/services/platformApi', () => ({
-  requestPlatformApi: vi.fn(),
-  TOOLKIT_MODULE: 'toolkit',
-}));
+// 仅 Mock 网络边界 requestPlatformApi；isTransientPlatformError / PlatformApiError 等待测依赖均运行真实源码
+vi.mock('../../src/services/platformApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/platformApi')>();
+  return { ...actual, requestPlatformApi: vi.fn() };
+});
 
 describe('dutyRuntimeApi 平台任务与工位服务', () => {
   const mockRequest = vi.mocked(platformApi.requestPlatformApi);
@@ -241,35 +243,101 @@ describe('dutyRuntimeApi 平台任务与工位服务', () => {
   });
 
   describe('submitDutyTaskResult', () => {
-    it('调用 PUT /toolkit/toolbox/tasks/:id/result 提交标准线缆格式执行结果', async () => {
+    const resultPayload: DutyTaskResultPayload = {
+      station: 'st-1',
+      leaseToken: 'lease-999',
+      businessType: 'OTA_MIGRATION',
+      businessId: 'MT-10001',
+      scope: 'INTERFACE',
+      status: 'SUCCESS',
+      details: [
+        {
+          confirmNo: 'CONF-888',
+          businessId: 'MT-10001',
+          status: 'SUCCESS',
+          ackData: Buffer.from(JSON.stringify({ pmsOrderId: 'PMS-888' }), 'utf-8').toString('base64'),
+        },
+      ],
+    };
+
+    /** 构造 undici 本地超时中止的真实异常形态（name 为 AbortError） */
+    const createAbortError = (): Error => {
+      const err = new Error('This operation was aborted');
+      err.name = 'AbortError';
+      return err;
+    };
+
+    it('调用 PUT /toolkit/toolbox/tasks/:id/result 提交标准线缆格式执行结果，并透传长超时', async () => {
       mockRequest.mockResolvedValueOnce({ code: '0000', success: true });
 
-      const payload: DutyTaskResultPayload = {
-        station: 'st-1',
-        leaseToken: 'lease-999',
-        businessType: 'OTA_MIGRATION',
-        businessId: 'MT-10001',
-        scope: 'INTERFACE',
-        status: 'SUCCESS',
-        details: [
-          {
-            confirmNo: 'CONF-888',
-            businessId: 'MT-10001',
-            status: 'SUCCESS',
-            ackData: Buffer.from(JSON.stringify({ pmsOrderId: 'PMS-888' }), 'utf-8').toString('base64'),
-          },
-        ],
-      };
+      await submitDutyTaskResult('task-101', resultPayload);
 
-      await submitDutyTaskResult('task-101', payload);
-
+      expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockRequest).toHaveBeenCalledWith(
         DUTY_ENDPOINTS.TASK_RESULT('task-101'),
         expect.objectContaining({
           method: 'PUT',
-          body: JSON.stringify(payload),
+          timeoutMs: SYSTEM_TIMING.TASK_RESULT_TIMEOUT,
+          body: JSON.stringify(resultPayload),
         })
       );
+    });
+
+    it('瞬时网络错误（AbortError）自动重试，后续尝试成功后正常返回', async () => {
+      vi.useFakeTimers();
+      mockRequest
+        .mockRejectedValueOnce(createAbortError())
+        .mockRejectedValueOnce(new TypeError('fetch failed'))
+        .mockResolvedValueOnce({ code: '0000', success: true });
+
+      try {
+        const promise = submitDutyTaskResult('task-retry-1', resultPayload);
+        await vi.advanceTimersByTimeAsync(SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF);
+        await vi.advanceTimersByTimeAsync(SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF);
+        await promise;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(mockRequest).toHaveBeenCalledTimes(3);
+      expect(mockRequest).toHaveBeenLastCalledWith(
+        DUTY_ENDPOINTS.TASK_RESULT('task-retry-1'),
+        expect.objectContaining({
+          method: 'PUT',
+          timeoutMs: SYSTEM_TIMING.TASK_RESULT_TIMEOUT,
+        })
+      );
+    });
+
+    it('瞬时网络错误连续失败达到最大尝试次数后，抛出最后一次真实异常', async () => {
+      vi.useFakeTimers();
+      mockRequest.mockRejectedValue(new platformApi.PlatformApiTimeoutError(30_000, 'PUT', 'https://pms.example.com/toolkit/toolbox/tasks/task-retry-2/result'));
+
+      try {
+        const promise = submitDutyTaskResult('task-retry-2', resultPayload);
+        promise.catch(() => undefined); // 预注册 rejection 处理，避免 unhandled rejection 干扰定时器推进
+        await vi.advanceTimersByTimeAsync(SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF);
+        await vi.advanceTimersByTimeAsync(SYSTEM_TIMING.TASK_RESULT_RETRY_BACKOFF);
+        await expect(promise).rejects.toBeInstanceOf(platformApi.PlatformApiTimeoutError);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(mockRequest).toHaveBeenCalledTimes(SYSTEM_TIMING.TASK_RESULT_MAX_ATTEMPTS);
+    });
+
+    it('非瞬时业务错误（HTTP 400）不重试，一次即阻断抛出原异常', async () => {
+      mockRequest.mockRejectedValueOnce(
+        new platformApi.PlatformApiError(400, '平台接口调用失败 (400): leaseToken 已过期', {
+          url: 'https://pms.example.com/toolkit/toolbox/tasks/task-400/result',
+        })
+      );
+
+      await expect(submitDutyTaskResult('task-400', resultPayload)).rejects.toThrow(
+        '平台接口调用失败 (400): leaseToken 已过期'
+      );
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
   });
 
