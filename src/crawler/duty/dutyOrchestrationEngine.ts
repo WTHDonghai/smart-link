@@ -491,13 +491,15 @@ export class DutyOrchestrationEngine {
       details: `渠道: ${code} | 状态: STOPPED`,
     });
 
-    const remainingChannels = this.getActiveChannelCodes();
-
     // 共享同一 Runner 的其他渠道仍在值守时，保留浏览器会话，仅更新工位上报的值守目标
-    const runnerStillShared = remainingChannels.some((c) => this.runners.get(c) === runner);
+    const runnerStillShared = this.getActiveChannelCodes().some((c) => this.runners.get(c) === runner);
     if (!runnerStillShared) {
       await runner.stop();
     }
+
+    // 等待执行器停止期间可能有其它渠道完成 startDuty 重启值守：
+    // 必须基于恢复后的真实剩余渠道决策，按陈旧空快照误置 stopSignal 会杀死新启动的认领循环
+    const remainingChannels = this.getActiveChannelCodes();
 
     if (remainingChannels.length === 0) {
       this.coordinatorStatus = 'STOPPED';
@@ -591,9 +593,12 @@ export class DutyOrchestrationEngine {
   }
 
   private ensureClaimLoop(): void {
+    // 无条件清除停止信号必须先于存活守卫：快速「停止→重启」时，旧循环可能仍挂在
+    // 认领长轮询 (CLAIM_LONG_POLL) 中未退出，此时守卫早退若保留 stopSignal=true，
+    // 旧循环醒来即静默退出，值守将永久失去任务认领调度（界面与心跳仍显示运行中）
+    this.stopSignal = false;
     if (this.isClaimingLoopRunning) return;
     this.isClaimingLoopRunning = true;
-    this.stopSignal = false;
     void this.runClaimLoop();
   }
 
@@ -1099,7 +1104,24 @@ export class DutyOrchestrationEngine {
       }
     }
     this.isClaimingLoopRunning = false;
-    this.coordinatorStatus = this.getActiveRunners().length === 0 || this.stopSignal ? 'STOPPED' : 'IDLE';
+    const activeChannelCodes = this.getActiveChannelCodes();
+    // 值守开关仍在开但已无存活执行器：属必须暴露的僵尸态，升级 WARN 提示人工介入
+    const zombieDuty = !this.stopSignal && activeChannelCodes.length > 0;
+    this.coordinatorStatus = 'STOPPED';
+    this.appendDutyLog({
+      level: zombieDuty ? 'WARN' : 'INFO',
+      module: 'DUTY_TASK',
+      event: 'DUTY_CLAIM_LOOP_EXITED',
+      taskActionStage: 'claim',
+      message: `[任务调度] 任务认领调度循环退出: ${
+        zombieDuty
+          ? '渠道值守仍在运行但执行器已失活，请检查浏览器会话'
+          : this.stopSignal
+            ? '值守已停止'
+            : '已无运行中的渠道执行器'
+      }`,
+      details: `停止信号: ${this.stopSignal} | 值守开关渠道数: ${activeChannelCodes.length}`,
+    });
   }
 }
 

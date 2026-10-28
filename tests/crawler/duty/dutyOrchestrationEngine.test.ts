@@ -1128,6 +1128,131 @@ describe('dutyOrchestrationEngine', () => {
     });
   });
 
+  describe('快速「停止→重启」与认领循环存活', () => {
+    it('旧循环仍挂在认领长轮询中时快速重启值守，循环必须无缝存活并继续认领（不得静默死亡）', async () => {
+      const parkedTask: DutyClaimedTask = {
+        id: 'task-quick-restart-1',
+        businessId: 'MT-QUICK-RESTART-1',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_IMPORT_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-quick-restart-1',
+        data: Buffer.from(JSON.stringify({ otaChannelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      let releaseParkedClaim!: (value: DutyClaimedTask | null) => void;
+      const parkedClaim = new Promise<DutyClaimedTask | null>((resolve) => {
+        releaseParkedClaim = resolve;
+      });
+
+      const claimSpy = vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockImplementationOnce(() => parkedClaim)
+        .mockResolvedValue(null);
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // 循环已进入首次认领长轮询（模拟 CLAIM_LONG_POLL 75s 挂起窗口）
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+
+      // 事故复现时序：停止后仅数秒即重启，旧循环尚未从长轮询中醒来
+      await engine.stopDuty('MOCK_OTA');
+      await engine.startDuty('MOCK_OTA');
+
+      // 长轮询返回任务：修复后旧循环应继续存活并正常处理（修复前 stopSignal 残留使其静默退出）
+      releaseParkedClaim(parkedTask);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(mockRunner.executedTasks.map((t) => t.id)).toEqual(['task-quick-restart-1']);
+      expect(submitSpy).toHaveBeenCalledWith(
+        'task-quick-restart-1',
+        expect.objectContaining({ status: 'SUCCESS' })
+      );
+      // 处理完任务后循环继续下一轮认领，证明循环未死亡
+      // （空闲抖动 ≥2s，100ms 观察窗内恰为第 2 次认领，可精确断言）
+      expect(claimSpy).toHaveBeenCalledTimes(2);
+      expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('RUNNING');
+    });
+
+    it('认领调度循环退出时必须留下退出日志（正常停止为 INFO）', async () => {
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask').mockResolvedValue(null);
+
+      await engine.startDuty('MOCK_OTA');
+      await engine.stopDuty('MOCK_OTA');
+
+      // 循环从空闲抖动睡眠 (最大 ~2.5s) 中醒来后退出
+      await new Promise((resolve) =>
+        setTimeout(resolve, SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE + SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD + 300)
+      );
+
+      const exitLog = engine.getRecentDutyLogs().find((l) => l.event === 'DUTY_CLAIM_LOOP_EXITED');
+      expect(exitLog).toBeDefined();
+      expect(exitLog?.level).toBe('INFO');
+      expect(exitLog?.message).toContain('值守已停止');
+      expect(exitLog?.taskActionStage).toBe('claim');
+    }, 10_000);
+
+    it('执行器失活但值守开关仍开时，循环退出必须升级为 WARN 并指引检查浏览器会话（僵尸态不得静默）', async () => {
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask').mockResolvedValue(null);
+
+      await engine.startDuty('MOCK_OTA');
+      // 模拟浏览器会话崩溃：值守开关状态保持 RUNNING，但执行器已不再存活
+      mockRunner.running = false;
+
+      // 循环从空闲抖动睡眠 (最大 ~2.5s) 中醒来后因无存活执行器退出
+      await new Promise((resolve) =>
+        setTimeout(resolve, SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE + SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD + 300)
+      );
+
+      const exitLog = engine.getRecentDutyLogs().find((l) => l.event === 'DUTY_CLAIM_LOOP_EXITED');
+      expect(exitLog).toBeDefined();
+      expect(exitLog?.level).toBe('WARN');
+      expect(exitLog?.message).toContain('渠道值守仍在运行但执行器已失活');
+      expect(exitLog?.message).toContain('请检查浏览器会话');
+      // 僵尸态下值守开关状态未被篡改，供界面如实呈现失活
+      expect(engine.getChannelDutyStatus()['MOCK_OTA'].status).toBe('RUNNING');
+    }, 10_000);
+
+    it('stopDuty 等待执行器停止期间另一渠道完成重启时，不得按陈旧快照误杀新值守的认领循环', async () => {
+      const runner2 = new MockChannelRunner('SECOND_OTA');
+      engine.registerRunner(runner2);
+
+      // 让 A 渠道执行器 stop() 挂起，制造 stopDuty 恢复后的决策窗口
+      let releaseRunnerStop!: () => void;
+      const runnerStopGate = new Promise<void>((resolve) => {
+        releaseRunnerStop = resolve;
+      });
+      const rawStop = mockRunner.stop.bind(mockRunner);
+      mockRunner.stop = async () => {
+        await runnerStopGate;
+        await rawStop();
+      };
+
+      const claimSpy = vi.spyOn(dutyRuntimeApi, 'claimDutyTask').mockResolvedValue(null);
+
+      await engine.startDuty('MOCK_OTA');
+      const stopPromise = engine.stopDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // await 窗口内：B 渠道完成值守重启（旧实现恢复后按陈旧空快照置 stopSignal=true 杀死循环）
+      await engine.startDuty('SECOND_OTA');
+      releaseRunnerStop();
+      await stopPromise;
+
+      // 循环从空闲抖动睡眠 (最大 ~2.5s) 中醒来后必须继续为 B 认领，不得退出
+      await new Promise((resolve) =>
+        setTimeout(resolve, SYSTEM_TIMING.CLAIM_IDLE_JITTER_BASE + SYSTEM_TIMING.CLAIM_IDLE_JITTER_SPREAD + 300)
+      );
+
+      expect(runner2.isRunning()).toBe(true);
+      expect(engine.getChannelDutyStatus()['SECOND_OTA'].status).toBe('RUNNING');
+      expect(engine.getCoordinatorStatus()).toBe('IDLE');
+      expect(engine.getRecentDutyLogs().filter((l) => l.event === 'DUTY_CLAIM_LOOP_EXITED')).toHaveLength(0);
+      expect(claimSpy).toHaveBeenCalledTimes(2);
+
+      await engine.stopDuty('SECOND_OTA');
+    }, 10_000);
+  });
+
   describe('stopAllDuty 一键全局停止与资源清退', () => {
     it('停止所有激活的渠道 Runner，注销心跳，阻断任务认领，并将中台工位状态置为 STOP', async () => {
       const runner2 = new MockChannelRunner('SECOND_OTA');
