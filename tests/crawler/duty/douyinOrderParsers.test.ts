@@ -6,7 +6,6 @@ import {
   isDouyinRefundOrderListUrl,
   isDouyinOrderListUrl,
   isDouyinOrderDetailUrl,
-  isDouyinRiskControlText,
   extractDouyinOrdersFromPayload,
   parseDouyinOrderListResponse,
   parseDouyinBookOrderListResponse,
@@ -68,22 +67,6 @@ describe('douyinOrderParsers (Pure Parsing Functions & Contract Verification)', 
         isDouyinOrderListUrl('https://life.douyin.com/life/trade_view/v1/workbench/book/query/detail?root_life_account_id=123')
       ).toBe(false);
       expect(isDouyinOrderListUrl('https://life.douyin.com/life/other/endpoint')).toBe(false);
-    });
-  });
-
-  describe('isDouyinRiskControlText', () => {
-    it('should correctly detect risk control keywords', () => {
-      expect(isDouyinRiskControlText('请完成安全验证')).toBe(true);
-      expect(isDouyinRiskControlText('操作频繁，请稍后再试')).toBe(true);
-      expect(isDouyinRiskControlText('拖动滑块完成验证')).toBe(true);
-      expect(isDouyinRiskControlText('secsdk captcha')).toBe(true);
-      expect(isDouyinRiskControlText('登录验证码已发送')).toBe(true);
-    });
-
-    it('should return false for normal business text', () => {
-      expect(isDouyinRiskControlText('新订待确认')).toBe(false);
-      expect(isDouyinRiskControlText('买家申请取消/退款')).toBe(false);
-      expect(isDouyinRiskControlText('')).toBe(false);
     });
   });
 

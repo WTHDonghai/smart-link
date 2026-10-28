@@ -7,7 +7,6 @@ import {
   DutyExecutionError,
 } from './douyinDutyContracts';
 import { fmtDate } from '@/src/utils/template/filters';
-import { DOUYIN_RISK_TEXT_PATTERN } from '@/src/utils/douyinRiskDiagnostics';
 import { isDouyinVoucherOrder } from '@/src/services/protocols/douyinProtocol';
 
 export const DOUYIN_BOOK_ORDER_LIST_PATH = '/life/trade_view/v1/workbench/book/query/list';
@@ -168,15 +167,6 @@ export function isDouyinOrderDetailUrl(url: string): boolean {
  */
 export function isDouyinOrderListUrl(url: string): boolean {
   return isDouyinBookOrderListUrl(url) || isDouyinRefundOrderListUrl(url);
-}
-
-/**
- * 校验文本内容是否命中人机、滑块、风控验证特征
- */
-export function isDouyinRiskControlText(text: string): boolean {
-  if (!text || typeof text !== 'string') return false;
-  const norm = text.replace(/\s+/g, ' ').trim();
-  return DOUYIN_RISK_TEXT_PATTERN.test(norm);
 }
 
 /**

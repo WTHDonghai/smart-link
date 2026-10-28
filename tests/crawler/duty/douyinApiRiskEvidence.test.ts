@@ -157,7 +157,7 @@ describe('抖音接口与异常归类的具体命中证据', () => {
 
   it('详情报文中普通订单备注命中，也必须明确是接口业务字段而非页面提示', async () => {
     const response = responseFixture(DOUYIN_BOOK_ORDER_DETAIL_PATH, {
-      status_code: 0, data: { data: JSON.stringify({ order_id: ORDER_ID, remark: '客人备注：需要验证码入住' }) },
+      status_code: 0, data: { data: JSON.stringify({ order_id: ORDER_ID, remark: '客人备注：需要输入验证码入住' }) },
     });
     const inspector = new DouyinDetailInspector();
     await expect(inspector.inspectOrderDetail(pageFixture(response), ORDER_ID, { refreshOrderList: vi.fn() }))
@@ -166,8 +166,21 @@ describe('抖音接口与异常归类的具体命中证据', () => {
     const risk = entries.find((entry) => entry.event === 'DOUYIN_RISK_CONTROL_MATCHED');
     expect(risk?.meta?.riskEvidence).toMatchObject({
       origin: 'api-response', httpStatus: 200, businessCode: 0,
-      match: { fieldPath: '$.data.data(JSON).remark', matched: '验证码', snippet: '客人备注：需要验证码入住' },
+      match: { fieldPath: '$.data.data(JSON).remark', matched: '输入验证码', snippet: '客人备注：需要输入验证码入住' },
     });
+  });
+
+  it('详情报文顾客备注含「无人机表演」不再误判为风控拦截（客户环境回归）', async () => {
+    const response = responseFixture(DOUYIN_BOOK_ORDER_DETAIL_PATH, {
+      status_code: 0, data: { data: JSON.stringify({
+        order_id: ORDER_ID,
+        remark: '不要角落房；要看到无人机表演和烟花的房间，谢谢',
+      }) },
+    });
+    const inspector = new DouyinDetailInspector();
+    const result = await inspector.inspectOrderDetail(pageFixture(response), ORDER_ID, { refreshOrderList: vi.fn() });
+    expect(result).toEqual(JSON.parse(await response.text()));
+    expect(entries.filter((entry) => entry.event === 'DOUYIN_RISK_CONTROL_MATCHED')).toEqual([]);
   });
 
   it('列表非 JSON 验证页记录实际响应片段，而不是只报 JSON 解析失败', async () => {

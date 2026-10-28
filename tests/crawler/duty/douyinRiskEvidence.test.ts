@@ -49,7 +49,8 @@ function createPageFixture(options: PageFixtureOptions = {}): Page {
     visibility: 'visible',
   }));
 
-  const evaluate = vi.fn(async (probe: () => unknown) => probe());
+  // Playwright evaluate 会把第二个参数透传给页面回调；夹具同步转发，保证真实探测回调执行。
+  const evaluate = vi.fn(async (probe: (arg?: unknown) => unknown, arg?: unknown) => probe(arg));
   return {
     url: () => PAGE_URL,
     frames: () => options.frameUrl ? [{ url: () => options.frameUrl, evaluate }] : [],
@@ -98,7 +99,7 @@ describe('抖音风控命中证据（执行真实页面探测回调）', () => {
 
   it.each([
     { title: '系统提示：稍后再试', source: 'title', matched: '稍后再试', snippet: '系统提示：稍后再试' },
-    { bodyText: '帮助说明：验证码用于登录', source: 'body', matched: '验证码', snippet: '帮助说明：验证码用于登录' },
+    { bodyText: '系统提示：请完成安全验证', source: 'body', matched: '安全验证', snippet: '系统提示：请完成安全验证' },
   ])('记录 $source 中实际命中的词和上下文，而非只返回 true', async ({ source, matched, snippet, ...options }) => {
     const page = createPageFixture(options);
 
@@ -170,26 +171,36 @@ describe('抖音风控命中证据（执行真实页面探测回调）', () => {
 
   it('URL 查询参数中的关键词仍可命中，但证据只记录词而非参数值', async () => {
     const page = createPageFixture();
-    vi.stubGlobal('location', { href: 'https://life.douyin.com/frame?message=验证码&token=private-token' });
+    vi.stubGlobal('location', { href: 'https://life.douyin.com/frame?message=操作频繁&token=private-token' });
 
     await expect(assertNoDouyinPageRisk(page)).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
-    expect(entries[0].meta?.riskEvidence).toMatchObject({ match: { source: 'url', matched: '验证码' } });
+    expect(entries[0].meta?.riskEvidence).toMatchObject({ match: { source: 'url', matched: '操作频繁' } });
     expect(JSON.stringify(entries)).not.toContain('private-token');
   });
 
   it('只记录命中词附近的短文本，并隐藏连续长数字', async () => {
-    const page = createPageFixture({ bodyText: `${'普通内容'.repeat(50)} 验证码 13812345678 ${'更多内容'.repeat(80)}` });
+    const page = createPageFixture({ bodyText: `${'普通内容'.repeat(50)} 操作频繁 13812345678 ${'更多内容'.repeat(80)}` });
 
     await expect(assertNoDouyinPageRisk(page)).rejects.toThrow('RISK_VERIFICATION_REQUIRED');
     const evidence = entries[0].meta?.riskEvidence as { match: { snippet: string } };
     expect(evidence.match.snippet).toHaveLength(160);
-    expect(evidence.match.snippet).toContain('验证码 [数字已隐藏]');
+    expect(evidence.match.snippet).toContain('操作频繁 [数字已隐藏]');
     expect(JSON.stringify(entries)).not.toContain('13812345678');
   });
 
   it('正文 3000 字符之外的关键词不会新增拦截', async () => {
-    const page = createPageFixture({ bodyText: `${'正'.repeat(3000)}验证码` });
+    const page = createPageFixture({ bodyText: `${'正'.repeat(3000)}安全验证` });
     expect(await checkDouyinPageRisk(page)).toBe(false);
+    expect(entries).toEqual([]);
+  });
+
+  it('顾客备注中的「无人机表演」不触发人工校验告警（客户环境回归）', async () => {
+    const page = createPageFixture({
+      bodyText: '订单信息 顾客备注 不要角落房；要看到无人机表演和烟花的房间，谢谢 商家备注 暂无备注 客服备注 - 商品名称 周末、秋假不加价｜豪华房1晚含早',
+    });
+
+    expect(await checkDouyinPageRisk(page)).toBe(false);
+    await expect(assertNoDouyinPageRisk(page)).resolves.toBeUndefined();
     expect(entries).toEqual([]);
   });
 
@@ -210,7 +221,7 @@ describe('抖音风控命中证据（执行真实页面探测回调）', () => {
   });
 
   it('真实采集、调度与回执链路保留检查节点和证据，ackData 仍只含错误码', async () => {
-    const page = createPageFixture({ bodyText: '帮助说明：验证码用于登录' });
+    const page = createPageFixture({ bodyText: '系统提示：操作频繁，请稍后再试' });
     // 只替换浏览器会话边界；采集器、调度器和回执序列化全部使用真实实现。
     class FixtureRunner extends DouyinDutyRunner {
       public isRunning(): boolean { return true; }
@@ -230,7 +241,7 @@ describe('抖音风控命中证据（执行真实页面探测回调）', () => {
     expect(result).toMatchObject({ status: 'FAILED', errorCode: 'RISK_VERIFICATION_REQUIRED', retryable: false });
     expect(result.errorMessage).toContain('采集入口：NEW');
     expect(result.errorMessage).toContain('"source":"body"');
-    expect(result.errorMessage).toContain('验证码');
+    expect(result.errorMessage).toContain('操作频繁');
     expect(result.errorMessage).not.toContain('private-token');
     expect(entries[0].meta?.checkpoint).toBe('采集入口：NEW');
 

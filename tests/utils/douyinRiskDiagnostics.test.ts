@@ -14,9 +14,9 @@ describe('抖音响应风控特征诊断纯函数', () => {
     });
   });
   it('定位列表中序列化订单 JSON 的具体业务字段', () => {
-    const text = JSON.stringify({ data: { data: [JSON.stringify({ remark: '无需验证码入住' })] } });
+    const text = JSON.stringify({ data: { data: [JSON.stringify({ remark: '无需输入验证码入住' })] } });
     expect(findDouyinResponseRisk(text, context)?.match).toEqual({
-      source: 'response-body', fieldPath: '$.data.data[0](JSON).remark', matched: '验证码', snippet: '无需验证码入住',
+      source: 'response-body', fieldPath: '$.data.data[0](JSON).remark', matched: '输入验证码', snippet: '无需输入验证码入住',
     });
   });
   it('非 JSON 响应保留原始匹配片段', () => {
@@ -28,15 +28,15 @@ describe('抖音响应风控特征诊断纯函数', () => {
     expect(findDouyinResponseRisk('{"captcha":true}', context)?.match.fieldPath).toBe('$raw');
   });
   it('列表业务错误只检查 status_msg，不把订单备注当作失败原因', () => {
-    const text = JSON.stringify({ status_code: 1, status_msg: '订单无效', data: { remark: '验证码' } });
+    const text = JSON.stringify({ status_code: 1, status_msg: '订单无效', data: { remark: '需要输入验证码' } });
     expect(findDouyinResponseRisk(text, context, 'status_msg')).toBeNull();
-    const escaped = '{"status_code":1,"status_msg":"\\u9a8c\\u8bc1\\u7801"}';
+    const escaped = '{"status_code":1,"status_msg":"\\u5b89\\u5168\\u9a8c\\u8bc1"}';
     expect(findDouyinResponseRisk(escaped, context, 'status_msg')?.match).toEqual({
-      source: 'response-body', fieldPath: '$.status_msg', matched: '验证码', snippet: '验证码',
+      source: 'response-body', fieldPath: '$.status_msg', matched: '安全验证', snippet: '安全验证',
     });
   });
   it('转义后的词没有命中原始规则时不扩大拦截范围', () => {
-    expect(findDouyinResponseRisk('{"msg":"\\u9a8c\\u8bc1\\u7801"}', context)).toBeNull();
+    expect(findDouyinResponseRisk('{"msg":"\\u5b89\\u5168\\u9a8c\\u8bc1"}', context)).toBeNull();
   });
   it('无法解析的字符串仍提供实际文本证据', () => {
     expect(findDouyinResponseRisk('"captcha', context)?.match.snippet).toBe('"captcha');

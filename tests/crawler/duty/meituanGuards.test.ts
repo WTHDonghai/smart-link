@@ -75,6 +75,41 @@ describe('meituanGuards (Single Responsibility Principle Extraction)', () => {
       expect(await checkMeituanPageRisk(mockPage)).toBe(true);
     });
 
+    // 与 Playwright 一致把第二参透传给页面回调，保证真实嗔探回调执行
+    const executeRealProbe = vi.fn(async (probe: (arg?: unknown) => unknown, arg?: unknown) => probe(arg));
+
+    it('顾客备注中的「无人机表演」不触发页面风控（客户环境回归）', async () => {
+      vi.stubGlobal('document', {
+        querySelector: () => null,
+        title: '美团订单列表',
+        body: { innerText: '订单信息 顾客备注 不要角落房；要看到无人机表演和烟花的房间，谢谢 商家备注 暂无备注' },
+      });
+      vi.stubGlobal('location', { href: 'https://eb.meituan.com/order/list' });
+      const mockPage = {
+        url: () => 'https://eb.meituan.com/order/list',
+        frames: () => [],
+        evaluate: executeRealProbe,
+      } as unknown as Page;
+
+      expect(await checkMeituanPageRisk(mockPage)).toBe(false);
+    });
+
+    it('真实安全验证提示文案仍可命中', async () => {
+      vi.stubGlobal('document', {
+        querySelector: () => null,
+        title: '美团订单列表',
+        body: { innerText: '安全验证\n为了您的账号安全，请完成滑动验证' },
+      });
+      vi.stubGlobal('location', { href: 'https://eb.meituan.com/order/list' });
+      const mockPage = {
+        url: () => 'https://eb.meituan.com/order/list',
+        frames: () => [],
+        evaluate: executeRealProbe,
+      } as unknown as Page;
+
+      expect(await checkMeituanPageRisk(mockPage)).toBe(true);
+    });
+
     it('should return false when no risk factors are detected', async () => {
       const mockPage = {
         url: () => 'https://eb.meituan.com/order/list',

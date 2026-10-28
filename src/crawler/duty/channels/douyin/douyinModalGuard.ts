@@ -1,6 +1,7 @@
 import type { Page, FrameLocator, Locator } from 'playwright';
 import { logger } from '@/src/services/logger';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+import { OTA_RISK_TEXT_PATTERN } from '@/src/utils/otaRiskPatterns';
 import { ACTION_TIMEOUT, getScaledTimeout, isProbeVisible } from '../../dutyTimingConfig';
 
 /**
@@ -139,7 +140,7 @@ export async function dismissDouyinNoticeModals(
           }
 
           // 核心安全红线 2：严禁关闭安全风控/滑块弹窗
-          if (/安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|secsdk|captcha/i.test(modalText)) {
+          if (OTA_RISK_TEXT_PATTERN.test(modalText)) {
             logger.warn(`[抖音弹窗守卫] 检测到弹窗「${title}」，包含安全风控/人机验证内容，保留弹窗交由风控模块处理`, {
               module: 'DUTY_TASK',
               channelId: 'DOUYIN',

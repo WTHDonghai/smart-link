@@ -1,6 +1,5 @@
 import type { DouyinOriginalError, DouyinResponseRiskContext, DouyinResponseRiskEvidence } from '@/src/types/douyinRisk';
-
-export const DOUYIN_RISK_TEXT_PATTERN = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|secsdk|captcha/i;
+import { OTA_RISK_TEXT_PATTERN } from '@/src/utils/otaRiskPatterns';
 
 export function redactDouyinDiagnosticUrl(url: string): string {
   return url.replace(/\?[^#]*/g, '?redacted').replace(/#.*/, '#redacted').slice(0, 500);
@@ -56,13 +55,13 @@ function diagnosticJson(text: string): unknown {
 function findField(value: unknown, path: string): DouyinResponseRiskEvidence['match'] | null {
   if (typeof value === 'string') {
     const normalized = value.replace(/\s+/g, ' ').trim();
-    if (!DOUYIN_RISK_TEXT_PATTERN.test(normalized)) return null;
+    if (!OTA_RISK_TEXT_PATTERN.test(normalized)) return null;
     const nested = diagnosticJson(value);
     if (nested !== undefined && nested !== value) {
       const field = findField(nested, `${path}(JSON)`);
       if (field) return field;
     }
-    const match = DOUYIN_RISK_TEXT_PATTERN.exec(normalized)!;
+    const match = OTA_RISK_TEXT_PATTERN.exec(normalized)!;
     return { source: 'response-body', fieldPath: path, matched: match[0], snippet: douyinRiskSnippet(normalized, match.index) };
   }
   if (value && typeof value === 'object') {
@@ -86,7 +85,7 @@ export function findDouyinResponseRisk(
     ? String((payload as Record<string, unknown>).status_msg || '')
     : field === 'body' ? text : '';
   const normalized = target.replace(/\s+/g, ' ').trim();
-  const rawMatch = DOUYIN_RISK_TEXT_PATTERN.exec(normalized);
+  const rawMatch = OTA_RISK_TEXT_PATTERN.exec(normalized);
   if (!rawMatch) return null;
   const code = payload && typeof payload === 'object'
     ? (payload as Record<string, unknown>).status_code

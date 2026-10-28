@@ -1,5 +1,6 @@
 import type { Page, Frame } from 'playwright';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
+import { OTA_RISK_TEXT_PATTERN } from '@/src/utils/otaRiskPatterns';
 import { DutyExecutionError, MeituanDutyErrorCode } from './meituanDutyContracts';
 
 /**
@@ -42,7 +43,9 @@ export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
       }
 
       if (typeof frame.evaluate === 'function') {
-        const riskFound = await frame.evaluate(() => {
+        // evaluate 回调无法闭包引用模块常量，以 pattern.source 注入，保证与各渠道守卫共用同一份特征定义。
+        const riskFound = await frame.evaluate((patternSource: string) => {
+          const pattern = new RegExp(patternSource, 'i');
           // A. 检查风控 iframe、容器或滑块 DOM 节点
           const hasCaptchaEl = Boolean(
             document.querySelector(
@@ -60,8 +63,8 @@ export async function checkMeituanPageRisk(page: Page): Promise<boolean> {
           const title = norm(document.title);
           const url = String(window.location.href || '');
           const combined = `${title}\n${url}\n${bodyText.slice(0, 3000)}`;
-          return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|yoda|captcha|secsdk/i.test(combined);
-        }).catch(() => false);
+          return pattern.test(combined);
+        }, OTA_RISK_TEXT_PATTERN.source).catch(() => false);
 
         if (riskFound === true) return true;
       }

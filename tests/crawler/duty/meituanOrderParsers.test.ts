@@ -12,7 +12,6 @@ import {
   mergeSensitiveDataIntoRawDetail,
   hasPlainMobileNumber,
   isPlainPhoneNumber,
-  isMeituanRiskControlText,
   extractValidOrderId,
   isMeituanCancelOrder,
 } from '@/src/crawler/duty/channels/meituan/meituanOrderParsers';
@@ -454,26 +453,6 @@ describe('meituanOrderParsers (Pure Parsing Functions)', () => {
         guestNames: ['赵六'],
         guestMobile: '13987654321',
       });
-    });
-  });
-
-  describe('isMeituanRiskControlText', () => {
-    it('should detect risk control and captcha keywords correctly', () => {
-      expect(isMeituanRiskControlText('请完成安全验证')).toBe(true);
-      expect(isMeituanRiskControlText('系统检测到人机异常')).toBe(true);
-      expect(isMeituanRiskControlText('您的访问过于频繁，请稍后再试')).toBe(true);
-      expect(isMeituanRiskControlText('操作频繁，请重试')).toBe(true);
-      expect(isMeituanRiskControlText('请拖动滑块完成验证')).toBe(true);
-      expect(isMeituanRiskControlText('yoda-verify-popup')).toBe(true);
-      expect(isMeituanRiskControlText('secsdk-captcha-drag-wrapper')).toBe(true);
-      expect(isMeituanRiskControlText('captcha_token_missing')).toBe(true);
-    });
-
-    it('should return false for normal business text', () => {
-      expect(isMeituanRiskControlText('待确认订单列表正常渲染')).toBe(false);
-      expect(isMeituanRiskControlText('豪华景观大床房 2026-09-20')).toBe(false);
-      expect(isMeituanRiskControlText('')).toBe(false);
-      expect(isMeituanRiskControlText(null as unknown as string)).toBe(false);
     });
   });
 

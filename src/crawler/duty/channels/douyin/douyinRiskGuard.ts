@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { DouyinPageRiskEvidence, DouyinResponseRiskContext, DouyinRiskEvidence, DouyinRiskMatch } from '@/src/types/douyinRisk';
 import { findDouyinResponseRisk, redactDouyinDiagnosticText, redactDouyinDiagnosticUrl, serializeDouyinOriginalError } from '@/src/utils/douyinRiskDiagnostics';
+import { OTA_RISK_TEXT_PATTERN } from '@/src/utils/otaRiskPatterns';
 import { updateVisualTrackerStatus } from '@/src/crawler/visualTracker';
 import { logger } from '@/src/services/logger';
 import { DutyExecutionError, DouyinDutyErrorCode } from './douyinDutyContracts';
@@ -111,7 +112,8 @@ async function findDouyinPageRisk(page: Page): Promise<DouyinPageRiskEvidence | 
       }
 
       if (typeof frame.evaluate !== 'function') continue;
-      const match = await frame.evaluate((): DouyinRiskMatch | null => {
+      // evaluate 回调无法闭包引用模块常量，以 pattern.source 注入，保证与接口诊断共用同一份特征定义。
+      const match = await frame.evaluate((patternSource: string): DouyinRiskMatch | null => {
         const norm = (text: string | null | undefined): string => String(text || '').replace(/\s+/g, ' ').trim();
         // 只采集命中附近短文本；隐去手机号、订单号等连续数字，不采集整页 HTML。
         const snippet = (text: string): string => text.replace(/\d{6,}/g, '[数字已隐藏]').slice(0, 160);
@@ -137,7 +139,7 @@ async function findDouyinPageRisk(page: Page): Promise<DouyinPageRiskEvidence | 
           };
         }
 
-        const pattern = /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|secsdk|captcha/i;
+        const pattern = new RegExp(patternSource, 'i');
         const title = norm(document.title);
         const titleMatch = pattern.exec(title);
         if (titleMatch) {
@@ -155,7 +157,7 @@ async function findDouyinPageRisk(page: Page): Promise<DouyinPageRiskEvidence | 
           matched: bodyMatch[0],
           snippet: snippet(bodyText.slice(Math.max(0, bodyMatch.index - 40))),
         } : null;
-      }).catch(() => null);
+      }, OTA_RISK_TEXT_PATTERN.source).catch(() => null);
 
       if (match) {
         return { origin: 'page', pageUrl: redactDouyinDiagnosticUrl(pageUrl), frameUrl: redactDouyinDiagnosticUrl(frameUrl), frameIndex, match };

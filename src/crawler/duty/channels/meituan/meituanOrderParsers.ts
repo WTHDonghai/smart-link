@@ -62,15 +62,6 @@ export function isMeituanOrderTabListUrl(url: string): boolean {
 }
 
 /**
- * 校验文本内容是否命中人机、滑块、风控验证特征
- */
-export function isMeituanRiskControlText(text: string): boolean {
-  if (!text || typeof text !== 'string') return false;
-  const norm = text.replace(/\s+/g, ' ').trim();
-  return /安全验证|登录验证|验证码|滑块|人机|访问频繁|操作频繁|稍后再试|验证一下|拖动滑块|请完成验证|yoda|captcha|secsdk/i.test(norm);
-}
-
-/**
  * 判断 URL 是否属于美团特定订单的 v1 详情接口
  * 显式锁定 /api/v1/ 协议版本：一旦上游升级 v2 立即 Fail-Fast，杜绝跨版本脏数据解析
  * 遵循 KISS 原则：无正则、零黑名单、直接基于标准路径比对
