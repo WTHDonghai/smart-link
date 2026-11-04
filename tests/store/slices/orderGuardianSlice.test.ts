@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import orderGuardianReducer, {
-  setFilterStatus,
-  setFilterQuery,
-  setDateRange,
-  setPagination,
-  resetFilters,
   setFilterUnitId,
   setFilterChannel,
+  setFilterStatus,
+  setFilterOrderType,
+  setFilterOtaOrderId,
+  setFilterContactName,
+  setDateRange,
+  patchFilters,
+  setPagination,
+  resetFilters,
   closeEditDrawer,
   fetchOrdersThunk,
   fetchStatisticsThunk,
@@ -18,12 +21,12 @@ import orderGuardianReducer, {
   setConfirmImportEnabledThunk,
   selectGuardianStats,
   resetDutyLogSyncCursor,
-} from '../../../src/store/slices/orderGuardianSlice';
-import type { ToolkitOrder, ToolkitOrderDraft } from '../../../src/types';
-import { showToast } from '../../../src/store/slices/appSlice';
-import { addLog } from '../../../src/store/slices/systemLogSlice';
+} from '@/src/store/slices/orderGuardianSlice';
+import type { ToolkitOrder, ToolkitOrderDraft } from '@/src/types';
+import { showToast } from '@/src/store/slices/appSlice';
+import { addLog } from '@/src/store/slices/systemLogSlice';
 
-vi.mock('../../../src/services/dutyBridge', () => ({
+vi.mock('@/src/services/dutyBridge', () => ({
   setConfirmImportEnabled: vi.fn().mockResolvedValue(undefined),
   setMeituanBizSplitEnabled: vi.fn().mockResolvedValue(undefined),
   startDutyByChannel: vi.fn().mockResolvedValue(undefined),
@@ -35,8 +38,8 @@ vi.mock('../../../src/services/dutyBridge', () => ({
   }),
 }));
 
-vi.mock('../../../src/services/toolkitOrderApi', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../src/services/toolkitOrderApi')>();
+vi.mock('@/src/services/toolkitOrderApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/src/services/toolkitOrderApi')>();
   return {
     ...actual,
     updateToolkitOrder: vi.fn(),
@@ -74,7 +77,12 @@ describe('orderGuardianSlice reducer', () => {
     expect(state.orders).toEqual([]);
     expect(state.total).toBe(0);
     expect(state.loading).toBe(false);
-    expect(state.filters.status).toBe('all');
+    expect(state.filters.status).toBe('');
+    expect(state.filters.orderType).toBe('');
+    expect(state.filters.otaOrderId).toBe('');
+    expect(state.filters.contactName).toBe('');
+    expect(state.filters.createdStart).toBe('');
+    expect(state.filters.createdEnd).toBe('');
     expect(state.filters.page).toBe(1);
     expect(state.channelDuty).toEqual({});
     expect(state.coordinatorStatus).toBe('STOPPED');
@@ -88,9 +96,33 @@ describe('orderGuardianSlice reducer', () => {
       expect(state2.filters.page).toBe(1);
     });
 
-    it('handles setFilterQuery', () => {
-      const state = orderGuardianReducer(undefined, setFilterQuery('张三'));
-      expect(state.filters.query).toBe('张三');
+    it('handles setFilterOrderType and resets page to 1', () => {
+      const state1 = orderGuardianReducer(undefined, setPagination({ page: 3 }));
+      const state2 = orderGuardianReducer(state1, setFilterOrderType('NEW'));
+      expect(state2.filters.orderType).toBe('NEW');
+      expect(state2.filters.page).toBe(1);
+    });
+
+    it('handles setFilterOtaOrderId, setFilterContactName, and patchFilters and resets page to 1', () => {
+      const paged = orderGuardianReducer(undefined, setPagination({ page: 4 }));
+      const state1 = orderGuardianReducer(paged, setFilterOtaOrderId('MT1001'));
+      expect(state1.filters.otaOrderId).toBe('MT1001');
+      expect(state1.filters.page).toBe(1);
+
+      const paged2 = orderGuardianReducer(state1, setPagination({ page: 5 }));
+      const state2 = orderGuardianReducer(paged2, setFilterContactName('张三'));
+      expect(state2.filters.contactName).toBe('张三');
+      expect(state2.filters.page).toBe(1);
+
+      const paged3 = orderGuardianReducer(state2, setPagination({ page: 3 }));
+      const state3 = orderGuardianReducer(
+        paged3,
+        patchFilters({ unitId: 'u_01', otaChannel: 'MEITUAN', status: 'FAILED' })
+      );
+      expect(state3.filters.unitId).toBe('u_01');
+      expect(state3.filters.otaChannel).toBe('MEITUAN');
+      expect(state3.filters.status).toBe('FAILED');
+      expect(state3.filters.page).toBe(1);
     });
 
     it('handles setDateRange', () => {
@@ -98,8 +130,8 @@ describe('orderGuardianSlice reducer', () => {
         undefined,
         setDateRange({ startDate: '2026-10-01', endDate: '2026-10-05' })
       );
-      expect(state.filters.arrivalStart).toBe('2026-10-01');
-      expect(state.filters.arrivalEnd).toBe('2026-10-05');
+      expect(state.filters.createdStart).toBe('2026-10-01');
+      expect(state.filters.createdEnd).toBe('2026-10-05');
       expect(state.filters.page).toBe(1);
     });
 
@@ -125,10 +157,12 @@ describe('orderGuardianSlice reducer', () => {
 
     it('handles resetFilters', () => {
       let state = orderGuardianReducer(undefined, setFilterStatus('SUCCESS'));
-      state = orderGuardianReducer(state, setFilterQuery('订单123'));
+      state = orderGuardianReducer(state, setFilterOtaOrderId('订单123'));
+      state = orderGuardianReducer(state, setFilterContactName('张三'));
       state = orderGuardianReducer(state, resetFilters());
-      expect(state.filters.status).toBe('all');
-      expect(state.filters.query).toBe('');
+      expect(state.filters.status).toBe('');
+      expect(state.filters.otaOrderId).toBe('');
+      expect(state.filters.contactName).toBe('');
       expect(state.filters.page).toBe(1);
     });
 
@@ -158,10 +192,14 @@ describe('orderGuardianSlice reducer', () => {
           appliedFilters: {
             page: 1,
             pageSize: 20,
+            unitId: '',
+            otaChannel: '',
             status: 'FAILED',
-            query: '',
-            arrivalStart: '',
-            arrivalEnd: '',
+            orderType: '',
+            otaOrderId: '',
+            contactName: '',
+            createdStart: '',
+            createdEnd: '',
           },
         },
       };
@@ -284,7 +322,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('saveOrderDraftThunk calls updateToolkitOrder without triggering import and shows success toast', async () => {
-      const { updateToolkitOrder, retryToolkitOrderImport } = await import('../../../src/services/toolkitOrderApi');
+      const { updateToolkitOrder, retryToolkitOrderImport } = await import('@/src/services/toolkitOrderApi');
       vi.mocked(updateToolkitOrder).mockResolvedValueOnce(undefined);
 
       const dispatch = vi.fn();
@@ -320,7 +358,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('executeOrderActionThunk IMPORT calls retryToolkitOrderImport and shows success toast', async () => {
-      const { retryToolkitOrderImport, updateToolkitOrder } = await import('../../../src/services/toolkitOrderApi');
+      const { retryToolkitOrderImport, updateToolkitOrder } = await import('@/src/services/toolkitOrderApi');
       vi.mocked(retryToolkitOrderImport).mockResolvedValueOnce({
         success: true,
         pmsOrderId: 'PMS_9999',
@@ -343,7 +381,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('setConfirmImportEnabledThunk(false) calls dutyBridge, shows warning toast, adds audit log and updates state', async () => {
-      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const { setConfirmImportEnabled } = await import('@/src/services/dutyBridge');
       const dispatch = vi.fn();
       const getState = vi.fn();
 
@@ -393,7 +431,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('setConfirmImportEnabledThunk(true) calls dutyBridge, shows success toast and updates state', async () => {
-      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const { setConfirmImportEnabled } = await import('@/src/services/dutyBridge');
       const dispatch = vi.fn();
       const getState = vi.fn();
 
@@ -419,8 +457,8 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('setConfirmImportEnabledThunk does not write to localStorage if IPC fails (Fail-Fast)', async () => {
-      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
-      const { CONFIRM_IMPORT_STORAGE_KEY } = await import('../../../src/store/slices/orderGuardianSlice');
+      const { setConfirmImportEnabled } = await import('@/src/services/dutyBridge');
+      const { CONFIRM_IMPORT_STORAGE_KEY } = await import('@/src/store/slices/orderGuardianSlice');
       vi.mocked(setConfirmImportEnabled).mockRejectedValueOnce(new Error('IPC_DISCONNECTED'));
 
       if (typeof localStorage !== 'undefined') {
@@ -441,11 +479,11 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('ensureInitialConfirmImportSynced deduplicates concurrent calls and logs warning on failure', async () => {
-      const { setConfirmImportEnabled } = await import('../../../src/services/dutyBridge');
+      const { setConfirmImportEnabled } = await import('@/src/services/dutyBridge');
       const {
         resetInitialConfirmImportSyncForTesting,
         ensureInitialConfirmImportSynced,
-      } = await import('../../../src/store/slices/orderGuardianSlice');
+      } = await import('@/src/store/slices/orderGuardianSlice');
 
       resetInitialConfirmImportSyncForTesting();
       vi.mocked(setConfirmImportEnabled).mockClear();
@@ -460,7 +498,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('syncDutyStatusThunk 维护增量游标并避免在无新日志时触发重复 dispatch(addLogs)', async () => {
-      const { queryDutyStatus } = await import('../../../src/services/dutyBridge');
+      const { queryDutyStatus } = await import('@/src/services/dutyBridge');
       resetDutyLogSyncCursor();
 
       const mockQuery = vi.mocked(queryDutyStatus);
@@ -514,7 +552,7 @@ describe('orderGuardianSlice reducer', () => {
     });
 
     it('syncDutyStatusThunk 能够正确同步同一毫秒产生的新增日志', async () => {
-      const { queryDutyStatus } = await import('../../../src/services/dutyBridge');
+      const { queryDutyStatus } = await import('@/src/services/dutyBridge');
       resetDutyLogSyncCursor();
       const mockQuery = vi.mocked(queryDutyStatus);
       const dispatch = vi.fn();

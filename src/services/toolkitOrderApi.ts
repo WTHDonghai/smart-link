@@ -1,9 +1,10 @@
 import { requestPlatformApi, TOOLKIT_MODULE } from './platformApi';
 import { fetchRoomTypes, fetchRatePlans, fetchReservationTypes } from './productApi';
-import { getAllowedOrderActions } from '../utils/orderHelpers';
+import { getAllowedOrderActions, isToolkitOrderType } from '../utils/orderHelpers';
 import type {
   ToolkitOrder,
   ToolkitOrderStatus,
+  ToolkitOrderType,
   ToolkitOrderStatistics,
   ToolkitOrderFilters,
   ToolkitOrderPageResult,
@@ -71,15 +72,28 @@ export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrde
   const quantity = Number(booking.quantity) || 1;
   const totalPrice = Number(booking.totalPrice ?? raw.totalPrice ?? 0);
   const rawStatus = String(raw.status || 'PENDING').trim().toUpperCase() as ToolkitOrder['status'];
+  const rawOrderType = raw.orderType ?? raw.type;
+  const normalizedOrderType = rawOrderType ? String(rawOrderType).trim().toUpperCase() : '';
+  const rawCreatedTime = raw.createdTime ?? raw.createdAt ?? raw.transferTime;
 
   return {
     id: String(raw.id || raw.orderId || '').trim(),
-    unitId: String(raw.unitId || raw.propertyId || '').trim(),
-    unitName: String(raw.unitName || raw.propertyName || raw.hotelName || '').trim(),
+    unitId: String(raw.unitId || raw.propertyId || raw.extUnitCode || '').trim(),
+    unitName: String(
+      raw.unitName ||
+        raw.propertyName ||
+        raw.hotelName ||
+        raw.otaHotelName ||
+        raw.shopName ||
+        raw.poiName ||
+        booking.unitName ||
+        booking.hotelName ||
+        ''
+    ).trim(),
     otaChannel: String(raw.otaChannel || raw.platform || raw.channelCode || '').trim().toUpperCase(),
     otaOrderId: String(raw.otaOrderId || raw.orderId || '').trim(),
     contact: {
-      name: String(contact.name || raw.guestName || '').trim(),
+      name: String(contact.name || raw.guestName || raw.contactName || '').trim(),
       mobile: String(contact.mobile || contact.phone || raw.guestMobile || '').trim(),
     },
     booking: {
@@ -95,6 +109,8 @@ export function normalizeToolkitOrder(raw: Record<string, unknown>): ToolkitOrde
       pricing,
     },
     status: rawStatus,
+    orderType: isToolkitOrderType(normalizedOrderType) ? normalizedOrderType : undefined,
+    createdTime: rawCreatedTime ? String(rawCreatedTime).trim() : undefined,
     errorMessage: raw.errorMessage || raw.error ? String(raw.errorMessage || raw.error).trim() : undefined,
     pmsOrderId: raw.pmsOrderId || raw.confirmationNo ? String(raw.pmsOrderId || raw.confirmationNo).trim() : undefined,
     remark: raw.remark || raw.remarks ? String(raw.remark || raw.remarks).trim() : undefined,
@@ -109,6 +125,12 @@ export const ORDER_STATUSES: readonly ToolkitOrderStatus[] = Object.freeze([
   'FAILED',
   'CANCEL',
   'IMPORTING',
+]);
+
+export const ORDER_TYPES: readonly ToolkitOrderType[] = Object.freeze([
+  'NEW',
+  'MODIFY',
+  'CANCEL',
 ]);
 
 function parseValidDate(value: unknown): string {
@@ -137,34 +159,47 @@ export function normalizeToolkitOrderFilters(
     throw new Error(`不支持的订单状态：${status}`);
   }
 
-  const rawArrivalStart = String(input.arrivalStart == null ? '' : input.arrivalStart).trim();
-  const rawArrivalEnd = String(input.arrivalEnd == null ? '' : input.arrivalEnd).trim();
-  const arrivalStart = parseValidDate(rawArrivalStart);
-  const arrivalEnd = parseValidDate(rawArrivalEnd);
-
-  if (rawArrivalStart && !arrivalStart) {
-    throw new Error('入住开始日期格式无效。');
-  }
-  if (rawArrivalEnd && !arrivalEnd) {
-    throw new Error('入住结束日期格式无效。');
-  }
-  if (arrivalStart && arrivalEnd && arrivalStart > arrivalEnd) {
-    throw new Error('入住开始日期不能晚于结束日期。');
+  const rawOrderType = String(input.orderType == null ? '' : input.orderType).trim().toUpperCase();
+  const orderType = rawOrderType === 'ALL' ? '' : rawOrderType;
+  if (orderType && !ORDER_TYPES.includes(orderType as ToolkitOrderType)) {
+    throw new Error(`不支持的订单类型：${orderType}`);
   }
 
-  const query = String(input.query == null ? '' : input.query).trim().slice(0, 200);
-  const unitId = input.unitId ? String(input.unitId).trim() : undefined;
-  const otaChannel = input.otaChannel ? String(input.otaChannel).trim().toUpperCase() : undefined;
+  const rawCreatedStart = String(input.createdStart == null ? '' : input.createdStart).trim();
+  const rawCreatedEnd = String(input.createdEnd == null ? '' : input.createdEnd).trim();
+  const createdStart = parseValidDate(rawCreatedStart);
+  const createdEnd = parseValidDate(rawCreatedEnd);
+
+  if (rawCreatedStart && !createdStart) {
+    throw new Error('搬单开始日期格式无效。');
+  }
+  if (rawCreatedEnd && !createdEnd) {
+    throw new Error('搬单结束日期格式无效。');
+  }
+  if (createdStart && createdEnd && createdStart > createdEnd) {
+    throw new Error('搬单开始日期不能晚于结束日期。');
+  }
+
+  const rawUnitId = String(input.unitId == null ? '' : input.unitId).trim();
+  const unitId = rawUnitId.toUpperCase() === 'ALL' ? '' : rawUnitId;
+
+  const rawOtaChannel = String(input.otaChannel == null ? '' : input.otaChannel).trim().toUpperCase();
+  const otaChannel = rawOtaChannel === 'ALL' ? '' : rawOtaChannel;
+
+  const otaOrderId = String(input.otaOrderId == null ? '' : input.otaOrderId).trim().slice(0, 200);
+  const contactName = String(input.contactName == null ? '' : input.contactName).trim().slice(0, 200);
 
   return {
     page: clampInteger(input.page, 1, 1, 1000000),
     pageSize: clampInteger(input.pageSize, 20, 1, 100),
+    unitId,
+    otaChannel,
     status,
-    query,
-    arrivalStart,
-    arrivalEnd,
-    ...(unitId ? { unitId } : {}),
-    ...(otaChannel ? { otaChannel } : {}),
+    orderType,
+    otaOrderId,
+    contactName,
+    createdStart,
+    createdEnd,
   };
 }
 
@@ -179,23 +214,29 @@ export async function fetchToolkitOrders(
 
   queryParams.set('current', String(normalized.page));
   queryParams.set('size', String(normalized.pageSize));
-  if (normalized.status) {
-    queryParams.set('status', normalized.status);
-  }
-  if (normalized.query) {
-    queryParams.set('query', normalized.query);
-  }
-  if (normalized.arrivalStart) {
-    queryParams.set('arrivalStart', `${normalized.arrivalStart} 00:00:00`);
-  }
-  if (normalized.arrivalEnd) {
-    queryParams.set('arrivalEnd', `${normalized.arrivalEnd} 23:59:59`);
-  }
   if (normalized.unitId) {
     queryParams.set('unitId', normalized.unitId);
   }
   if (normalized.otaChannel) {
     queryParams.set('otaChannel', normalized.otaChannel);
+  }
+  if (normalized.status) {
+    queryParams.set('status', normalized.status);
+  }
+  if (normalized.orderType) {
+    queryParams.set('orderType', normalized.orderType);
+  }
+  if (normalized.otaOrderId) {
+    queryParams.set('otaOrderId', normalized.otaOrderId);
+  }
+  if (normalized.contactName) {
+    queryParams.set('contactName', normalized.contactName);
+  }
+  if (normalized.createdStart) {
+    queryParams.set('createdStart', `${normalized.createdStart} 00:00:00`);
+  }
+  if (normalized.createdEnd) {
+    queryParams.set('createdEnd', `${normalized.createdEnd} 23:59:59`);
   }
   queryParams.set('showAll', 'true');
 

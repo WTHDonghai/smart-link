@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useAppDispatch, useAppSelector } from '../../store';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useAppDispatch, useAppSelector } from '@/src/store';
 import {
   fetchOrdersThunk,
   fetchStatisticsThunk,
@@ -7,23 +7,24 @@ import {
   loadOrderEditorThunk,
   saveOrderDraftThunk,
   syncDutyStatusThunk,
-  setFilterStatus,
-  setFilterQuery,
-  setDateRange,
+  patchFilters,
   setPagination,
   resetFilters,
   closeEditDrawer,
-} from '../../store/slices/orderGuardianSlice';
-import type { ToolkitOrder, ToolkitOrderDraft } from '../../types';
+} from '@/src/store/slices/orderGuardianSlice';
+import { fetchHotelMappingsThunk, fetchPlatformPropertiesThunk } from '@/src/store/slices/hotelSlice';
+import { ALL_CHANNELS_CATALOG } from '@/src/store/slices/channelSlice';
+import type { ToolkitOrder, ToolkitOrderDraft } from '@/src/types';
+import { buildOrderHotelOptions, buildOrderChannelOptions } from '@/src/utils/orderHelpers';
 import { ChannelDutyPanel } from './ChannelDutyPanel';
-import { logger } from '../../services/logger';
+import { logger } from '@/src/services/logger';
 import { OrderStatsCards } from './OrderStatsCards';
-import { OrderFilterBar } from './OrderFilterBar';
+import { OrderFilterBar, type OrderFilterValues } from './OrderFilterBar';
 import { OrderTable } from './OrderTable';
 import { EditOrderDrawer } from './EditOrderDrawer';
 import { Pagination } from '../common/Pagination';
 import { AlertCircle, RefreshCw } from 'lucide-react';
-import { showToast } from '../../store/slices/appSlice';
+import { showToast } from '@/src/store/slices/appSlice';
 
 export const OrderGuardianView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -42,14 +43,23 @@ export const OrderGuardianView: React.FC = () => {
   const activeEditOrder = useAppSelector((state) => state.orderGuardian.activeEditOrder);
   const productOptions = useAppSelector((state) => state.orderGuardian.productOptions);
   const channels = useAppSelector((state) => state.channel.channels);
+  const hotels = useAppSelector((state) => state.hotel.hotels);
+  const pmsProperties = useAppSelector((state) => state.hotel.pmsProperties);
   const drawerLoading = useAppSelector((state) => state.orderGuardian.drawerLoading);
   const drawerSaving = useAppSelector((state) => state.orderGuardian.drawerSaving);
   const drawerError = useAppSelector((state) => state.orderGuardian.drawerError);
 
   // Local search inputs
-  const [localQuery, setLocalQuery] = useState(filters.query);
-  const [localArrivalStart, setLocalArrivalStart] = useState(filters.arrivalStart);
-  const [localArrivalEnd, setLocalArrivalEnd] = useState(filters.arrivalEnd);
+  const [localFilters, setLocalFilters] = useState<OrderFilterValues>({
+    unitId: filters.unitId,
+    otaChannel: filters.otaChannel,
+    status: filters.status,
+    orderType: filters.orderType,
+    otaOrderId: filters.otaOrderId,
+    contactName: filters.contactName,
+    createdStart: filters.createdStart,
+    createdEnd: filters.createdEnd,
+  });
 
   // Drawer read-only mode state
   const [isDrawerReadOnly, setIsDrawerReadOnly] = useState<boolean>(false);
@@ -59,39 +69,67 @@ export const OrderGuardianView: React.FC = () => {
     void dispatch(fetchOrdersThunk());
     void dispatch(fetchStatisticsThunk());
     void dispatch(syncDutyStatusThunk());
+    void dispatch(fetchHotelMappingsThunk());
+    void dispatch(fetchPlatformPropertiesThunk());
   }, [dispatch]);
 
-  // Synchronize local filter inputs if filters reset
+  // Synchronize local filter inputs if filters change externally or reset
   useEffect(() => {
-    setLocalQuery(filters.query);
-    setLocalArrivalStart(filters.arrivalStart);
-    setLocalArrivalEnd(filters.arrivalEnd);
-  }, [filters.query, filters.arrivalStart, filters.arrivalEnd]);
+    setLocalFilters({
+      unitId: filters.unitId,
+      otaChannel: filters.otaChannel,
+      status: filters.status,
+      orderType: filters.orderType,
+      otaOrderId: filters.otaOrderId,
+      contactName: filters.contactName,
+      createdStart: filters.createdStart,
+      createdEnd: filters.createdEnd,
+    });
+  }, [
+    filters.unitId,
+    filters.otaChannel,
+    filters.status,
+    filters.orderType,
+    filters.otaOrderId,
+    filters.contactName,
+    filters.createdStart,
+    filters.createdEnd,
+  ]);
 
-  // Handlers for filter bar
-  const handleStatusChange = (status: string) => {
-    dispatch(setFilterStatus(status));
-    void dispatch(fetchOrdersThunk({ status, page: 1 }));
+  const hotelOptions = useMemo(
+    () => buildOrderHotelOptions(hotels, orders, pmsProperties),
+    [hotels, orders, pmsProperties]
+  );
+
+  const channelOptions = useMemo(
+    () => buildOrderChannelOptions(channels, ALL_CHANNELS_CATALOG),
+    [channels]
+  );
+
+  const handleFilterChange = (patch: Partial<OrderFilterValues>) => {
+    setLocalFilters((prev) => ({ ...prev, ...patch }));
   };
 
+  // Handlers for filter bar
   const handleSearch = () => {
-    if (localArrivalStart && localArrivalEnd && localArrivalStart > localArrivalEnd) {
+    if (
+      localFilters.createdStart &&
+      localFilters.createdEnd &&
+      localFilters.createdStart > localFilters.createdEnd
+    ) {
       dispatch(
         showToast({
           type: 'error',
           title: '日期区间无效',
-          description: '入住开始日期不能晚于结束日期',
+          description: '搬单开始日期不能晚于结束日期',
         })
       );
       return;
     }
-    dispatch(setFilterQuery(localQuery));
-    dispatch(setDateRange({ startDate: localArrivalStart, endDate: localArrivalEnd }));
+    dispatch(patchFilters({ ...localFilters, page: 1 }));
     void dispatch(
       fetchOrdersThunk({
-        query: localQuery,
-        arrivalStart: localArrivalStart,
-        arrivalEnd: localArrivalEnd,
+        ...localFilters,
         page: 1,
       })
     );
@@ -99,16 +137,17 @@ export const OrderGuardianView: React.FC = () => {
 
   const handleReset = () => {
     dispatch(resetFilters());
-    setLocalQuery('');
-    setLocalArrivalStart('');
-    setLocalArrivalEnd('');
     void dispatch(
       fetchOrdersThunk({
         page: 1,
-        status: 'all',
-        query: '',
-        arrivalStart: '',
-        arrivalEnd: '',
+        unitId: '',
+        otaChannel: '',
+        status: '',
+        orderType: '',
+        otaOrderId: '',
+        contactName: '',
+        createdStart: '',
+        createdEnd: '',
       })
     );
   };
@@ -208,16 +247,12 @@ export const OrderGuardianView: React.FC = () => {
         </div>
       )}
 
-      {/* 模块 3: 多维状态筛选与搜索 */}
+      {/* 模块 3: 多维条件筛选与搜索 */}
       <OrderFilterBar
-        status={filters.status}
-        onStatusChange={handleStatusChange}
-        query={localQuery}
-        onQueryChange={setLocalQuery}
-        arrivalStart={localArrivalStart}
-        arrivalEnd={localArrivalEnd}
-        onArrivalStartChange={setLocalArrivalStart}
-        onArrivalEndChange={setLocalArrivalEnd}
+        filters={localFilters}
+        onFilterChange={handleFilterChange}
+        hotelOptions={hotelOptions}
+        channelOptions={channelOptions}
         onSearch={handleSearch}
         onReset={handleReset}
         loading={loading}
@@ -226,7 +261,10 @@ export const OrderGuardianView: React.FC = () => {
       {/* 模块 4: 高密订单表格 */}
       <OrderTable
         orders={orders}
+        total={total}
         channels={channels}
+        hotels={hotels}
+        pmsProperties={pmsProperties}
         actionLoadingId={actionLoadingId}
         onViewDetail={handleViewDetail}
         onEdit={handleEdit}
