@@ -4,6 +4,7 @@ import {
   fetchChannelMappingData,
   saveChannelMapping,
   selectCulturalTourismChannel,
+  updateChannelCompanyCode,
   setSelectedChannelForTemplate,
   deleteChannelMappingThunk,
   clearChannelError,
@@ -129,6 +130,7 @@ export const ChannelMappingView: React.FC = () => {
           pmsChannelId: channel.channelId,
           channelCode: channel.channelCode,
           pmsChannelName: channel.channelName,
+          companyCode: channel.companyCode?.trim(),
           status: 'A',
         })
       );
@@ -281,6 +283,9 @@ export const ChannelMappingView: React.FC = () => {
                 <th className="py-3 px-4" scope="col">
                   文旅渠道
                 </th>
+                <th className="py-3 px-4 whitespace-nowrap w-36" scope="col">
+                  议单位
+                </th>
                 <th className="py-3 px-4 whitespace-nowrap w-28" scope="col">
                   映射状态
                 </th>
@@ -295,7 +300,7 @@ export const ChannelMappingView: React.FC = () => {
             <tbody className="divide-y divide-[#edf3fc] text-[#0b1c30] text-sm" id="channel-table-body">
               {channels.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center">
+                  <td colSpan={6} className="py-12 text-center">
                     <EmptyState
                       title="暂无配置渠道"
                       description="当前未添加任何 OTA 渠道，请通过右上角「添加渠道」进行添加并配置文旅接收映射"
@@ -359,6 +364,26 @@ export const ChannelMappingView: React.FC = () => {
                             clearable
                           />
                         </div>
+                      </td>
+
+                      {/* 议单位 */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <input
+                          type="text"
+                          value={ch.companyCode || ''}
+                          onChange={(e) =>
+                            dispatch(
+                              updateChannelCompanyCode({
+                                channelId: ch.id,
+                                companyCode: e.target.value,
+                              })
+                            )
+                          }
+                          placeholder="请输入议单位"
+                          disabled={isLoading || isRowSaving || isRowDeleting}
+                          className="w-full max-w-[144px] h-8 px-2.5 rounded-lg border border-[#dce9ff] bg-white text-xs text-[#0b1c30] placeholder-[#94a3b8] focus:border-[#004ac6] focus:ring-1 focus:ring-[#004ac6] outline-hidden transition-colors select-text disabled:opacity-50"
+                          aria-label={`配置 ${ch.name} 议单位`}
+                        />
                       </td>
 
                       {/* 映射状态 */}

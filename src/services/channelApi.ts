@@ -151,6 +151,9 @@ export function normalizeOTAChannelMappingRecord(
     raw.channelId ?? raw.pmsChannelId ?? raw.rateChannelId ?? raw.channelID ?? raw.channel_id;
   const channelId = channelIdRaw !== undefined && channelIdRaw !== null ? String(channelIdRaw).trim() : '';
 
+  const companyCodeRaw = raw.companyCode;
+  const companyCode = companyCodeRaw !== undefined && companyCodeRaw !== null ? String(companyCodeRaw).trim() : '';
+
   if (!otaChannelCode || !channelCode || !channelId) {
     return null;
   }
@@ -171,6 +174,7 @@ export function normalizeOTAChannelMappingRecord(
     channelId,
     channelCode,
     channelName: channelName || channelCode,
+    companyCode: companyCode || undefined,
     status: statusRaw,
   };
 }
@@ -233,6 +237,10 @@ export function validateAndBuildChannelMappingPayload(
   const channelCode = String(item.channelCode || '').trim();
   const channelId = String(item.channelId || '').trim();
   const otaChannelName = item.otaChannelName ? String(item.otaChannelName).trim() : undefined;
+  const companyCode =
+    item.companyCode !== undefined && item.companyCode !== null
+      ? String(item.companyCode).trim()
+      : '';
   const status = item.status ? String(item.status).trim() : 'A';
 
   if (!otaChannelCode) {
@@ -250,6 +258,7 @@ export function validateAndBuildChannelMappingPayload(
     otaChannelName,
     channelCode,
     channelId,
+    companyCode: companyCode || undefined,
     status,
   };
 }
@@ -321,6 +330,9 @@ export async function saveChannelMappingsBatch(
       const channelIdRaw = raw.channelId ?? (payload.length === 1 ? payload[0].channelId : '');
       const channelId = String(channelIdRaw || '').trim();
 
+      const companyCodeRaw = raw.companyCode ?? (payload.length === 1 ? payload[0].companyCode : undefined);
+      const companyCode = companyCodeRaw !== undefined && companyCodeRaw !== null ? String(companyCodeRaw).trim() : '';
+
       if (mappingId && otaChannelCode && channelCode && channelId) {
         const otaChannelName = String(
           raw.otaChannelName ||
@@ -338,6 +350,7 @@ export async function saveChannelMappingsBatch(
           channelId,
           channelCode,
           channelName,
+          companyCode: companyCode || undefined,
           status,
         });
       }

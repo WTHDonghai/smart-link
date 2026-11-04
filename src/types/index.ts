@@ -24,6 +24,7 @@ export interface OTAChannelMappingRecord {
   channelId: string;
   channelCode: string;
   channelName: string;
+  companyCode?: string;
   status: string;
 }
 
@@ -32,6 +33,7 @@ export interface SaveChannelMappingPayloadItem {
   otaChannelName?: string;
   channelCode: string;
   channelId: string;
+  companyCode?: string;
   status?: string;
 }
 
@@ -52,6 +54,7 @@ export interface OTAChannel {
   channelId?: string;
   channelCode?: string;
   channelName?: string;
+  companyCode?: string;
   mappingId?: string;
   isMapped?: boolean;
   protocolSchema?: ChannelProtocolSchema;
