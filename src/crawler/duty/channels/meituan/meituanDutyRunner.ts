@@ -93,12 +93,13 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
   }
 
   public async start(): Promise<void> {
-    if (this.running) return;
+    if (this.running && this.isSessionAlive()) return;
 
     this.session = await createPersistentBrowserSession({
       channelCode: this.channelCode,
       headless: process.env[PROCESS_ENV_KEYS.playwrightHeadless] === 'true',
     });
+    this.watchSessionLifecycle(this.session);
 
     const page = this.session.page;
 

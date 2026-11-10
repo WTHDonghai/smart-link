@@ -170,11 +170,66 @@ export class DutyOrchestrationEngine {
     if (typeof runner.setConfirmImportEnabled === 'function') {
       runner.setConfirmImportEnabled(this.confirmImportEnabled);
     }
+    if (typeof runner.setSessionLostHandler === 'function') {
+      runner.setSessionLostHandler(() => {
+        void this.handleRunnerSessionLost(runner);
+      });
+    }
     this.runners.set(runner.channelCode.toUpperCase(), runner);
     this.channelStates.set(runner.channelCode.toUpperCase(), {
       channelCode: runner.channelCode.toUpperCase(),
       status: 'STOPPED',
     });
+  }
+
+  /**
+   * 渠道执行器底层会话失联（浏览器窗口被用户关闭或崩溃）回调处理：
+   * 1. 查找共享该 Runner 实例的所有渠道代号（主渠道及别名渠道）；
+   * 2. 将正在运行的关联渠道安全标记为 DEGRADED，释放失活状态；
+   * 3. 立即向中台重新上报存活值守目标，避免中台继续向失活工位下发任务。
+   */
+  public async handleRunnerSessionLost(runner: ChannelDutyRunner): Promise<void> {
+    const affectedCodes: string[] = [];
+    for (const [code, r] of this.runners.entries()) {
+      if (r === runner) {
+        affectedCodes.push(code);
+      }
+    }
+
+    const degradedChannels: string[] = [];
+    for (const code of affectedCodes) {
+      if (this.isChannelDutyOn(code)) {
+        this.channelStates.set(code, {
+          channelCode: code,
+          status: 'DEGRADED',
+          error: '浏览器会话或页面已意外关闭，请重新启动值守',
+        });
+        degradedChannels.push(code);
+      }
+    }
+
+    if (degradedChannels.length > 0) {
+      this.appendDutyLog({
+        level: 'WARN',
+        module: 'DUTY_TASK',
+        event: 'DUTY_RUNNER_SESSION_LOST',
+        taskActionStage: 'execute',
+        channelId: runner.channelCode,
+        message: `[会话中断] 渠道执行器「${runner.channelCode}」浏览器窗口或页面已关闭，关联渠道「${degradedChannels.join('、')}」已降级为 DEGRADED`,
+        details: `关联渠道: ${degradedChannels.join(', ')} | 请在控制面板中重新启动值守以唤起浏览器窗口`,
+      });
+
+      // 关键修复：立即向中台同步真实有效值守目标，不等 60s 心跳，防止中台继续向失活工位下发任务
+      const remainingCodes = this.getActiveChannelCodes();
+      const identity = this.stationCoordinator.getIdentity();
+      if (identity?.stationId) {
+        try {
+          await this.stationCoordinator.reportActualState(remainingCodes, remainingCodes.length === 0);
+        } catch {
+          // 忽略上报异常，依赖后续心跳自愈
+        }
+      }
+    }
   }
 
   /**
@@ -378,8 +433,14 @@ export class DutyOrchestrationEngine {
       );
     }
 
-    if (this.isChannelDutyOn(code)) {
+    const runnerAlive = typeof runner.isSessionAlive === 'function' ? runner.isSessionAlive() : runner.isRunning();
+    if (this.isChannelDutyOn(code) && runnerAlive) {
       return { success: true };
+    }
+
+    // 僵尸态自愈：若状态显示运行中但底层会话已死亡，先行安全停止并清理遗留句柄
+    if (!runnerAlive && runner.isRunning()) {
+      await runner.stop().catch(() => {});
     }
 
     this.channelStates.set(code, {
@@ -390,7 +451,7 @@ export class DutyOrchestrationEngine {
 
     try {
       // 1. 优先启动渠道自动化执行器 (唤起前台 Playwright 窗口 / 导航)；共享 Runner 已在运行时直接复用会话
-      const sharedSession = runner.isRunning();
+      const sharedSession = runner.isRunning() && (typeof runner.isSessionAlive === 'function' ? runner.isSessionAlive() : true);
       if (!sharedSession) {
         await runner.start();
       }
@@ -436,6 +497,9 @@ export class DutyOrchestrationEngine {
 
       // 3. 激活认领调度循环 (具备自愈重试与工位后置绑定能力)
       this.ensureClaimLoop();
+
+      // 4. 关键修复：启动/重启即时主动巡检补偿 (Bootstrap Immediate Collect)，无需干等中台定时器
+      void this.runBootstrapCollect(code);
 
       return { success: true };
     } catch (err) {
@@ -725,6 +789,155 @@ export class DutyOrchestrationEngine {
   }
 
   /**
+   * 纯函数：将订单列表映射为标准下游中台任务创建项清单（OTA_CANCEL_ORDER 或 OTA_IMPORT_ORDER）
+   */
+  public buildDownstreamCreationItems(
+    targetChannel: string,
+    orders: Array<{ orderId: string; hotelId?: string; cancelOrder?: boolean }>
+  ): DutyTaskCreationBatch['items'] {
+    const channelCode = targetChannel.toLowerCase();
+    return orders.map((o) => {
+      if (o.cancelOrder) {
+        return {
+          msgType: 'OTA_CANCEL_ORDER',
+          businessType: 'OTA_MIGRATION',
+          businessId: o.orderId,
+          data: {
+            channelCode: targetChannel.toUpperCase(),
+            reason: '待处理取消订单',
+          },
+        };
+      } else {
+        return {
+          msgType: 'OTA_IMPORT_ORDER',
+          businessType: 'OTA_MIGRATION',
+          businessId: o.orderId,
+          unitId: o.hotelId || undefined,
+          data: {
+            channel: channelCode,
+            extUnitCode: o.hotelId || '',
+            orders: [
+              {
+                otaOrderId: o.orderId,
+                otaChannel: targetChannel.toUpperCase(),
+              },
+            ],
+          },
+        };
+      }
+    });
+  }
+
+  /**
+   * 启动/重启即时主动巡检补偿 (Bootstrap Immediate Collect)
+   * 解决客户“断网或关浏览器重启后没有唤起采集定时任务”的被动等待痛点：
+   * 在渠道执行器启动就绪且向中台成功上报 RUNNING 状态后，立即主动调度一轮订单巡检，
+   * 发现订单直接复用下游入单创建机制，无需干等中台定时调度周期。
+   */
+  public async runBootstrapCollect(primaryCode: string): Promise<void> {
+    const code = primaryCode.trim().toUpperCase();
+    const runner = this.runners.get(code);
+    if (!runner || !runner.isRunning()) {
+      return;
+    }
+
+    const targetChannels = [code];
+    if (code === 'MEITUAN' && this.meituanBizSplitEnabled) {
+      targetChannels.push('MEITUANBIZ');
+    }
+
+    const identity = this.stationCoordinator.getIdentity();
+    if (!identity?.stationId) {
+      return;
+    }
+
+    for (const channelCode of targetChannels) {
+      if (!this.isChannelDutyOn(channelCode)) {
+        continue;
+      }
+      try {
+        this.appendDutyLog({
+          level: 'PLAYWRIGHT',
+          module: 'DUTY_TASK',
+          event: 'DUTY_BOOTSTRAP_COLLECT_START',
+          taskActionStage: 'execute',
+          channelId: channelCode,
+          message: `[即时巡检] 渠道「${channelCode}」启动完成，正在执行首轮主动订单巡检...`,
+        });
+
+        const unhandledOrders = await runner.collectUnhandledOrders(
+          undefined,
+          (entry) => this.appendDutyLog(entry),
+          channelCode
+        );
+
+        if (unhandledOrders.length === 0) {
+          this.appendDutyLog({
+            level: 'INFO',
+            module: 'DUTY_TASK',
+            event: 'DUTY_BOOTSTRAP_COLLECT_SUCCESS',
+            taskActionStage: 'result',
+            channelId: channelCode,
+            message: `[即时巡检] 渠道「${channelCode}」首轮巡检完成，暂无待确认订单`,
+          });
+          continue;
+        }
+
+        const creationItems = this.buildDownstreamCreationItems(channelCode, unhandledOrders);
+        await createDutyTasks({
+          stationId: identity.stationId,
+          appId: identity.appId,
+          items: creationItems,
+        });
+
+        this.appendDutyLog({
+          level: 'SUCCESS',
+          module: 'DUTY_TASK',
+          event: 'DUTY_BOOTSTRAP_COLLECT_SUCCESS',
+          taskActionStage: 'result',
+          channelId: channelCode,
+          message: `[即时巡检] 渠道「${channelCode}」首轮巡检完成，发现 ${unhandledOrders.length} 笔待处理订单并已成功创建入单任务`,
+          details: `订单号清单: ${unhandledOrders.map((o) => o.orderId).join(', ')}`,
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.appendDutyLog({
+          level: 'WARN',
+          module: 'DUTY_TASK',
+          event: 'DUTY_BOOTSTRAP_COLLECT_FAILED',
+          taskActionStage: 'execute',
+          channelId: channelCode,
+          message: `[即时巡检] 渠道「${channelCode}」首轮巡检异常: ${errMsg}`,
+          details: errMsg,
+        });
+      }
+    }
+  }
+
+  /**
+   * 响应渲染层网络恢复或休眠唤醒事件，立即向中台同步工位状态，消除 60s 心跳盲区
+   */
+  public async handleHostActive(): Promise<void> {
+    const activeCodes = this.getActiveChannelCodes();
+    if (activeCodes.length === 0) return;
+    const identity = this.stationCoordinator.getIdentity();
+    if (!identity?.stationId) return;
+
+    try {
+      await this.stationCoordinator.reportActualState(activeCodes);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.appendDutyLog({
+        level: 'WARN',
+        module: 'DUTY_TASK',
+        event: 'DUTY_ACTUAL_STATE_REPORT',
+        message: `[网络恢复上报] 主机网络恢复或唤醒，工位状态即时同步异常: ${errMsg}`,
+        details: errMsg,
+      });
+    }
+  }
+
+  /**
    * 采集任务下游任务派发逻辑：处理 OTA_COLLECT_ORDER 成功后的订单映射、createDutyTasks、日志与异常降级
    */
   public async dispatchDownstreamTasks(
@@ -745,37 +958,7 @@ export class DutyOrchestrationEngine {
     }
 
     try {
-      const channelCode = targetChannel.toLowerCase();
-      const creationItems: DutyTaskCreationBatch['items'] = orders.map((o) => {
-        if (o.cancelOrder) {
-          return {
-            msgType: 'OTA_CANCEL_ORDER',
-            businessType: 'OTA_MIGRATION',
-            businessId: o.orderId,
-            data: {
-              channelCode: targetChannel.toUpperCase(),
-              reason: '待处理取消订单',
-            },
-          };
-        } else {
-          return {
-            msgType: 'OTA_IMPORT_ORDER',
-            businessType: 'OTA_MIGRATION',
-            businessId: o.orderId,
-            unitId: o.hotelId || undefined,
-            data: {
-              channel: channelCode,
-              extUnitCode: o.hotelId || '',
-              orders: [
-                {
-                  otaOrderId: o.orderId,
-                  otaChannel: targetChannel.toUpperCase(),
-                },
-              ],
-            },
-          };
-        }
-      });
+      const creationItems = this.buildDownstreamCreationItems(targetChannel, orders);
 
       await createDutyTasks({
         stationId: identity.stationId,

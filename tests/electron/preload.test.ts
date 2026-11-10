@@ -70,6 +70,17 @@ describe('desktop preload log subscription', () => {
     expect(res).toEqual({ success: true });
   });
 
+  it('exposes notifyHostActive and delegates to ipcRenderer', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce({ success: true });
+
+    expect(host.duty.notifyHostActive).toBeDefined();
+    const res = await host.duty.notifyHostActive!();
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('duty:notify-host-active');
+    expect(res).toEqual({ success: true });
+  });
+
   it('exposes clipboard.writeText and delegates to ipcRenderer', async () => {
     const host = exposedHost;
     ipcRendererMock.invoke.mockResolvedValueOnce(true);

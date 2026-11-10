@@ -158,3 +158,15 @@ export async function updateDutyTemplateCache(payload: {
   }
 }
 
+/**
+ * 主机网络恢复或唤醒时通知主进程即时同步工位状态（渐进增强性 best-effort 通知）。
+ * 若宿主不支持（非 Electron 环境或测试桩环境）安全降级。
+ */
+export async function notifyHostActive(): Promise<void> {
+  const host = typeof window !== 'undefined' ? window.host : undefined;
+  if (!host?.duty?.notifyHostActive) {
+    return;
+  }
+  await host.duty.notifyHostActive().catch(() => {});
+}
+

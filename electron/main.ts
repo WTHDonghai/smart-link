@@ -528,7 +528,20 @@ export function registerDutyIpcHandlers(): void {
     }
   });
 
-  // 4. 应用级退出与全量资源回收调度
+  // 4. 响应主机网络恢复或唤醒通知，即时同步工位状态
+  ipcMain.handle('duty:notify-host-active', async () => {
+    try {
+      await dutyOrchestrationEngine.handleHostActive();
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  // 5. 应用级退出与全量资源回收调度
   ipcMain.handle('app:teardown', async () => {
     try {
       const result = await teardownApplicationResources();

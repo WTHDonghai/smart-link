@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src/types';
-import type { BrowserSession } from '@/src/crawler/browserManager';
+import { isPageAlive, type BrowserSession } from '@/src/crawler/browserManager';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
 import type { DutyOrderStatus } from './dutyTaskContext';
@@ -148,6 +148,8 @@ export interface ChannelDutyRunner {
   start(): Promise<void>;
   stop(): Promise<void>;
   isRunning(): boolean;
+  isSessionAlive?(): boolean;
+  setSessionLostHandler?(handler?: () => void): void;
 
   /** 页面操作：刷新订单列表并获取当前待处理订单概要（orderStatus 指定目标状态 Tab，缺省新订；不支持状态区分的渠道忽略之）
    * channelId 为任务目标渠道身份：别名渠道（如 MEITUANBIZ 复用美团 Runner）时用于选用对应渠道的过滤规则，缺省为 Runner 主渠道 */
@@ -211,6 +213,8 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
   protected session: BrowserSession | null = null;
   protected explicitTargetUrl?: string;
   protected taskMutex: Promise<void> = Promise.resolve();
+  protected sessionLostHandler?: () => void;
+  private cleanupSessionListeners?: () => void;
 
   constructor(targetUrl?: string) {
     if (targetUrl && targetUrl.trim()) {
@@ -220,6 +224,50 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
 
   public isRunning(): boolean {
     return this.running;
+  }
+
+  public isSessionAlive(): boolean {
+    if (!this.running || !this.session) return false;
+    return isPageAlive(this.session.page);
+  }
+
+  public setSessionLostHandler(handler?: () => void): void {
+    this.sessionLostHandler = handler;
+  }
+
+  /**
+   * 监听底层 BrowserContext 与 Page 的 close 事件（如用户手动关闭浏览器窗口或页面崩溃）。
+   * 触发时自动将 running 置为 false，清理 session，并通知调度引擎处理渠道降级与状态即时同步。
+   */
+  protected watchSessionLifecycle(session: BrowserSession): void {
+    if (this.cleanupSessionListeners) {
+      this.cleanupSessionListeners();
+      this.cleanupSessionListeners = undefined;
+    }
+
+    let triggered = false;
+    const onSessionClosed = () => {
+      if (triggered) return;
+      triggered = true;
+      this.running = false;
+      this.session = null;
+      if (this.cleanupSessionListeners) {
+        this.cleanupSessionListeners();
+        this.cleanupSessionListeners = undefined;
+      }
+      this.sessionLostHandler?.();
+    };
+
+    const context = session.context;
+    const page = session.page;
+
+    context?.once?.('close', onSessionClosed);
+    page?.once?.('close', onSessionClosed);
+
+    this.cleanupSessionListeners = () => {
+      context?.removeListener?.('close', onSessionClosed);
+      page?.removeListener?.('close', onSessionClosed);
+    };
   }
 
   public setConfirmImportEnabled(enabled: boolean): void {
@@ -259,7 +307,7 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
       throw new DutyExecutionError(
         `${channelName}浏览器页面已关闭，无法${operation}`,
         'TARGET_PAGE_NOT_READY',
-        false
+        true
       );
     }
     return this.session.page;
@@ -268,6 +316,11 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
   public abstract start(): Promise<void>;
 
   public async stop(): Promise<void> {
+    // 关键竞态规避：主动停止执行器时先行摘除会话生命周期监听，避免触发会话失联误报
+    if (this.cleanupSessionListeners) {
+      this.cleanupSessionListeners();
+      this.cleanupSessionListeners = undefined;
+    }
     this.running = false;
     if (this.session) {
       try {

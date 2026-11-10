@@ -96,7 +96,7 @@ export async function closeAllBrowserSessions(): Promise<void> {
 /**
  * 判定 Page 实例是否存活可用（排查已关闭或发生 OOM 渲染进程崩溃的 Page）
  */
-function isPageAlive(page?: Page | null): boolean {
+export function isPageAlive(page?: Page | null): boolean {
   if (!page) return false;
   if ((page as { __sl_crashed?: boolean }).__sl_crashed) return false;
   return typeof page.isClosed === 'function' ? !page.isClosed() : true;

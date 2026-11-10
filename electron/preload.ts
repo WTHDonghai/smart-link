@@ -61,6 +61,9 @@ const dutyApi: DutyBridgeApi = {
   updateTemplateCache: (payload: { channelCode: string; template?: string | null }) => {
     return ipcRenderer.invoke('duty:update-template-cache', payload);
   },
+  notifyHostActive: () => {
+    return ipcRenderer.invoke('duty:notify-host-active');
+  },
 };
 
 const logApi: LogBridgeApi = {

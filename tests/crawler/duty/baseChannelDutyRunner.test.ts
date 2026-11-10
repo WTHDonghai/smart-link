@@ -20,7 +20,7 @@ class MinimalChannelRunner extends BaseChannelDutyRunner {
   }
 
   public async stop(): Promise<void> {
-    this.running = false;
+    await super.stop();
   }
 
   public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
@@ -29,6 +29,10 @@ class MinimalChannelRunner extends BaseChannelDutyRunner {
 
   public async inspectOrderDetail(): Promise<Record<string, unknown>> {
     return {};
+  }
+
+  public exposeWatchSessionLifecycle(session: import('@/src/crawler/browserManager').BrowserSession) {
+    this.watchSessionLifecycle(session);
   }
 
   public exposeGetActivePage(operation: string) {
@@ -111,7 +115,7 @@ describe('BaseChannelDutyRunner 抽象基类与能力矩阵', () => {
       );
     });
 
-    it('当 session.page 已关闭时，getActivePage 应抛出带对应渠道中文名的 TARGET_PAGE_NOT_READY 异常', () => {
+    it('当 session.page 已关闭时，getActivePage 应抛出带对应渠道中文名的 TARGET_PAGE_NOT_READY 且 retryable=true 异常', () => {
       const runner = new MinimalChannelRunner('DOUYIN');
       (runner as unknown as { running: boolean }).running = true;
       runner.setMockSession({
@@ -120,9 +124,120 @@ describe('BaseChannelDutyRunner 抽象基类与能力矩阵', () => {
         close: async () => {},
       });
 
-      expect(() => runner.exposeGetActivePage('确认取消')).toThrowError(
-        '抖音浏览器页面已关闭，无法确认取消'
-      );
+      try {
+        runner.exposeGetActivePage('确认取消');
+        expect.unreachable('应抛出 TARGET_PAGE_NOT_READY');
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        expect((err as { errorCode?: string }).errorCode).toBe('TARGET_PAGE_NOT_READY');
+        expect((err as { retryable?: boolean }).retryable).toBe(true);
+        expect((err as Error).message).toContain('抖音浏览器页面已关闭，无法确认取消');
+      }
+    });
+
+    it('isSessionAlive 应如实反映会话与 Page 的物理活性', () => {
+      const runner = new MinimalChannelRunner('MEITUAN');
+      expect(runner.isSessionAlive()).toBe(false);
+
+      (runner as unknown as { running: boolean }).running = true;
+      runner.setMockSession({
+        page: { isClosed: () => false } as unknown as import('playwright').Page,
+        context: {} as unknown as import('playwright').BrowserContext,
+        close: async () => {},
+      });
+      expect(runner.isSessionAlive()).toBe(true);
+
+      runner.setMockSession({
+        page: { isClosed: () => true } as unknown as import('playwright').Page,
+        context: {} as unknown as import('playwright').BrowserContext,
+        close: async () => {},
+      });
+      expect(runner.isSessionAlive()).toBe(false);
+    });
+
+    it('watchSessionLifecycle 应在 context 或 page 关闭时自动置 running=false 并触发 sessionLostHandler', () => {
+      const runner = new MinimalChannelRunner('MEITUAN');
+      (runner as unknown as { running: boolean }).running = true;
+
+      const pageListeners: Record<string, () => void> = {};
+      const contextListeners: Record<string, () => void> = {};
+
+      const fakeSession = {
+        page: {
+          isClosed: () => false,
+          once: (event: string, cb: () => void) => {
+            pageListeners[event] = cb;
+          },
+          removeListener: (event: string) => {
+            delete pageListeners[event];
+          },
+        } as unknown as import('playwright').Page,
+        context: {
+          once: (event: string, cb: () => void) => {
+            contextListeners[event] = cb;
+          },
+          removeListener: (event: string) => {
+            delete contextListeners[event];
+          },
+        } as unknown as import('playwright').BrowserContext,
+        close: async () => {},
+      };
+
+      let lostCalls = 0;
+      runner.setSessionLostHandler(() => {
+        lostCalls++;
+      });
+      runner.setMockSession(fakeSession);
+      runner.exposeWatchSessionLifecycle(fakeSession);
+
+      expect(runner.isRunning()).toBe(true);
+      expect(runner.isSessionAlive()).toBe(true);
+
+      // 模拟触发 page close
+      pageListeners['close']?.();
+      expect(runner.isRunning()).toBe(false);
+      expect(runner.isSessionAlive()).toBe(false);
+      expect(lostCalls).toBe(1);
+
+      // 模拟连发 context close，防重机制确保 handler 仅执行一次
+      contextListeners['close']?.();
+      expect(lostCalls).toBe(1);
+    });
+
+    it('主动调用 stop() 时应先注销监听，绝不误触发 sessionLostHandler 虚假告警', async () => {
+      const runner = new MinimalChannelRunner('MEITUAN');
+      (runner as unknown as { running: boolean }).running = true;
+
+      let closeListenerRemoved = false;
+      const fakeSession = {
+        page: {
+          isClosed: () => false,
+          once: () => {},
+          removeListener: () => {
+            closeListenerRemoved = true;
+          },
+        } as unknown as import('playwright').Page,
+        context: {
+          once: () => {},
+          removeListener: () => {
+            closeListenerRemoved = true;
+          },
+        } as unknown as import('playwright').BrowserContext,
+        close: async () => {},
+      };
+
+      let lostCalls = 0;
+      runner.setSessionLostHandler(() => {
+        lostCalls++;
+      });
+      runner.setMockSession(fakeSession);
+      runner.exposeWatchSessionLifecycle(fakeSession);
+
+      await runner.stop();
+
+      expect(runner.isRunning()).toBe(false);
+      expect(closeListenerRemoved).toBe(true);
+      expect(lostCalls).toBe(0);
     });
   });
 
