@@ -24,6 +24,7 @@ import { checkMeituanPageRisk, assertNoMeituanPageRisk } from './meituanRiskGuar
 import { dismissMeituanNoticeModals } from './meituanModalGuard';
 import { getMeituanOrderScope } from './meituanCardLocator';
 import { MeituanListCollector } from './meituanListCollector';
+import { runDutyStepWithDialogRecovery } from '../../dutyDialogRecovery';
 import { MeituanDetailInspector } from './meituanDetailInspector';
 import { MeituanActionExecutor } from './meituanActionExecutor';
 import type { DutyOrderStatus } from '../../dutyTaskContext';
@@ -160,9 +161,23 @@ export class MeituanDutyRunner extends BaseChannelDutyRunner {
   public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
     const page = this.getActivePage('查看订单详情');
     return this.runWithMutex(async () => {
-      return this.detailInspector.inspectOrderDetail(page, otaOrderId, {
-        refreshOrderList: (p) => this.refreshOrderList(p),
-      });
+      // P4 弹窗处置(设计 7.2):卡片定位被公告类弹窗遮挡时关闭→验证→仅重试一次;
+      // 确认/取消类提交步骤有意不接恢复链,防止关闭弹窗后重试导致双提交
+      const outcome = await runDutyStepWithDialogRecovery(
+        page,
+        () =>
+          this.detailInspector.inspectOrderDetail(page, otaOrderId, {
+            refreshOrderList: (p) => this.refreshOrderList(p),
+          }),
+        { stepName: 'inspect-order-detail', orderId: otaOrderId }
+      );
+      if (!outcome.stepSucceeded) {
+        // 保留原始类型化错误上抛(错误码/风控语义/可重试标记不变),恢复链细节见 AGENT_* 追踪事件
+        throw outcome.lastStepError instanceof Error
+          ? outcome.lastStepError
+          : new DutyExecutionError(outcome.failureReason ?? '查看订单详情失败', 'ORDER_DETAIL_FETCH_FAILED');
+      }
+      return outcome.result as Record<string, unknown>;
     });
   }
 

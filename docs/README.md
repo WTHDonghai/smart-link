@@ -66,7 +66,7 @@
 - **Browser Use 对比评估**：[`research/browser-use-evaluation-2026-10-15.md`](research/browser-use-evaluation-2026-10-15.md)
 - **产品身份键决策（P0-①）**：[`research/agent-identity-key-decision-2026-11-02.md`](research/agent-identity-key-decision-2026-11-02.md)
 - **浏览器 Agent 选型决策（P0-②）**：[`research/browser-use-selection-decision-2026-11-02.md`](research/browser-use-selection-decision-2026-11-02.md)（选定 Browser Use，Python 主库 worker 路线）
-- **实施进度**：P1 追踪基础已落地；P0 全部决策完成；模型配置与消息通知已预留（环境变量手工配置）；P2a+b 产品自动映射全链路已落地；**P3 异常诊断与通知已落地**：引擎异常捕获缝隙（`registerIncidentHandler`，回执前采集、诊断旁路、SUCCESS/FAIL 契约不变）、只读页面观察器 `dutyPageObserver`（浮层/文本/跨域容错/证据脱敏）、诊断工作流 `exceptionDiagnosisWorkflow`（单次结构化模型调用 + 契约校验 + 确定性模板兑底 analysisUnavailable 如实标记）、通知去重器（渠道+订单+错误码+30 分钟窗口聚合，unknown 也登记防轰炸）、完整追踪事件链（含通知状态）。待办：Browser Use worker POC（P4 前置）、真实脱敏样本评估（设计 13.2/13.3 发布门槛）。
+- **实施进度**：P1 追踪基础已落地；P0 全部决策完成；模型配置与消息通知已预留（环境变量手工配置）；P2a+b 产品自动映射全链路已落地；**P3 异常诊断与通知已落地**：引擎异常捕获缝隙（`registerIncidentHandler`，回执前采集、诊断旁路、SUCCESS/FAIL 契约不变）、只读页面观察器 `dutyPageObserver`（浮层/文本/跨域容错/证据脱敏）、诊断工作流 `exceptionDiagnosisWorkflow`（单次结构化模型调用 + 契约校验 + 确定性模板兑底 analysisUnavailable 如实标记）、通知去重器（渠道+订单+错误码+30 分钟窗口聚合，unknown 也登记防轰炸）、完整追踪事件链（含通知状态）。P4 首期弹窗处置恢复链已落地（白名单公告类关闭+验证+仅重试一次，风控/验证码零动作，动作意图先落库确认，`dutyDialogRecovery` + `dialogActionPolicy`，验收基线六用例全绿）。恢复链已接入美团/抖音 Runner 的订单详情查看步骤（读步骤安全重试；确认/取消类提交步骤有意不接，防双提交）。待办：采集列表刷新步骤接入、Browser Use worker POC（未知弹窗语义处置）、真实脱敏样本评估（设计 13.2/13.3 发布门槛）。
 
 ---
 
