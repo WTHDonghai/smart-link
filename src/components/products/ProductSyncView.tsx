@@ -9,8 +9,16 @@ import {
   saveProductMappingsThunk,
   deleteProductMappingThunk,
   crawlOtaProductsThunk,
+  runAutoMappingThunk,
+  setProductDraft,
+  clearProductDraftsForKeys,
   getProductIdentityKey,
+  type ProductMappingInsight,
 } from '../../store/slices/productSlice';
+import { cancelAgentProductMappingRun } from '../../services/agentBridge';
+import { cancelChannelCollection } from '../../services/crawlerBridge';
+import type { MatchGrade } from '../../types/agent';
+import { describeAutoMappingError } from '@/src/utils/agent/autoMappingErrorMessages';
 import { showToast } from '../../store/slices/appSlice';
 import { fetchChannelMappingData } from '../../store/slices/channelSlice';
 import { fetchHotelMappingsThunk } from '../../store/slices/hotelSlice';
@@ -51,18 +59,18 @@ export const ProductSyncView: React.FC = () => {
     roomTypes,
     rateCodes,
     reservationTypes,
+    drafts,
+    insights,
+    autoMapping,
     isLoading,
     isSaving,
     isCrawling,
     error: productError,
   } = useAppSelector((state) => state.product);
 
-  // 本地交互状态
+  // 本地交互状态（草稿与评级元数据统一由 Redux 维护，组件不再持有可编辑副本）
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'completed' | 'pending'>('all');
-  const [rowEdits, setRowEdits] = useState<
-    Record<string, { roomType?: string; rateCode?: string; payType?: string }>
-  >({});
+  const [filterStatus, setFilterStatus] = useState<'all' | 'completed' | 'pending' | 'review'>('all');
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -179,7 +187,6 @@ export const ProductSyncView: React.FC = () => {
         })
       );
       setSelectedKeys([]);
-      setRowEdits({});
       setCurrentPage(1);
     }
   }, [dispatch, activeHotelKey]);
@@ -212,6 +219,43 @@ export const ProductSyncView: React.FC = () => {
     return [{ label: '未关联 / 留空', value: '' }, ...list];
   }, [reservationTypes]);
 
+  // 评级标签与样式（设计 6.6：文字与状态图标共同表达，不只靠颜色）
+  const gradeLabelMap: Record<MatchGrade, string> = {
+    high: '高置信',
+    medium: '中置信',
+    low: '低置信',
+    undetermined: '无法判断',
+  };
+
+  function buildInsightTooltip(insight: ProductMappingInsight): string {
+    const fieldLines = [
+      `房型：${insight.roomType.selectedCode || '未确定'}（${gradeLabelMap[insight.roomType.grade]}）${insight.roomType.reason ? ` — ${insight.roomType.reason}` : ''}`,
+      `房价码：${insight.rateCode.selectedCode || '未确定'}（${gradeLabelMap[insight.rateCode.grade]}）${insight.rateCode.reason ? ` — ${insight.rateCode.reason}` : ''}`,
+      `预订类型：${insight.reservationType.selectedCode || '未确定'}（${gradeLabelMap[insight.reservationType.grade]}）${insight.reservationType.reason ? ` — ${insight.reservationType.reason}` : ''}`,
+    ];
+    if (insight.roomType.alternatives.length > 0) {
+      fieldLines.push(`房型近似候选：${insight.roomType.alternatives.join('、')}`);
+    }
+    if (insight.rateCode.alternatives.length > 0) {
+      fieldLines.push(`房价码近似候选：${insight.rateCode.alternatives.join('、')}`);
+    }
+    if (insight.reservationType.alternatives.length > 0) {
+      fieldLines.push(`预订类型近似候选：${insight.reservationType.alternatives.join('、')}`);
+    }
+    return ['【Agent 匹配依据】', ...fieldLines].join('\n');
+  }
+
+  function isReviewNeeded(insight: ProductMappingInsight | undefined): boolean {
+    if (!insight) return false;
+    return (
+      insight.manuallyEdited ||
+      insight.outcome === 'conflict' ||
+      insight.overallGrade === 'medium' ||
+      insight.overallGrade === 'low' ||
+      insight.overallGrade === 'undetermined'
+    );
+  }
+
   // 过滤产品列表
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
@@ -219,6 +263,7 @@ export const ProductSyncView: React.FC = () => {
       if (filterStatus !== 'all') {
         if (filterStatus === 'completed' && p.status !== 'completed') return false;
         if (filterStatus === 'pending' && p.status !== 'pending') return false;
+        if (filterStatus === 'review' && !isReviewNeeded(insights[getProductIdentityKey(p)])) return false;
       }
 
       // 关键词筛选
@@ -235,7 +280,7 @@ export const ProductSyncView: React.FC = () => {
 
       return true;
     });
-  }, [products, filterStatus, searchKeyword]);
+  }, [products, filterStatus, searchKeyword, insights]);
 
   // 分页计算
   const totalItems = filteredProducts.length;
@@ -275,26 +320,19 @@ export const ProductSyncView: React.FC = () => {
     setSelectedKeys([...otherKeys, ...invertedCurrent]);
   };
 
-  // 行编辑草稿更新
+  // 行编辑草稿更新：写入 Redux 唯一草稿源（设计 6.7）
   const handleRowValueChange = (
     key: string,
     field: 'roomType' | 'rateCode' | 'payType',
     value: string
   ) => {
-    setRowEdits((prev) => ({
-      ...prev,
-      [key]: {
-        ...(prev[key] || {}),
-        [field]: value,
-      },
-    }));
+    dispatch(setProductDraft({ key, field, value }));
   };
 
   // 渠道切换处理：切换渠道时立即主动发起网络请求获取新渠道的门店列表
   const handleChannelFilterChange = (val: string) => {
     dispatch(setProductFilterChannel(val));
     setSelectedKeys([]);
-    setRowEdits({});
     setCurrentPage(1);
     if (val) {
       void dispatch(fetchHotelMappingsThunk(val));
@@ -348,6 +386,65 @@ export const ProductSyncView: React.FC = () => {
 
   // 采集 OTA 产品 (前置校验已映射门禁)
   const canCrawl = Boolean(activeChannel && activeHotel && filterUnitId);
+  /** 用户主动取消采集的意图标记：失败回流时区分「已取消」与「真失败」的提示文案 */
+  const cancelCrawlRequestedRef = React.useRef(false);
+
+  const handleCancelCrawl = async () => {
+    if (!activeChannel?.code || !isCrawling) return;
+    cancelCrawlRequestedRef.current = true;
+    try {
+      const result = await cancelChannelCollection(activeChannel.code);
+      if (!result.cancelled) {
+        // 无作业在跑(可能已自然结束)：复位意图标记，避免后续真实失败被误标为「已取消」
+        cancelCrawlRequestedRef.current = false;
+        dispatch(
+          showToast({
+            title: '取消未执行',
+            description: result.reason || '该渠道当前没有进行中的采集作业',
+            type: 'info',
+          })
+        );
+      }
+    } catch (err) {
+      dispatch(
+        showToast({
+          title: '取消请求发送失败',
+          description: err instanceof Error ? err.message : String(err),
+          type: 'warning',
+        })
+      );
+    }
+  };
+
+  // 发起智能匹配（仅由用户显式点击「智能匹配」触发，2026-11-09 运营决策；未启动原因与失败均以 toast 显式反馈）
+  const launchAutoMapping = async (pmsChannelCode: string) => {
+    try {
+      const outcome = await dispatch(runAutoMappingThunk({ pmsChannelCode })).unwrap();
+      if (!outcome.started) {
+        dispatch(
+          showToast({
+            title: '智能匹配未启动',
+            description: outcome.reason,
+            type: 'info',
+          })
+        );
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      dispatch(
+        showToast({
+          title: '智能匹配失败',
+          description: describeAutoMappingError(reason) || '自动匹配失败，请稍后重试',
+          type: 'warning',
+        })
+      );
+    }
+  };
+
+  const handleRunAutoMapping = () => {
+    if (!activeChannel?.channelCode || autoMapping.status === 'running') return;
+    void launchAutoMapping(activeChannel.channelCode);
+  };
 
   const handleCrawlOtaProducts = async () => {
     if (!canCrawl || isCrawling) return;
@@ -395,11 +492,26 @@ export const ProductSyncView: React.FC = () => {
       dispatch(
         showToast({
           title: 'OTA 产品采集完成',
-          description: `成功采集到 ${res.candidates.length} 项商品，已与平台映射合并展示`,
+          description: `成功采集到 ${res.candidates.length} 项商品，已与平台映射合并展示；可点击「智能匹配」自动填写缺失的房型、房价码与预订类型`,
           type: 'success',
         })
       );
+      cancelCrawlRequestedRef.current = false;
+
+      // 采集完成后不再自动发起智能匹配：由用户显式点击「智能匹配」发起（2026-11-09 运营决策，见设计 10.1）
     } catch (err) {
+      if (cancelCrawlRequestedRef.current) {
+        // 用户主动取消：浏览器会话被关闭导致在途操作失败，属预期结果而非故障
+        cancelCrawlRequestedRef.current = false;
+        dispatch(
+          showToast({
+            title: '产品采集已取消',
+            description: '本次采集已停止，未写入任何数据，可重新发起采集',
+            type: 'info',
+          })
+        );
+        return;
+      }
       const errorMsg = err instanceof Error ? err.message : String(err);
       const isTimeoutOrNavigating = /timeout|navigating/i.test(errorMsg);
       const displayDesc = isTimeoutOrNavigating
@@ -426,7 +538,7 @@ export const ProductSyncView: React.FC = () => {
       const p = products.find((item) => getProductIdentityKey(item) === key);
       if (!p) continue;
 
-      const edits = rowEdits[key] || {};
+      const edits = drafts[key] || {};
       const roomType = edits.roomType !== undefined ? edits.roomType : (p.roomType || '');
       const rateCode = edits.rateCode !== undefined ? edits.rateCode : (p.rateCode || '');
       const payType = edits.payType !== undefined ? edits.payType : (p.payType || '');
@@ -456,13 +568,7 @@ export const ProductSyncView: React.FC = () => {
       await dispatch(saveProductMappingsThunk(itemsToSave)).unwrap();
 
       // 清除已保存行的草稿
-      setRowEdits((prev) => {
-        const next = { ...prev };
-        for (const k of selectedKeys) {
-          delete next[k];
-        }
-        return next;
-      });
+      dispatch(clearProductDraftsForKeys(selectedKeys));
 
       dispatch(
         showToast({
@@ -508,7 +614,7 @@ export const ProductSyncView: React.FC = () => {
     if (!activeChannel?.channelCode || !filterUnitId) return;
 
     const key = getProductIdentityKey(p);
-    const edits = rowEdits[key] || {};
+    const edits = drafts[key] || {};
     const roomType = edits.roomType !== undefined ? edits.roomType : (p.roomType || '');
     const rateCode = edits.rateCode !== undefined ? edits.rateCode : (p.rateCode || '');
     const payType = edits.payType !== undefined ? edits.payType : (p.payType || '');
@@ -534,11 +640,7 @@ export const ProductSyncView: React.FC = () => {
     try {
       await dispatch(saveProductMappingsThunk([payloadItem])).unwrap();
 
-      setRowEdits((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
+      dispatch(clearProductDraftsForKeys([key]));
 
       dispatch(
         showToast({
@@ -593,11 +695,7 @@ export const ProductSyncView: React.FC = () => {
       }
 
       setSelectedKeys((prev) => prev.filter((k) => k !== key));
-      setRowEdits((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
+      dispatch(clearProductDraftsForKeys([key]));
 
       dispatch(
         showToast({
@@ -618,14 +716,14 @@ export const ProductSyncView: React.FC = () => {
     }
   };
 
-  // 保存所有已修改的行
-  const modifiedCount = Object.keys(rowEdits).length;
+  // 保存所有已修改的行（草稿统一由 Redux 维护）
+  const modifiedCount = Object.keys(drafts).length;
   const handleSaveAllModified = async () => {
     if (modifiedCount === 0 || !activeChannel?.channelCode || !filterUnitId) return;
 
     const itemsToSave: SaveProductMappingPayloadItem[] = [];
 
-    for (const [key, edits] of Object.entries(rowEdits)) {
+    for (const [key, edits] of Object.entries(drafts)) {
       const p = products.find((item) => getProductIdentityKey(item) === key);
       if (!p) continue;
 
@@ -656,7 +754,7 @@ export const ProductSyncView: React.FC = () => {
 
     try {
       await dispatch(saveProductMappingsThunk(itemsToSave)).unwrap();
-      setRowEdits({});
+      dispatch(clearProductDraftsForKeys(Object.keys(drafts)));
       dispatch(
         showToast({
           title: `已保存全部修改 (${itemsToSave.length} 项)`,
@@ -691,6 +789,54 @@ export const ProductSyncView: React.FC = () => {
     dispatch(setProductSearch(''));
     setFilterStatus('all');
     setCurrentPage(1);
+  };
+
+  // 自动匹配终态提示（成功/失败/取消与丢弃原因均显式暴露，不静默回退）
+  const announcedRunIdRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (autoMapping.status !== 'running' && autoMapping.runContext) {
+      const runId = autoMapping.runContext.runId;
+      if (announcedRunIdRef.current === runId) return;
+      announcedRunIdRef.current = runId;
+
+      if (autoMapping.status === 'completed') {
+        const counts = autoMapping.counts;
+        dispatch(
+          showToast({
+            title: '自动匹配完成，待人工核对保存',
+            description: counts
+              ? `成功 ${counts.mapped} 项、部分匹配 ${counts.partial} 项、无法判断 ${counts.unmatched} 项、需核对冲突 ${counts.conflict} 项、失败 ${counts.failed} 项`
+              : '结果已填入表格草稿，请核对后保存',
+            type: 'success',
+          })
+        );
+      } else {
+        dispatch(
+          showToast({
+            title: autoMapping.status === 'cancelled' ? '自动匹配已取消' : '自动匹配失败',
+            description:
+              autoMapping.staleDiscardReason || describeAutoMappingError(autoMapping.error) || '结果未知，请查看处理记录',
+            type: autoMapping.status === 'cancelled' ? 'info' : 'error',
+          })
+        );
+      }
+    }
+  }, [autoMapping.status, autoMapping.runContext, autoMapping.counts, autoMapping.staleDiscardReason, autoMapping.error, dispatch]);
+
+  const handleCancelAutoMapping = async () => {
+    const runId = autoMapping.runContext?.runId;
+    if (!runId) return;
+    try {
+      await cancelAgentProductMappingRun(runId);
+    } catch (err) {
+      dispatch(
+        showToast({
+          title: '取消自动匹配失败',
+          description: err instanceof Error ? err.message : String(err),
+          type: 'error',
+        })
+      );
+    }
   };
 
   return (
@@ -741,32 +887,57 @@ export const ProductSyncView: React.FC = () => {
             </button>
           )}
 
+          {isCrawling ? (
+            <button
+              type="button"
+              onClick={handleCancelCrawl}
+              className="h-8.5 px-3.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg shadow-2xs transition-colors inline-flex items-center gap-1.5 select-none shrink-0 cursor-pointer"
+              title="关闭本次采集的浏览器会话并立即停止采集"
+            >
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+              <span>取消采集</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleCrawlOtaProducts}
+              disabled={!canCrawl || isLoading}
+              className={`h-8.5 px-3.5 text-xs font-semibold rounded-lg shadow-2xs transition-colors inline-flex items-center gap-1.5 select-none shrink-0 ${
+                !canCrawl
+                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                  : 'text-white bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80] cursor-pointer'
+              }`}
+              title={
+                !canCrawl
+                  ? '请先在下方选择已完成渠道映射与门店绑定的酒店'
+                  : '通过自动化引擎抓取该酒店最新房型与商品'
+              }
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>采集 OTA 产品</span>
+            </button>
+          )}
+
+          {/* 智能匹配（设计 6.7 重新匹配入口）：显式操作必须显式反馈，未启动原因以 toast 告知 */}
           <button
             type="button"
-            onClick={handleCrawlOtaProducts}
-            disabled={!canCrawl || isCrawling || isLoading}
+            onClick={handleRunAutoMapping}
+            disabled={!canCrawl || autoMapping.status === 'running'}
             className={`h-8.5 px-3.5 text-xs font-semibold rounded-lg shadow-2xs transition-colors inline-flex items-center gap-1.5 select-none shrink-0 ${
-              !canCrawl
+              !canCrawl || autoMapping.status === 'running'
                 ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                : 'text-white bg-[#004ac6] hover:bg-[#003da6] active:bg-[#002f80] cursor-pointer'
+                : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 cursor-pointer'
             }`}
             title={
-              !canCrawl
-                ? '请先在下方选择已完成渠道映射与门店绑定的酒店'
-                : '通过自动化引擎抓取该酒店最新房型与商品'
+              autoMapping.status === 'running'
+                ? '正在匹配中，可点击顶部横幅停止'
+                : !canCrawl
+                  ? '请先在下方选择已完成渠道映射与门店绑定的酒店'
+                  : '对未完成三项映射的产品自动匹配房型、房价码与预订类型（Agent）'
             }
           >
-            {isCrawling ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>正在采集产品...</span>
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>采集 OTA 产品</span>
-              </>
-            )}
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>智能匹配</span>
           </button>
         </div>
       </div>
@@ -864,6 +1035,60 @@ export const ProductSyncView: React.FC = () => {
         </div>
       )}
 
+      {/* 自动匹配进度与结果横幅（设计 10.1：阶段可见，失败不静默） */}
+      {autoMapping.status === 'running' && (
+        <div className="bg-[#eff4ff] border border-[#dce9ff] rounded-lg p-3 flex items-center justify-between gap-3 text-xs shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <RefreshCw className="w-4 h-4 text-[#004ac6] animate-spin shrink-0" />
+            <span className="font-semibold text-[#004ac6]">正在匹配房型、房价码和预订类型…</span>
+            <span className="text-[#737686] font-mono shrink-0">
+              {autoMapping.processedProducts}/{autoMapping.totalProducts}
+            </span>
+            {autoMapping.error && (
+              <span className="text-amber-800 truncate">最近批次：{describeAutoMappingError(autoMapping.error)}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleCancelAutoMapping}
+            className="px-2.5 py-1 text-xs font-semibold text-[#737686] bg-white hover:bg-[#f2f2f2] border border-[#e2e8f0] rounded-md transition-colors cursor-pointer shrink-0"
+          >
+            停止匹配
+          </button>
+        </div>
+      )}
+      {autoMapping.status !== 'running' && autoMapping.status !== 'idle' && (
+        <div
+          className={`rounded-lg p-3 flex items-center gap-2.5 text-xs shrink-0 border ${
+            autoMapping.status === 'completed'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : autoMapping.status === 'cancelled'
+                ? 'bg-white border-[#e2e8f0] text-[#737686]'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          {autoMapping.status === 'completed' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 shrink-0" />
+          )}
+          {autoMapping.staleDiscardReason ? (
+            <span>{autoMapping.staleDiscardReason}</span>
+          ) : autoMapping.status === 'completed' && autoMapping.counts ? (
+            <span>
+              自动匹配完成：成功 {autoMapping.counts.mapped}、部分匹配 {autoMapping.counts.partial}、无法判断{' '}
+              {autoMapping.counts.unmatched}、需核对冲突 {autoMapping.counts.conflict}、失败 {autoMapping.counts.failed}；
+              结果已填入草稿，请核对后保存。
+            </span>
+          ) : (
+            <span>
+              {describeAutoMappingError(autoMapping.error) ||
+                (autoMapping.status === 'cancelled' ? '自动匹配已取消' : '自动匹配失败')}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* 3. 数据表格卡片 */}
       <div className="flex-1 min-h-0 bg-white rounded-xl shadow-xs border border-[#dce9ff] flex flex-col overflow-hidden divide-y divide-[#edf2f9]">
         {/* 内嵌搜索与快捷过滤 */}
@@ -925,6 +1150,19 @@ export const ProductSyncView: React.FC = () => {
               >
                 待配置
               </button>
+              {Object.keys(insights).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('review')}
+                  className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                    filterStatus === 'review'
+                      ? 'bg-white text-purple-700 shadow-2xs font-semibold'
+                      : 'text-[#434655] hover:text-[#0b1c30]'
+                  }`}
+                >
+                  需核对
+                </button>
+              )}
             </div>
 
             {(searchKeyword || filterStatus !== 'all') && (
@@ -1100,7 +1338,7 @@ export const ProductSyncView: React.FC = () => {
               ) : (
                 paginatedProducts.map((p) => {
                   const key = getProductIdentityKey(p);
-                  const edits = rowEdits[key] || {};
+                  const edits = drafts[key] || {};
                   const currentRoomType =
                     edits.roomType !== undefined ? edits.roomType : (p.roomType || '');
                   const currentRateCode =
@@ -1252,6 +1490,38 @@ export const ProductSyncView: React.FC = () => {
                               新采集
                             </span>
                           )}
+                          {(() => {
+                            const insight = insights[key];
+                            if (!insight) return null;
+                            if (insight.manuallyEdited) {
+                              return (
+                                <span
+                                  className="text-[10px] text-[#737686] bg-[#f2f2f2] border border-[#e2e8f0] px-1.5 py-0.2 rounded font-medium select-text"
+                                  title={buildInsightTooltip(insight)}
+                                >
+                                  已人工修改
+                                </span>
+                              );
+                            }
+                            const gradeText = gradeLabelMap[insight.overallGrade];
+                            const isError = insight.outcome === 'conflict';
+                            return (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.2 rounded font-medium border select-text cursor-help ${
+                                  isError
+                                    ? 'text-rose-700 bg-rose-50 border-rose-200'
+                                    : insight.overallGrade === 'high'
+                                      ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                      : insight.overallGrade === 'medium'
+                                        ? 'text-amber-800 bg-amber-50 border-amber-200'
+                                        : 'text-[#737686] bg-[#f2f2f2] border-[#e2e8f0]'
+                                }`}
+                                title={buildInsightTooltip(insight)}
+                              >
+                                {isError ? `需核对·冲突 ${gradeText}` : `Agent ${gradeText}`}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </td>
 

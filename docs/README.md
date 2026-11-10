@@ -53,6 +53,23 @@
 
 ---
 
+### 6. LLM Agent 产品采集映射、异常处置与执行追踪
+- **文档路径**：[`architecture/llm-agent-integration-design.md`](architecture/llm-agent-integration-design.md)
+- **文档状态**：设计提案，待评审，尚未实施
+- **核心内容**：
+  - 产品采集后自动填写 PMS 房型、房价码、预订类型，附带置信度评级，保留人工修改与现有保存流程。
+  - 轻量模型客户端、Alibaba Page Agent、Browser Use、AI SDK 与自行实现的取舍，以及 Electron 和附加运行时的版本约束。
+  - 搬单异常诊断、同一 Playwright 页面上的受限弹窗关闭、恢复验证与消息推送。
+  - 遵循 IndexedDB 唯一日志源的执行追踪、关键持久化确认、时间线、取消与中断处理。
+- **选型依据**：[`research/llm-agent-framework-research-2026-10-15.md`](research/llm-agent-framework-research-2026-10-15.md)
+- **Page Agent 补充评估**：[`research/alibaba-page-agent-evaluation-2026-10-15.md`](research/alibaba-page-agent-evaluation-2026-10-15.md)
+- **Browser Use 对比评估**：[`research/browser-use-evaluation-2026-10-15.md`](research/browser-use-evaluation-2026-10-15.md)
+- **产品身份键决策（P0-①）**：[`research/agent-identity-key-decision-2026-11-02.md`](research/agent-identity-key-decision-2026-11-02.md)
+- **浏览器 Agent 选型决策（P0-②）**：[`research/browser-use-selection-decision-2026-11-02.md`](research/browser-use-selection-decision-2026-11-02.md)（选定 Browser Use，Python 主库 worker 路线）
+- **实施进度**：P1 追踪基础已落地；P0 全部决策完成；模型配置与消息通知已预留（环境变量手工配置）；P2a+b 产品自动映射全链路已落地；**P3 异常诊断与通知已落地**：引擎异常捕获缝隙（`registerIncidentHandler`，回执前采集、诊断旁路、SUCCESS/FAIL 契约不变）、只读页面观察器 `dutyPageObserver`（浮层/文本/跨域容错/证据脱敏）、诊断工作流 `exceptionDiagnosisWorkflow`（单次结构化模型调用 + 契约校验 + 确定性模板兑底 analysisUnavailable 如实标记）、通知去重器（渠道+订单+错误码+30 分钟窗口聚合，unknown 也登记防轰炸）、完整追踪事件链（含通知状态）。待办：Browser Use worker POC（P4 前置）、真实脱敏样本评估（设计 13.2/13.3 发布门槛）。
+
+---
+
 ## 🌐 渠道专项接入规范与调研文档 (Channel Integrations)
 
 集中维护各 OTA 渠道的后台调研、网络接口契约、DOM 拓扑定位规范与脱敏样本：

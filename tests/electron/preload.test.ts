@@ -49,6 +49,16 @@ describe('desktop preload log subscription', () => {
     expect(ipcRendererMock.removeListener).not.toHaveBeenCalledWith('duty:log-entry', registeredListener);
   });
 
+  it('exposes crawler.cancelChannelJob and delegates to crawler:cancel-channel-job', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce({ cancelled: true });
+
+    const res = await host.crawler.cancelChannelJob('MEITUAN');
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('crawler:cancel-channel-job', 'MEITUAN');
+    expect(res).toEqual({ cancelled: true });
+  });
+
   it('exposes setConfirmImportEnabled and delegates to ipcRenderer', async () => {
     const host = exposedHost;
     ipcRendererMock.invoke.mockResolvedValueOnce({ success: true });
@@ -90,5 +100,45 @@ describe('desktop preload log subscription', () => {
 
     expect(ipcRendererMock.invoke).toHaveBeenCalledWith('clipboard:read-text');
     expect(res).toBe('PASTED-ORDER-123');
+  });
+
+  it('exposes agent bridge and delegates mapping operations to dedicated channels', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockResolvedValueOnce({ productMappingEnabled: true, exceptionRecoveryEnabled: false });
+    ipcRendererMock.invoke.mockResolvedValueOnce({ accepted: true, runId: 'maprun-1' });
+    ipcRendererMock.invoke.mockResolvedValueOnce({ accepted: true });
+
+    expect(host.agent).toBeDefined();
+    const capabilities = await host.agent.getCapabilities();
+    expect(ipcRendererMock.invoke).toHaveBeenNthCalledWith(1, 'agent:get-capabilities');
+    expect(capabilities).toEqual({ productMappingEnabled: true, exceptionRecoveryEnabled: false });
+
+    const snapshot = { snapshotId: 'snap-1' } as Parameters<typeof host.agent.startProductMapping>[0];
+    const startResult = await host.agent.startProductMapping(snapshot);
+    expect(ipcRendererMock.invoke).toHaveBeenNthCalledWith(2, 'agent:start-product-mapping', snapshot);
+    expect(startResult).toEqual({ accepted: true, runId: 'maprun-1' });
+
+    const cancelResult = await host.agent.cancelProductMappingRun('maprun-1');
+    expect(ipcRendererMock.invoke).toHaveBeenNthCalledWith(3, 'agent:cancel-product-mapping', 'maprun-1');
+    expect(cancelResult).toEqual({ accepted: true });
+  });
+
+  it('agent progress subscription uses the dedicated channel and unsubscribes cleanly', () => {
+    const host = exposedHost;
+    const callback = vi.fn();
+    ipcRendererMock.on.mockReturnValue(undefined);
+
+    const unsubscribe = host.agent.onProductMappingProgress(callback);
+    const registeredChannel = ipcRendererMock.on.mock.calls[0][0];
+    const registeredListener = ipcRendererMock.on.mock.calls[0][1] as (...args: unknown[]) => void;
+    expect(registeredChannel).toBe('agent:product-mapping-progress');
+
+    registeredListener({}, { runId: 'maprun-1', phase: 'completed', processedProducts: 2, totalProducts: 2 });
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'maprun-1', phase: 'completed' })
+    );
+
+    unsubscribe();
+    expect(ipcRendererMock.removeListener).toHaveBeenCalledWith('agent:product-mapping-progress', registeredListener);
   });
 });

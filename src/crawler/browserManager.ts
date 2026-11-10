@@ -71,6 +71,28 @@ export function getActiveBrowserSessions(): ReadonlySet<BrowserSession> {
 }
 
 /**
+ * 关闭指定渠道的全部活跃浏览器会话（取消进行中的采集作业）：
+ * 关闭会话会使在途页面操作立即 reject，采集流水线随即失败收敛并释放渠道互斥。
+ * 返回是否存在匹配渠道的活跃会话。
+ */
+export async function closeChannelBrowserSessions(channelCode: string): Promise<boolean> {
+  const code = (channelCode || '').trim().toUpperCase();
+  const targets = Array.from(activeBrowserSessions).filter(
+    (session) => (session.channelCode || '').trim().toUpperCase() === code
+  );
+  await Promise.allSettled(
+    targets.map(async (session) => {
+      try {
+        await session.close();
+      } catch {
+        // 忽略单个关闭异常：context close 监听器同样会完成注销与锁释放
+      }
+    })
+  );
+  return targets.length > 0;
+}
+
+/**
  * 统一清场函数：并发安全关闭所有未释放的 BrowserContext，完全清空活跃集合，释放 Profile 物理锁文件
  */
 export async function closeAllBrowserSessions(): Promise<void> {

@@ -31,6 +31,7 @@ describe('application entry host guard', () => {
         collectHotels: () => Promise.reject(new Error('not called')),
         collectProducts: () => Promise.reject(new Error('not called')),
         syncProfile: () => Promise.reject(new Error('not called')),
+        cancelChannelJob: () => Promise.reject(new Error('not called')),
       },
       duty: {
         startDuty: () => Promise.reject(new Error('not called')),
@@ -49,6 +50,13 @@ describe('application entry host guard', () => {
         installUpdate: () => Promise.reject(new Error('not called')),
         onUpdateState: () => () => undefined,
       } satisfies AppUpdateBridgeApi,
+      agent: {
+        confirmLogPersisted: () => Promise.reject(new Error('not called')),
+        getCapabilities: () => Promise.reject(new Error('not called')),
+        startProductMapping: () => Promise.reject(new Error('not called')),
+        cancelProductMappingRun: () => Promise.reject(new Error('not called')),
+        onProductMappingProgress: () => () => undefined,
+      },
       env: {},
     };
 

@@ -55,6 +55,7 @@
     "electron": "^33",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.12",
+    "fake-indexeddb": "^6.2.7",
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",

@@ -3,5 +3,19 @@
   "startupMode": "SMARTLINK_START_MODE",
   "disableHmr": "DISABLE_HMR",
   "userDataDir": "SMARTLINK_USER_DATA_DIR",
-  "playwrightHeadless": "PLAYWRIGHT_HEADLESS"
+  "playwrightHeadless": "PLAYWRIGHT_HEADLESS",
+  "agentProductMappingEnabled": "SMARTLINK_AGENT_PRODUCT_MAPPING_ENABLED",
+  "agentExceptionRecoveryEnabled": "SMARTLINK_AGENT_EXCEPTION_RECOVERY_ENABLED",
+  "agentModelProvider": "SMARTLINK_AGENT_MODEL_PROVIDER",
+  "agentModelBaseUrl": "SMARTLINK_AGENT_MODEL_BASE_URL",
+  "agentModelApiKey": "SMARTLINK_AGENT_MODEL_API_KEY",
+  "agentMappingModel": "SMARTLINK_AGENT_MAPPING_MODEL",
+  "agentDiagnosisModel": "SMARTLINK_AGENT_DIAGNOSIS_MODEL",
+  "agentModelTimeoutMs": "SMARTLINK_AGENT_MODEL_TIMEOUT_MS",
+  "agentModelMaxConcurrency": "SMARTLINK_AGENT_MODEL_MAX_CONCURRENCY",
+  "agentNotifyEnabled": "SMARTLINK_AGENT_NOTIFY_ENABLED",
+  "agentNotifyWebhookType": "SMARTLINK_AGENT_NOTIFY_WEBHOOK_TYPE",
+  "agentNotifyWebhookUrl": "SMARTLINK_AGENT_NOTIFY_WEBHOOK_URL",
+  "agentNotifyDingtalkSecret": "SMARTLINK_AGENT_NOTIFY_DINGTALK_SECRET",
+  "agentNotifyTimeoutMs": "SMARTLINK_AGENT_NOTIFY_TIMEOUT_MS"
 }

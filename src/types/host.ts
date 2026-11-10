@@ -1,5 +1,11 @@
 import type { AppEnvSnapshot } from './env';
 import type {
+  AgentCapabilities,
+  AgentLogPersistedAck,
+  ProductMappingProgressEvent,
+  ProductMappingSnapshot,
+} from './agent';
+import type {
   ChannelDutyInfo,
   DutyCoordinatorStatus,
   PlatformAuthTokens,
@@ -19,6 +25,8 @@ export interface CrawlerBridgeApi {
   collectHotels(request: HotelCrawlRequest): Promise<HotelCrawlResult>;
   collectProducts(request: ProductCrawlRequest): Promise<ProductCrawlResult>;
   syncProfile(channelCode?: string): Promise<ProfileSyncResult>;
+  /** 取消指定渠道进行中的采集作业（关闭其浏览器会话，在途操作立即失败收敛） */
+  cancelChannelJob(channelCode: string): Promise<{ cancelled: boolean; reason?: string }>;
 }
 
 export interface DutyBridgeApi {
@@ -46,6 +54,33 @@ export interface DutyBridgeApi {
 export interface LogBridgeApi {
   takePendingLogs(): Promise<SystemLogEntry[]>;
   onLog(callback: (entry: SystemLogEntry) => void): () => void;
+}
+
+export interface AgentBridgeApi {
+  /**
+   * 渲染进程向主进程回传 Agent 关键追踪事件的 IndexedDB 提交确认。
+   * 仅受信任主窗口可确认；主进程收到 committed 前不得放行后续受限动作。
+   */
+  confirmLogPersisted(ack: AgentLogPersistedAck): Promise<{ accepted: boolean; error?: string }>;
+
+  /** 查询 Agent 能力开关（仅布尔，不携带任何模型配置与密钥） */
+  getCapabilities(): Promise<AgentCapabilities>;
+
+  /**
+   * 启动一次产品自动映射 run（快照由渲染层采集后构建，主进程结构校验 + 业务校验后执行）。
+   * 返回 runId；进度与最终结果经 onProductMappingProgress 推送。
+   */
+  startProductMapping(snapshot: ProductMappingSnapshot): Promise<{
+    accepted: boolean;
+    runId?: string;
+    error?: string;
+  }>;
+
+  /** 取消进行中的映射 run；已完成批次结果保留并回传 */
+  cancelProductMappingRun(runId: string): Promise<{ accepted: boolean; error?: string }>;
+
+  /** 订阅映射进度事件（含终态 result）；返回取消订阅函数 */
+  onProductMappingProgress(callback: (event: ProductMappingProgressEvent) => void): () => void;
 }
 
 export interface PlatformBridgeRequestOptions {
@@ -77,6 +112,7 @@ export interface HostBridgeApi {
   crawler: CrawlerBridgeApi;
   duty: DutyBridgeApi;
   log?: LogBridgeApi;
+  agent: AgentBridgeApi;
   update: AppUpdateBridgeApi;
   env: AppEnvSnapshot;
   platform?: PlatformBridgeApi;

@@ -11,6 +11,7 @@ import type {
   DutyTaskCreationBatch,
   DesktopOperationResult,
 } from '../../types';
+import type { DutyPageObservation, IncidentSideEffectState } from '@/src/types/agent';
 import type { ChannelDutyRunner, DutyTaskExecutionResult } from './dutyContracts';
 import { isSupportedDutyTaskType } from './dutyContracts';
 import { MeituanDutyRunner } from './channels/meituan/meituanDutyRunner';
@@ -97,6 +98,27 @@ export function buildTaskResultPayload(
   return payload;
 }
 
+/**
+ * 值守任务异常事件捕获缝隙（P3，设计 7.1）：
+ * 在任务执行失败后、回执提交前构造；页面观察必须在现场仍完好时最先执行。
+ * 诊断与通知由注册方异步完成，不阻塞、不改变原 SUCCESS/FAIL 回执契约。
+ */
+export interface DutyIncidentCapture {
+  task: DutyClaimedTask;
+  channelCode: string;
+  /** 失败发生的编排阶段标识（设计 7.1 phase；执行器未上报时如实取 execute-task） */
+  failurePhase: string;
+  errorCode: string;
+  errorMessage: string;
+  retryable: boolean | undefined;
+  /** 失败时外部副作用状态（设计 7.1 sideEffectState；执行器未上报时如实取 unknown） */
+  sideEffectState: IncidentSideEffectState;
+  orderNo: string | null;
+  observePage(): Promise<DutyPageObservation | null>;
+}
+
+export type DutyIncidentHandler = (capture: DutyIncidentCapture) => void;
+
 export class DutyOrchestrationEngine {
   private runners = new Map<string, ChannelDutyRunner>();
   private channelStates = new Map<string, ChannelDutyInfo>();
@@ -112,6 +134,8 @@ export class DutyOrchestrationEngine {
   private readonly MAX_LOGS = 200;
   private confirmImportEnabled = process.env.CONFIRM_IMPORT_ENABLED !== 'false';
   private unsubscribeLogger?: () => void;
+  /** P3 异常诊断旁路：任务失败后回执前捕获事件（未注册时为零开销空操作） */
+  private incidentHandler: DutyIncidentHandler | null = null;
 
   constructor() {
     // 注册内置渠道执行器（美团酒店、抖音生活服务）；
@@ -351,6 +375,15 @@ export class DutyOrchestrationEngine {
   private isChannelDutyOn(channelCode: string): boolean {
     const status = this.channelStates.get(channelCode)?.status;
     return status === 'RUNNING' || status === 'STARTING';
+  }
+
+  /**
+   * P3：注册异常事件处理器（主进程启动时由 electron/main.ts 接线真实诊断工作流）。
+   * incident 携带调度器标注的失败阶段与副作用状态（设计 7.1）；页面同一性由
+   * observePage 在同一互斥区间内立即观察保证，导航级 pageEpoch 追踪属 P4 弹窗处置阶段。
+   */
+  public registerIncidentHandler(handler: DutyIncidentHandler | null): void {
+    this.incidentHandler = handler;
   }
 
   /**
@@ -939,6 +972,40 @@ export class DutyOrchestrationEngine {
     const startTime = Date.now();
     const execRes: DutyTaskExecutionResult = await runner.executeTask(task, (entry) => taskLogger.log(entry));
     const durationMs = Date.now() - startTime;
+
+    // 2.5 P3 异常事件捕获（回执前缝隙）：仅失败任务；页面观察由处理器最先同步采集，
+    //     诊断与通知异步旁路，不阻塞回执、不改变 SUCCESS/FAIL 契约
+    if (execRes.status !== 'SUCCEEDED' && this.incidentHandler) {
+      try {
+        this.incidentHandler({
+          task,
+          channelCode: targetChannel,
+          failurePhase: execRes.failedPhase || 'execute-task',
+          errorCode: execRes.errorCode || 'TASK_EXECUTION_FAILED',
+          errorMessage: execRes.errorMessage || '',
+          retryable: execRes.retryable,
+          sideEffectState: execRes.sideEffectState || 'unknown',
+          orderNo: taskOrderId || null,
+          observePage: async () => {
+            try {
+              return (await runner.observeActivePage?.()) ?? null;
+            } catch {
+              // 观察失败属证据缺失而非流程阻断：诊断工作流会如实记录「页面观察不可用」
+              return null;
+            }
+          },
+        });
+      } catch (err) {
+        this.appendDutyLog({
+          level: 'WARN',
+          event: 'AGENT_INCIDENT_CAPTURE_FAILED',
+          message: `[异常捕获] 事件处理器构造失败，诊断已跳过 (ID: ${task.id})`,
+          details: describeErrorMessage(err),
+          channelId: targetChannel,
+          orderNo: taskOrderId || undefined,
+        });
+      }
+    }
 
     // 3. 任务执行完成与结果日志 (RESULT)
     const isSuccess = execRes.status === 'SUCCEEDED';

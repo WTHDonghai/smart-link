@@ -43,6 +43,8 @@ export async function dispatchDutyTask(
       status: 'FAILED',
       errorCode: 'RUNNER_NOT_RUNNING',
       errorMessage: `渠道「${runner.channelCode}」值守执行器未运行，无法处理任务`,
+      failedPhase: 'pre-dispatch',
+      sideEffectState: 'not_started',
     };
   }
 
@@ -82,6 +84,8 @@ export async function dispatchDutyTask(
       status: 'FAILED',
       errorCode: 'TASK_PAYLOAD_INVALID',
       errorMessage: `任务载荷解析失败: ${errMsg}`,
+      failedPhase: 'payload-parse',
+      sideEffectState: 'not_started',
     };
   }
 
@@ -146,6 +150,8 @@ export async function dispatchDutyTask(
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'COLLECT_FAILED'),
           errorMessage: errMsg,
           retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
+          failedPhase: 'collect-orders',
+          sideEffectState: 'not_started',
         };
       }
     }
@@ -157,6 +163,8 @@ export async function dispatchDutyTask(
           status: 'FAILED',
           errorCode: 'MISSING_ORDER_ID',
           errorMessage: '任务载荷中缺少订单编号 orderId / businessId',
+          failedPhase: 'payload-parse',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -174,6 +182,8 @@ export async function dispatchDutyTask(
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'ORDER_DETAIL_FETCH_FAILED'),
           errorMessage: errMsg,
           retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
+          failedPhase: 'inspect-order-detail',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -189,6 +199,8 @@ export async function dispatchDutyTask(
           errorCode: 'ORDER_DETAIL_PARSE_FAILED',
           errorMessage: `渠道「${taskChannel}」提取的订单「${orderId}」详情原始报文解析失败: ${errMsg}`,
           retryable: false,
+          failedPhase: 'parse-order-detail',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -225,6 +237,8 @@ export async function dispatchDutyTask(
           errorCode: 'ORDER_DETAIL_INVALID',
           errorMessage: `渠道「${taskChannel}」提取的订单「${orderId}」详情字段不完整，缺少必须的业务字段 (入住人/房型/日期)`,
           retryable: false,
+          failedPhase: 'validate-order-fields',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -239,6 +253,8 @@ export async function dispatchDutyTask(
           errorCode: 'GUEST_INFO_MASKED',
           errorMessage: `订单「${orderId}」客人信息仍含未解密掩码 (姓名: ${unifiedOrder.contact.name || '-'} / 电话: ${unifiedOrder.contact.mobile || '-'})，已阻断自动入单，请人工在渠道后台完成解密后重试`,
           retryable: true,
+          failedPhase: 'validate-order-fields',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -309,6 +325,9 @@ export async function dispatchDutyTask(
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'IMPORT_FAILED'),
           errorMessage: errMsg,
           retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
+          // 提交中台后失败：请求是否已生效无法断言，必须按结果未知处理（设计 7.1）
+          failedPhase: 'submit-import',
+          sideEffectState: 'unknown',
         };
       }
     }
@@ -323,6 +342,8 @@ export async function dispatchDutyTask(
           errorCode: 'CONFIRM_IMPORT_DISABLED',
           errorMessage: '已关闭订单确认号回填开关，系统已拦截确认号回填与接单操作（开发调试保护模式）',
           retryable: false,
+          failedPhase: 'confirm-import',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -335,6 +356,8 @@ export async function dispatchDutyTask(
           errorCode: 'CONFIRM_NO_MISSING',
           errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的确认号 (confirmNo)',
           retryable: false,
+          failedPhase: 'payload-parse',
+          sideEffectState: 'not_started',
         };
       }
       if (!orderId) {
@@ -343,6 +366,8 @@ export async function dispatchDutyTask(
           errorCode: 'ORDER_ID_MISSING',
           errorMessage: 'OTA_CONFIRM_IMPORT 任务缺失有效的订单号 (orderId)',
           retryable: false,
+          failedPhase: 'payload-parse',
+          sideEffectState: 'not_started',
         };
       }
       if (typeof runner.confirmImport !== 'function') {
@@ -351,6 +376,8 @@ export async function dispatchDutyTask(
           errorCode: 'METHOD_NOT_IMPLEMENTED',
           errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmImport 方法`,
           retryable: false,
+          failedPhase: 'confirm-import',
+          sideEffectState: 'not_started',
         };
       }
 
@@ -375,6 +402,9 @@ export async function dispatchDutyTask(
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'CONFIRM_IMPORT_FAILED'),
           errorMessage: errMsg,
           retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
+          // 页面确认动作可能已点击后才抛错：副作用是否生效无法断言
+          failedPhase: 'confirm-import',
+          sideEffectState: 'unknown',
         };
       }
     }
@@ -388,6 +418,8 @@ export async function dispatchDutyTask(
           errorCode: 'ORDER_ID_MISSING',
           errorMessage: `${task.msgType} 任务缺失有效的订单号 (orderId)`,
           retryable: false,
+          failedPhase: 'payload-parse',
+          sideEffectState: 'not_started',
         };
       }
       if (typeof runner.confirmCancel !== 'function') {
@@ -396,6 +428,8 @@ export async function dispatchDutyTask(
           errorCode: 'METHOD_NOT_IMPLEMENTED',
           errorMessage: `渠道「${runner.channelCode}」执行器未实现 confirmCancel 方法`,
           retryable: false,
+          failedPhase: 'confirm-cancel',
+          sideEffectState: 'not_started',
         };
       }
       try {
@@ -418,6 +452,9 @@ export async function dispatchDutyTask(
           errorCode: isRisk ? 'RISK_VERIFICATION_REQUIRED' : (customCode || 'CONFIRM_CANCEL_FAILED'),
           errorMessage: errMsg,
           retryable: typeof customRetryable === 'boolean' ? customRetryable : (isRisk ? false : undefined),
+          // 页面确认动作可能已点击后才抛错：副作用是否生效无法断言
+          failedPhase: 'confirm-cancel',
+          sideEffectState: 'unknown',
         };
       }
     }
@@ -427,6 +464,8 @@ export async function dispatchDutyTask(
         status: 'FAILED',
         errorCode: 'UNSUPPORTED_TASK_TYPE',
         errorMessage: `不支持的任务消息类型: ${task.msgType}`,
+        failedPhase: 'pre-dispatch',
+        sideEffectState: 'not_started',
       };
   }
 }

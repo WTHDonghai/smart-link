@@ -1128,6 +1128,80 @@ describe('dutyOrchestrationEngine', () => {
     });
   });
 
+  describe('P3 异常事件捕获缝隙（registerIncidentHandler）', () => {
+    it('失败任务回执前触发处理器并携带完整捕获字段；成功任务不触发', async () => {
+      const captures: Array<Record<string, unknown>> = [];
+      engine.registerIncidentHandler((capture) => {
+        captures.push({
+          taskId: capture.task.id,
+          channelCode: capture.channelCode,
+          failurePhase: capture.failurePhase,
+          errorCode: capture.errorCode,
+          errorMessage: capture.errorMessage,
+          orderNo: capture.orderNo,
+          retryable: capture.retryable,
+          sideEffectState: capture.sideEffectState,
+        });
+      });
+
+      const task: DutyClaimedTask = {
+        id: 'task-incident-1',
+        businessId: 'ORD-INCIDENT-1',
+        businessType: 'OTA_MIGRATION',
+        msgType: 'OTA_CANCEL_ORDER',
+        stationId: 'st-unit-test-1',
+        leaseToken: 'lease-tok-incident-1',
+        data: Buffer.from(JSON.stringify({ channelCode: 'MOCK_OTA' })).toString('base64'),
+      };
+
+      mockRunner.executeResult = {
+        status: 'FAILED',
+        errorCode: 'ORDER_DETAIL_FETCH_FAILED',
+        errorMessage: '定位订单卡片超时',
+        retryable: true,
+      };
+
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(task)
+        .mockResolvedValue(null);
+      vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult').mockResolvedValue(undefined);
+
+      await engine.startDuty('MOCK_OTA');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      expect(mockRunner.executedTasks).toEqual([task]);
+      expect(captures).toHaveLength(1);
+      expect(captures[0]).toEqual({
+        taskId: 'task-incident-1',
+        channelCode: 'MOCK_OTA',
+        // Mock 执行器未标注阶段与副作用状态：引擎如实回退 execute-task / unknown（设计 7.1）
+        failurePhase: 'execute-task',
+        errorCode: 'ORDER_DETAIL_FETCH_FAILED',
+        errorMessage: '定位订单卡片超时',
+        orderNo: 'ORD-INCIDENT-1',
+        retryable: true,
+        sideEffectState: 'unknown',
+      });
+
+      // 成功任务不触发异常捕获
+      const okTask: DutyClaimedTask = {
+        ...task,
+        id: 'task-incident-ok',
+        businessId: 'ORD-INCIDENT-OK',
+        leaseToken: 'lease-tok-incident-2',
+      };
+      mockRunner.executeResult = { status: 'SUCCEEDED', result: { acknowledged: true } };
+      vi.spyOn(dutyRuntimeApi, 'claimDutyTask')
+        .mockResolvedValueOnce(okTask)
+        .mockResolvedValue(null);
+      // 空闲认领有 2-2.5s 退避抖动，用 waitFor 覆盖真实节奏
+      await vi.waitFor(() => expect(mockRunner.executedTasks).toHaveLength(2), { timeout: 6000 });
+      expect(captures).toHaveLength(1);
+
+      engine.registerIncidentHandler(null);
+    });
+  });
+
   describe('快速「停止→重启」与认领循环存活', () => {
     it('旧循环仍挂在认领长轮询中时快速重启值守，循环必须无缝存活并继续认领（不得静默死亡）', async () => {
       const parkedTask: DutyClaimedTask = {

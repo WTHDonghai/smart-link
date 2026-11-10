@@ -9,7 +9,15 @@ import { resolveTaskActionStage } from '../utils/taskStage';
 
 export const LOG_DB_NAME = 'SmartLink_LogDB';
 export const LOG_STORE_NAME = 'logs';
-export const LOG_DB_VERSION = 1;
+/**
+ * v2：新增 Agent 追踪索引（嵌套 keyPath meta.agent.traceId 与复合键 [meta.agent.runId, meta.agent.sequence]）。
+ * 无 meta.agent 的历史条目自动不进入这两个索引，升级不改动既有数据。
+ */
+export const LOG_DB_VERSION = 2;
+export const AGENT_TRACE_ID_INDEX = 'agentTraceId';
+export const AGENT_RUN_SEQ_INDEX = 'agentRunSeq';
+const AGENT_TRACE_ID_KEY_PATH = 'meta.agent.traceId';
+const AGENT_RUN_SEQ_KEY_PATH = ['meta.agent.runId', 'meta.agent.sequence'];
 export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 const TIME_RANGE_DURATION_MS: Record<'1H' | '6H' | '1D' | '24H' | '3D', number> = {
@@ -285,6 +293,81 @@ export function matchesLogFilter(
   return true;
 }
 
+/** Agent 追踪时间线查询游标：定位到 (runId, sequence) 之后继续分页 */
+export interface AgentTraceQueryCursor {
+  runId: string;
+  sequence: number;
+}
+
+export interface AgentTraceQueryOptions {
+  pageSize?: number;
+  cursor?: AgentTraceQueryCursor;
+}
+
+export interface AgentTraceQueryResult {
+  items: SystemLogEntry[];
+  hasMore: boolean;
+  nextCursor?: AgentTraceQueryCursor;
+  totalScanned: number;
+}
+
+function compareAgentRunSequence(
+  left: { runId: string; sequence: number },
+  right: { runId: string; sequence: number }
+): number {
+  if (left.runId !== right.runId) {
+    return left.runId < right.runId ? -1 : 1;
+  }
+  return left.sequence - right.sequence;
+}
+
+function readAgentTraceId(entry: SystemLogEntry): string {
+  const agent = entry.meta?.agent as Record<string, unknown> | undefined;
+  return String(agent?.traceId ?? '');
+}
+
+function readAgentRunSequence(entry: SystemLogEntry): { runId: string; sequence: number } {
+  const agent = entry.meta?.agent as Record<string, unknown> | undefined;
+  return {
+    runId: String(agent?.runId ?? ''),
+    sequence: Number(agent?.sequence ?? 0),
+  };
+}
+
+function sortEntriesByAgentRunSequence(items: SystemLogEntry[]): SystemLogEntry[] {
+  return [...items].sort((a, b) => compareAgentRunSequence(readAgentRunSequence(a), readAgentRunSequence(b)));
+}
+
+function paginateAgentTraceItems(
+  items: SystemLogEntry[],
+  options: AgentTraceQueryOptions | undefined
+): AgentTraceQueryResult {
+  const targetPageSize = options?.pageSize || 200;
+  let startIndex = 0;
+
+  if (options?.cursor) {
+    startIndex = items.findIndex(
+      (item) => compareAgentRunSequence(readAgentRunSequence(item), options.cursor!) > 0
+    );
+    if (startIndex < 0) {
+      return { items: [], hasMore: false, totalScanned: items.length };
+    }
+  }
+
+  const remaining = items.length - startIndex;
+  const page = items.slice(startIndex, startIndex + targetPageSize);
+  const hasMore = remaining > targetPageSize;
+  const last = page[page.length - 1];
+  const lastPosition = last ? readAgentRunSequence(last) : undefined;
+
+  return {
+    items: page,
+    hasMore,
+    nextCursor: hasMore && lastPosition ? { ...lastPosition } : undefined,
+    totalScanned: items.length,
+  };
+}
+
 /**
  * 内存备用存储，用于在非浏览器环境（如单测、Node.js、无 IndexedDB 权限）下保障系统零崩溃、平滑执行
  */
@@ -379,6 +462,20 @@ class MemoryLogStorage {
   async clearAll(): Promise<void> {
     this.logs = [];
   }
+
+  queryLogsByTrace(traceId: string, options?: AgentTraceQueryOptions): AgentTraceQueryResult {
+    const matched = sortEntriesByAgentRunSequence(
+      this.logs.filter((entry) => readAgentTraceId(entry) === traceId)
+    );
+    return paginateAgentTraceItems(matched, options);
+  }
+
+  queryRunTimeline(runId: string, options?: AgentTraceQueryOptions): AgentTraceQueryResult {
+    const matched = this.logs
+      .filter((entry) => readAgentRunSequence(entry).runId === runId)
+      .sort((a, b) => readAgentRunSequence(a).sequence - readAgentRunSequence(b).sequence);
+    return paginateAgentTraceItems(matched, options);
+  }
 }
 
 export interface LogStorageOptions {
@@ -391,6 +488,8 @@ export class LogStorageService {
   private isIndexedDBAvailable: boolean;
   private allowMemoryFallback: boolean;
   private activeQueryId = 0;
+  /** Agent 追踪时间线查询作用域：与系统日志查询的 activeQueryId 隔离，互不取消 */
+  private activeTraceQueryId = 0;
 
   constructor(options: LogStorageOptions = {}) {
     this.isIndexedDBAvailable = typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
@@ -419,9 +518,11 @@ export class LogStorageService {
         const request = window.indexedDB.open(LOG_DB_NAME, LOG_DB_VERSION);
 
         request.onupgradeneeded = (event) => {
-          const db = (event.target as IDBOpenDBRequest).result;
+          const openRequest = event.target as IDBOpenDBRequest;
+          const db = openRequest.result;
+          let store: IDBObjectStore;
           if (!db.objectStoreNames.contains(LOG_STORE_NAME)) {
-            const store = db.createObjectStore(LOG_STORE_NAME, { keyPath: 'id' });
+            store = db.createObjectStore(LOG_STORE_NAME, { keyPath: 'id' });
             // 创建支持 7 天范围淘汰与多维筛选的索引
             store.createIndex('createdAt', 'createdAt', { unique: false });
             store.createIndex('level', 'level', { unique: false });
@@ -429,6 +530,15 @@ export class LogStorageService {
             store.createIndex('event', 'event', { unique: false });
             store.createIndex('channelId', 'channelId', { unique: false });
             store.createIndex('orderNo', 'orderNo', { unique: false });
+          } else {
+            // v1 -> v2 升级：在既有 logs store 上补充 Agent 追踪索引，不动存量数据
+            store = openRequest.transaction!.objectStore(LOG_STORE_NAME);
+          }
+          if (!store.indexNames.contains(AGENT_TRACE_ID_INDEX)) {
+            store.createIndex(AGENT_TRACE_ID_INDEX, AGENT_TRACE_ID_KEY_PATH, { unique: false });
+          }
+          if (!store.indexNames.contains(AGENT_RUN_SEQ_INDEX)) {
+            store.createIndex(AGENT_RUN_SEQ_INDEX, AGENT_RUN_SEQ_KEY_PATH, { unique: false });
           }
         };
 
@@ -636,6 +746,138 @@ export class LogStorageService {
         if (queryId === this.activeQueryId) {
           reject(reportIndexedDBOperationError('queryLogs', error));
         }
+      }
+    });
+  }
+
+  /**
+   * 按追踪 ID 查询完整 Agent 执行时间线（跨 run，按 runId + sequence 升序）。
+   * 使用独立的 activeTraceQueryId 作用域，与系统日志页面查询互不取消。
+   */
+  async queryLogsByTrace(traceId: string, options?: AgentTraceQueryOptions): Promise<AgentTraceQueryResult> {
+    if (!traceId.trim()) {
+      throw new Error('[LogStorage] 查询 Agent 追踪时间线必须提供 traceId');
+    }
+
+    const db = await this.initDB();
+    if (!db || !this.isIndexedDBAvailable) {
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.queryLogsByTrace(traceId, options);
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法查询 Agent 追踪时间线');
+    }
+
+    const queryId = ++this.activeTraceQueryId;
+
+    return new Promise((resolve, reject) => {
+      try {
+        const tx = db.transaction(LOG_STORE_NAME, 'readonly');
+        const index = tx.objectStore(LOG_STORE_NAME).index(AGENT_TRACE_ID_INDEX);
+        const results: SystemLogEntry[] = [];
+
+        const cursorRequest = index.openCursor(IDBKeyRange.only(traceId));
+
+        cursorRequest.onsuccess = (event) => {
+          // 仅同作用域内更新的追踪查询可中止当前陈旧查询
+          if (queryId !== this.activeTraceQueryId) {
+            resolve({ items: [], hasMore: false, totalScanned: 0 });
+            return;
+          }
+
+          const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+          if (!cursor) {
+            resolve(paginateAgentTraceItems(sortEntriesByAgentRunSequence(results), options));
+            return;
+          }
+
+          results.push(cursor.value as SystemLogEntry);
+          cursor.continue();
+        };
+
+        cursorRequest.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryLogsByTrace', readIndexedDBEventError(event)));
+        };
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryLogsByTrace', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('queryLogsByTrace', error));
+      }
+    });
+  }
+
+  /**
+   * 查询单个 Agent run 的执行时间线（按 sequence 升序，支持游标分页）。
+   */
+  async queryRunTimeline(runId: string, options?: AgentTraceQueryOptions): Promise<AgentTraceQueryResult> {
+    if (!runId.trim()) {
+      throw new Error('[LogStorage] 查询 Agent run 时间线必须提供 runId');
+    }
+
+    const db = await this.initDB();
+    if (!db || !this.isIndexedDBAvailable) {
+      if (this.allowMemoryFallback) {
+        return this.memoryFallback.queryRunTimeline(runId, options);
+      }
+      throw new Error('[LogStorage] IndexedDB 初始化失败，无法查询 Agent run 时间线');
+    }
+
+    const queryId = ++this.activeTraceQueryId;
+
+    return new Promise((resolve, reject) => {
+      try {
+        const tx = db.transaction(LOG_STORE_NAME, 'readonly');
+        const index = tx.objectStore(LOG_STORE_NAME).index(AGENT_RUN_SEQ_INDEX);
+        const results: SystemLogEntry[] = [];
+
+        // 复合索引区间 [runId, 0] ~ [runId, MAX_SAFE_INTEGER]，sequence 升序遍历
+        const range = IDBKeyRange.bound([runId, 0], [runId, Number.MAX_SAFE_INTEGER]);
+        const cursorRequest = index.openCursor(range);
+        const targetPageSize = options?.pageSize || 200;
+
+        cursorRequest.onsuccess = (event) => {
+          if (queryId !== this.activeTraceQueryId) {
+            resolve({ items: [], hasMore: false, totalScanned: 0 });
+            return;
+          }
+
+          const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+          if (!cursor) {
+            resolve({ items: results, hasMore: false, totalScanned: results.length });
+            return;
+          }
+
+          const entry = cursor.value as SystemLogEntry;
+          const position = readAgentRunSequence(entry);
+
+          // 跳过游标位置及之前的条目（含跨页重试时的重复定位）
+          if (options?.cursor && position.sequence <= options.cursor.sequence) {
+            cursor.continue();
+            return;
+          }
+
+          results.push(entry);
+          if (results.length >= targetPageSize) {
+            resolve({
+              items: results,
+              hasMore: true,
+              nextCursor: { ...position },
+              totalScanned: results.length,
+            });
+            return;
+          }
+
+          cursor.continue();
+        };
+
+        cursorRequest.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryRunTimeline', readIndexedDBEventError(event)));
+        };
+        tx.onerror = (event) => {
+          reject(reportIndexedDBOperationError('queryRunTimeline', readIndexedDBEventError(event)));
+        };
+      } catch (error: unknown) {
+        reject(reportIndexedDBOperationError('queryRunTimeline', error));
       }
     });
   }

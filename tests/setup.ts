@@ -10,6 +10,7 @@ const desktopHost: HostBridgeApi = {
     collectHotels: () => Promise.reject(new Error('测试未预期调用门店采集')),
     collectProducts: () => Promise.reject(new Error('测试未预期调用产品采集')),
     syncProfile: () => Promise.reject(new Error('测试未预期调用登录态同步')),
+    cancelChannelJob: () => Promise.reject(new Error('测试未预期取消采集')),
   },
   duty: {
     startDuty: () => Promise.reject(new Error('测试未预期启动值守')),
@@ -25,6 +26,13 @@ const desktopHost: HostBridgeApi = {
   log: {
     takePendingLogs: () => Promise.resolve([]),
     onLog: () => () => undefined,
+  },
+  agent: {
+    confirmLogPersisted: () => Promise.reject(new Error('测试未预期确认 Agent 日志提交')),
+    getCapabilities: () => Promise.reject(new Error('测试未预期查询 Agent 能力')),
+    startProductMapping: () => Promise.reject(new Error('测试未预期启动产品映射')),
+    cancelProductMappingRun: () => Promise.reject(new Error('测试未预期取消产品映射')),
+    onProductMappingProgress: () => () => undefined,
   },
   update: {
     getState: () => Promise.reject(new Error('测试未预期查询更新状态')),

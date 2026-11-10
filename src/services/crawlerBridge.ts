@@ -83,3 +83,15 @@ export async function collectProductsByHotel(
   return result;
 }
 
+/**
+ * 取消指定渠道进行中的采集作业：主进程关闭该渠道浏览器会话，
+ * 在途页面操作立即失败收敛；返回 false 表示当前无作业在跑（可能已自然结束）。
+ */
+export async function cancelChannelCollection(channelCode: string): Promise<{ cancelled: boolean; reason?: string }> {
+  const code = channelCode.trim().toUpperCase();
+  if (!code) {
+    throw new Error('取消采集缺少渠道编码');
+  }
+  return getCrawlerApi().cancelChannelJob(code);
+}
+

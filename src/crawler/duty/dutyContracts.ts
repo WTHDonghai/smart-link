@@ -1,8 +1,11 @@
 import type { Page } from 'playwright';
 import type { DutyClaimedTask, DutyTaskMessageType, SystemLogEntry } from '@/src/types';
+import type { IncidentSideEffectState } from '@/src/types/agent';
 import type { BrowserSession } from '@/src/crawler/browserManager';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
 import { dispatchDutyTask } from './dutyTaskDispatcher';
+import { observeDutyPage } from './dutyPageObserver';
+import type { DutyPageObservation } from '@/src/types/agent';
 import type { DutyOrderStatus } from './dutyTaskContext';
 
 /**
@@ -31,6 +34,10 @@ export interface DutyTaskExecutionResult {
   errorCode?: string;
   errorMessage?: string;
   retryable?: boolean;
+  /** 失败发生的编排阶段标识（Runner 管理的页面步骤或数据/提交步骤，设计 7.1 incident.phase） */
+  failedPhase?: string;
+  /** 失败时外部副作用状态；副作用步骤（入单提交/页面确认）失败时无法断言未生效，如实取 unknown（设计 7.1） */
+  sideEffectState?: IncidentSideEffectState;
 }
 
 export interface DutyUnhandledOrderSummary {
@@ -182,6 +189,9 @@ export interface ChannelDutyRunner {
     task: DutyClaimedTask,
     onLog?: (entry: Omit<SystemLogEntry, 'id' | 'timestamp' | 'createdAt'>) => void
   ): Promise<DutyTaskExecutionResult>;
+
+  /** P3 只读页面观察：返回当前活动页面现场快照（不执行任何页面动作，设计 7.3） */
+  observeActivePage?(): Promise<DutyPageObservation>;
 }
 
 /**
@@ -305,6 +315,11 @@ export abstract class BaseChannelDutyRunner implements ChannelDutyRunner {
     channelId?: string
   ): Promise<DutyUnhandledOrderSummary[]>;
   public abstract inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>>;
+
+  /** P3 只读页面观察：在互斥区间内提取当前活动页面现场，不执行任何动作 */
+  public async observeActivePage(): Promise<DutyPageObservation> {
+    return this.runWithMutex(async () => observeDutyPage(this.getActivePage('观察页面现场')));
+  }
 
   /**
    * 统一任务执行默认实现：委托给顶层通用任务编排调度器 dispatchDutyTask。

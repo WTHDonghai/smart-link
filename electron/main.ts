@@ -7,7 +7,7 @@ import { syncChromeSessionViaCDP } from '../src/crawler/profileSync';
 import { dutyOrchestrationEngine } from '../src/crawler/duty/dutyOrchestrationEngine';
 import { getOrRegisterStationIdentity } from '../src/crawler/duty/stationIdentity';
 import { remarkTemplateManager } from '../src/crawler/duty/remarkTemplateManager';
-import { closeAllBrowserSessions } from '../src/crawler/browserManager';
+import { closeAllBrowserSessions, closeChannelBrowserSessions } from '../src/crawler/browserManager';
 import { logger } from '../src/services/logger';
 import { getPlatformBaseUrl } from '../src/services/platformAuth';
 import { PlatformApiTimeoutError } from '../src/services/platformApi';
@@ -32,12 +32,31 @@ import type {
   PlatformBridgeResponse,
   SystemLogEntry,
 } from '../src/types';
+import type { ProductMappingProgressEvent } from '../src/types/agent';
 import { loadProjectEnv } from '../src/config/envLoader';
 import rendererServerConfig from '../src/config/rendererServer.json';
 import { PROCESS_ENV_KEYS } from '../src/types/env';
 import {
   DesktopUpdateService,
 } from './desktopUpdateService';
+import { isAgentLogPersistedAck, isProductMappingSnapshot } from '../src/types/agent';
+import { agentTraceLedger } from '../src/agent/agentTraceLedger';
+import { AgentTraceEmitter } from '../src/agent/agentTraceEmitter';
+import { runProductMappingWorkflow } from '../src/agent/productMappingWorkflow';
+import {
+  readAgentModelConfig,
+  readAgentFeatureSwitches,
+  DEFAULT_AGENT_MODEL_TIMEOUT_MS,
+} from '../src/config/agentModelConfig';
+import { readAgentNotificationConfig, type AgentNotificationConfig } from '../src/config/agentNotificationConfig';
+import { NotificationDeduplicator } from '../src/agent/notificationDeduplicator';
+import {
+  runExceptionDiagnosis,
+  type IncidentCaptureInput,
+} from '../src/agent/exceptionDiagnosisWorkflow';
+import { MainLogPendingBuffer } from './mainLogPendingBuffer';
+import { describeErrorMessage } from '../src/utils/errorCauses';
+import { randomIdSuffix } from '../src/utils/randomIdSuffix';
 import type { AppUpdateState } from '../src/types/update';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,22 +65,17 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 
 const rendererAssetServerUrl = rendererServerConfig.url;
-const MAX_PENDING_MAIN_LOGS = 50;
 
-const pendingMainLogs = new Map<string, SystemLogEntry>();
-let mainLogStreamDrained = false;
+/**
+ * 主进程日志启动缓冲：普通日志 50 条上限淘汰最旧；Agent 关键事件
+ * （requiresCommitAck，设计 9.5）不进入淘汰路径，静默丢失会使提交确认永久等待。
+ */
+let mainLogBuffer = new MainLogPendingBuffer();
 let desktopUpdateService: DesktopUpdateService | null = null;
 
 function publishMainLog(entry: SystemLogEntry): void {
-  if (!mainLogStreamDrained) {
-    pendingMainLogs.delete(entry.id);
-    pendingMainLogs.set(entry.id, entry);
-    if (pendingMainLogs.size > MAX_PENDING_MAIN_LOGS) {
-      const oldestLogId = pendingMainLogs.keys().next().value;
-      if (oldestLogId !== undefined) {
-        pendingMainLogs.delete(oldestLogId);
-      }
-    }
+  if (!mainLogBuffer.isDrained) {
+    mainLogBuffer.publish(entry);
     return;
   }
 
@@ -71,13 +85,166 @@ function publishMainLog(entry: SystemLogEntry): void {
 }
 
 function registerMainLogIpcHandlers(): void {
-  ipcMain.handle('host:pending-logs', () => {
-    const entries = [...pendingMainLogs.values()];
-    pendingMainLogs.clear();
-    mainLogStreamDrained = true;
-    return entries;
+  ipcMain.handle('host:pending-logs', () => mainLogBuffer.drain());
+
+  // Agent 关键追踪事件的持久化确认：仅受信任主窗口可确认，报文必须符合契约。
+  // 主进程在收到 committed 确认前不得放行后续受限动作（见设计 9.5 关键事件持久化确认）。
+  ipcMain.handle('host:log-persisted', (event, payload: unknown) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      return { accepted: false, error: '拒绝非受信任窗口的日志提交确认' };
+    }
+    if (!isAgentLogPersistedAck(payload)) {
+      return { accepted: false, error: '日志提交确认报文不符合契约' };
+    }
+    agentTraceLedger.record(payload);
+    return { accepted: true };
+  });
+}
+
+/** 进行中的产品映射 run 注册表：runId -> 取消控制器 */
+const activeProductMappingRuns = new Map<string, AbortController>();
+
+function generateMappingRunId(collectionRunId: string): string {
+  return `maprun-${collectionRunId}-${randomIdSuffix()}`;
+}
+
+function publishMappingProgress(event: ProductMappingProgressEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('agent:product-mapping-progress', event);
+  }
+}
+
+function registerAgentIpcHandlers(): void {
+  ipcMain.handle('agent:get-capabilities', () => {
+    return readAgentFeatureSwitches();
   });
 
+  // P3 异常诊断旁路：功能开启时注册，未开启保持零开销。
+  // 模型配置缺失/非法时不吞掉值班告警（设计 8.2 异常告警路径）：
+  // 诊断退回确定性模板（analysisUnavailable 如实标记）并照常推送，配置错误同步 ERROR 留档。
+  const dutyNotificationDeduplicator = new NotificationDeduplicator();
+  dutyOrchestrationEngine.registerIncidentHandler((capture) => {
+    if (!readAgentFeatureSwitches().exceptionRecoveryEnabled) return;
+
+    let modelConfig: ReturnType<typeof readAgentModelConfig> | null = null;
+    let modelConfigError: string | null = null;
+    try {
+      modelConfig = readAgentModelConfig();
+    } catch (error) {
+      modelConfigError = describeErrorMessage(error);
+      logger.error(`异常诊断模型配置缺失，本次退回确定性模板告警: ${modelConfigError}`);
+    }
+
+    let notificationConfig: AgentNotificationConfig;
+    try {
+      notificationConfig = readAgentNotificationConfig();
+    } catch (error) {
+      // 通知配置非法：诊断照常落追踪，推送显式降级为跳过并报错，不中断诊断（设计 8.2）
+      logger.error(`通知配置非法，本次诊断将跳过推送: ${describeErrorMessage(error)}`);
+      notificationConfig = readAgentNotificationConfig({});
+    }
+
+    const diagnosisCapture: IncidentCaptureInput = {
+      taskId: capture.task.id,
+      channelCode: capture.channelCode,
+      orderNo: capture.orderNo,
+      hotelScope: capture.task.unitId ? `酒店 ${capture.task.unitId}` : '未指定酒店门店',
+      msgType: capture.task.msgType,
+      failurePhase: capture.failurePhase,
+      errorCode: capture.errorCode,
+      errorMessage: capture.errorMessage,
+      retryable: capture.retryable ?? null,
+      sideEffectState: capture.sideEffectState,
+      observePage: capture.observePage,
+    };
+
+    void runExceptionDiagnosis(diagnosisCapture, {
+      ...(modelConfig
+        ? {
+            endpoint: { baseUrl: modelConfig.baseUrl, apiKey: modelConfig.apiKey },
+            model: modelConfig.diagnosisModel,
+          }
+        : {}),
+      timeoutMs: modelConfig?.timeoutMs ?? DEFAULT_AGENT_MODEL_TIMEOUT_MS,
+      // 配置缺失：注入必败模型调用，让工作流走既有的确定性模板告警路径
+      ...(modelConfigError
+        ? {
+            modelCall: async () => {
+              throw new Error(`诊断模型配置缺失: ${modelConfigError}`);
+            },
+          }
+        : {}),
+      notification: notificationConfig,
+      deduplicator: dutyNotificationDeduplicator,
+    }).catch((error: unknown) => {
+      // 工作流自身不抛出；此处为最终防线，如实暴露
+      logger.error(`异常诊断工作流意外终止: ${describeErrorMessage(error)}`);
+    });
+  });
+
+  ipcMain.handle('agent:start-product-mapping', (_event, payload: unknown) => {
+    if (!isProductMappingSnapshot(payload)) {
+      return { accepted: false, error: '映射快照报文不符合契约' };
+    }
+
+    // 开关已开但配置缺失/非法时立即失败，不用占位配置兜底推进
+    let config: ReturnType<typeof readAgentModelConfig>;
+    try {
+      config = readAgentModelConfig();
+    } catch (error) {
+      return { accepted: false, error: describeErrorMessage(error) };
+    }
+    if (!config.productMappingEnabled) {
+      return { accepted: false, error: '产品自动映射功能未开启' };
+    }
+
+    const runId = generateMappingRunId(payload.collectionRunId);
+    const traceId = `map-${payload.collectionRunId}`;
+    const emitter = new AgentTraceEmitter({ traceId, runId });
+    const abortController = new AbortController();
+    activeProductMappingRuns.set(runId, abortController);
+
+    // 启动即返回 runId；执行进度与最终结果经 agent:product-mapping-progress 推送
+    void (async () => {
+      try {
+        await runProductMappingWorkflow(payload, {
+          emitter,
+          endpoint: { baseUrl: config.baseUrl, apiKey: config.apiKey },
+          model: config.mappingModel,
+          timeoutMs: config.timeoutMs,
+          concurrency: config.maxConcurrency,
+          signal: abortController.signal,
+          onProgress: publishMappingProgress,
+        });
+      } catch (error) {
+        // 工作流自身不应抛出（错误都收敛为结果），此处为最终防线：如实暴露
+        logger.error(`产品自动映射 run 异常终止: ${describeErrorMessage(error)}`);
+        publishMappingProgress({
+          runId,
+          phase: 'failed',
+          processedProducts: 0,
+          totalProducts: payload.products.length,
+          error: describeErrorMessage(error),
+        });
+      } finally {
+        activeProductMappingRuns.delete(runId);
+      }
+    })();
+
+    return { accepted: true, runId };
+  });
+
+  ipcMain.handle('agent:cancel-product-mapping', (_event, runId: unknown) => {
+    if (typeof runId !== 'string' || !runId.trim()) {
+      return { accepted: false, error: '缺少有效的 runId' };
+    }
+    const controller = activeProductMappingRuns.get(runId);
+    if (!controller) {
+      return { accepted: false, error: `映射 run 不存在或已结束: ${runId}` };
+    }
+    controller.abort();
+    return { accepted: true };
+  });
 }
 
 function publishDesktopUpdateState(state: AppUpdateState): void {
@@ -322,6 +489,23 @@ export function registerCrawlerIpcHandlers(): void {
     }
   );
 
+  // 3. 取消指定渠道进行中的采集作业：关闭其浏览器会话，在途页面操作立即失败收敛并释放互斥
+  ipcMain.handle(
+    'crawler:cancel-channel-job',
+    async (_event, channelCode: unknown): Promise<{ cancelled: boolean; reason?: string }> => {
+      const code = typeof channelCode === 'string' ? channelCode.trim().toUpperCase() : '';
+      if (!code) {
+        return { cancelled: false, reason: '缺少采集渠道编码' };
+      }
+      // 守卫：仅在该渠道确有采集/门店作业在跑时才关闭会话，避免误伤同渠道其他用途的浏览器
+      if (!hotelCollectionEngine.isChannelActive(code)) {
+        return { cancelled: false, reason: '该渠道当前没有进行中的采集作业' };
+      }
+      const closed = await closeChannelBrowserSessions(code);
+      return { cancelled: true, reason: closed ? undefined : '未找到该渠道的活跃浏览器会话，等待采集自然结束' };
+    }
+  );
+
   // 2. Profile 本地登录态同步 (开发阶段：CDP 调试端口精准同步)
   ipcMain.handle(
     'crawler:sync-profile',
@@ -336,7 +520,7 @@ export function registerCrawlerIpcHandlers(): void {
           sourceDir: '',
           sourceProfile: '',
           targetDir: '',
-          error: error instanceof Error ? error.message : String(error),
+          error: describeErrorMessage(error),
         };
       }
     }
@@ -751,7 +935,8 @@ export async function createMainWindow(): Promise<BrowserWindow> {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    mainLogStreamDrained = false;
+    // 视窗重建后重新进入暂存态，直至新的渲染进程取走启动日志
+    mainLogBuffer = new MainLogPendingBuffer();
   });
 
   return mainWindow;
@@ -795,6 +980,7 @@ if (process.type === 'browser') {
     initNodePlatformTokens();
 
     registerMainLogIpcHandlers();
+    registerAgentIpcHandlers();
     registerPlatformIpcHandlers();
     registerCrawlerIpcHandlers();
     registerDutyIpcHandlers();

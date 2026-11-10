@@ -2,6 +2,9 @@ import type { Middleware } from '@reduxjs/toolkit';
 import { logger } from '../services/logger';
 import { addLog, addLogs } from './slices/systemLogSlice';
 import type { SystemLogEntry } from '../types';
+import { readAgentTraceMeta, type AgentTraceEventMeta } from '../types/agent';
+import { confirmAgentLogPersisted } from '../services/agentBridge';
+import { describeErrorMessage } from '@/src/utils/errorCauses';
 
 /**
  * 心跳/轮询类噪声事件：只进实时流展示，不写入 IndexedDB 持久化。
@@ -53,25 +56,80 @@ export function shouldPersist(entry: SystemLogEntry): boolean {
 }
 
 /**
+ * Agent 关键事件的持久化确认回执（设计 9.5）：
+ * 仅在该条目 IndexedDB 事务提交完成后才向主进程回传 committed；
+ * 确认失败时回传 persist-failed，主进程据此暂停后续受限动作并标记追踪不完整。
+ */
+async function acknowledgeAgentEntryCommit(
+  entryId: string,
+  agentMeta: AgentTraceEventMeta
+): Promise<void> {
+  const ackBase = { entryId, runId: agentMeta.runId, sequence: agentMeta.sequence };
+
+  try {
+    await logger.waitForEntryCommit(entryId);
+  } catch (error) {
+    const reason = describeErrorMessage(error);
+    await confirmAgentLogPersisted({ ...ackBase, status: 'persist-failed', error: reason });
+    logger.track('AGENT_TRACE_PERSIST_FAILED', {
+      level: 'ERROR',
+      message: 'Agent 追踪事件持久化确认失败，已通知主进程暂停后续动作',
+      details: `kind=${agentMeta.kind} phase=${agentMeta.phase} entryId=${entryId} 原因: ${reason}`,
+    });
+    return;
+  }
+
+  try {
+    await confirmAgentLogPersisted({ ...ackBase, status: 'committed' });
+  } catch (error) {
+    // 回执发送失败：主进程侧确认超时会兜住该事件，这里必须显式暴露，不得静默吞掉
+    const reason = describeErrorMessage(error);
+    logger.track('AGENT_TRACE_ACK_SEND_FAILED', {
+      level: 'ERROR',
+      message: 'Agent 日志提交确认回执发送失败，主进程将按确认超时处理',
+      details: `kind=${agentMeta.kind} phase=${agentMeta.phase} entryId=${entryId} 原因: ${reason}`,
+    });
+  }
+}
+
+/**
+ * 处理单条进入日志流的条目：持久化 + 关键 Agent 事件的提交确认回调。
+ */
+function persistEntryAndConfirmAgentCommit(entry: SystemLogEntry): void {
+  if (!shouldPersist(entry)) return;
+
+  logger.persist(entry);
+  confirmAgentCommitIfRequired(entry);
+}
+
+function confirmAgentCommitIfRequired(entry: SystemLogEntry): void {
+  const agentMeta = readAgentTraceMeta(entry);
+  if (agentMeta?.requiresCommitAck) {
+    void acknowledgeAgentEntryCommit(entry.id, agentMeta);
+  }
+}
+
+/**
  * 日志持久化的唯一入口。
  *
  * 任何进入 Redux 日志流的条目都必须经此落库：本地埋点、主进程 IPC 推送、值守状态轮询补发，
  * 以及业务 slice 直接投递的日志。这样「界面可见」与「已持久化」始终同源，不再出现只进
  * Redux 却不落库的日志。落库以 entry.id 幂等，同一日志被多次投递不会产生重复记录。
  *
- * 心跳/轮询类噪声事件（见 SKIP_PERSIST_EVENTS）仅进实时流，不写 IndexedDB。
+ * 心跳/轮询类噪声事件（见 ROUTINE_NOISE_EVENTS）仅进实时流，不写 IndexedDB。
  */
 export const logPersistenceMiddleware: Middleware = () => (next) => (action) => {
   const result = next(action);
 
   if (addLog.match(action)) {
-    if (shouldPersist(action.payload)) {
-      logger.persist(action.payload);
-    }
+    persistEntryAndConfirmAgentCommit(action.payload);
   } else if (addLogs.match(action)) {
     const toSave = action.payload.filter(shouldPersist);
     if (toSave.length > 0) {
       logger.persistBatch(toSave);
+      for (const entry of toSave) {
+        confirmAgentCommitIfRequired(entry);
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import {
   LogQueryOptions,
 } from '../types';
 import { logStorage, formatLogTimestamp } from './logStorage';
+import type { AgentTraceQueryOptions, AgentTraceQueryResult } from './logStorage';
 import { resolveTaskActionStage } from '../utils/taskStage';
 import { generateLogId } from '../utils/logId';
 import { Logger as TsLogger } from 'tslog';
@@ -47,6 +48,16 @@ const MAX_QUEUED_ID_HISTORY = 5000;
 /** 持久化异常重试缓冲区上限，防止极端存储故障导致内存无界膨胀 */
 const MAX_RETRY_BUFFER_SIZE = 2000;
 
+interface CommitWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+export interface LoggerServiceOptions {
+  /** 持久化异常重试缓冲区上限（测试可注入小值验证溢出拒绝语义） */
+  maxRetryBufferSize?: number;
+}
+
 export class LoggerService {
   private listeners: Set<LogListener> = new Set();
   private readonly ownsPersistentStorage = !(
@@ -59,8 +70,14 @@ export class LoggerService {
   private flushPromise: Promise<void> | null = null;
   private droppedLogCount = 0;
   private tsLogger: TsLogger<SystemLogEntry>;
+  /** 当前正在写入 IndexedDB 事务中的批次条目 ID（事务 oncomplete 后移除） */
+  private inFlightEntryIds: Set<string> = new Set();
+  /** 等待指定条目事务提交确认的等待方；仅在提交成功后解析、被丢弃时拒绝 */
+  private commitWaiters: Map<string, CommitWaiter[]> = new Map();
+  private readonly maxRetryBufferSize: number;
 
-  constructor() {
+  constructor(options?: LoggerServiceOptions) {
+    this.maxRetryBufferSize = options?.maxRetryBufferSize ?? MAX_RETRY_BUFFER_SIZE;
     const isTestEnv = typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
     this.tsLogger = new TsLogger<SystemLogEntry>({
       type: isTestEnv ? 'hidden' : 'pretty',
@@ -203,6 +220,72 @@ export class LoggerService {
   }
 
   /**
+   * 等待指定日志条目完成 IndexedDB 事务提交（Agent 关键事件持久化确认，见设计 9.5）。
+   *
+   * - 条目在写入缓冲或事务在途时挂起等待，仅在事务 oncomplete（saveLogs 正常返回）后解析；
+   * - 持久化失败重试期间保持等待，不得被转换为成功确认；
+   * - 重试缓冲溢出丢弃或日志被清空时显式拒绝；
+   * - 条目从未进入持久化队列时显式拒绝，不产生很成功语义。
+   */
+  waitForEntryCommit(entryId: string): Promise<void> {
+    if (!this.ownsPersistentStorage) {
+      return Promise.reject(new Error('[LoggerService] 当前运行时不持有持久化存储，无法确认日志提交'));
+    }
+    if (!entryId) {
+      return Promise.reject(new Error('[LoggerService] 日志提交确认必须提供 entryId'));
+    }
+
+    const isQueuedForWrite = this.inFlightEntryIds.has(entryId) ||
+      this.writeBuffer.some((entry) => entry.id === entryId);
+
+    if (isQueuedForWrite) {
+      return new Promise<void>((resolve, reject) => {
+        this.registerCommitWaiter(entryId, { resolve, reject });
+      });
+    }
+
+    // 幂等账本仍持有该 ID：本会话内已提交过（ACK 丢失后的补发确认走此路径）
+    if (this.queuedEntryIds.has(entryId)) {
+      return Promise.resolve();
+    }
+
+    return Promise.reject(
+      new Error(`[LoggerService] 日志条目 ${entryId} 未进入持久化队列，拒绝无效的提交确认`)
+    );
+  }
+
+  private registerCommitWaiter(entryId: string, waiter: CommitWaiter): void {
+    const waiters = this.commitWaiters.get(entryId);
+    if (waiters) {
+      waiters.push(waiter);
+    } else {
+      this.commitWaiters.set(entryId, [waiter]);
+    }
+  }
+
+  private resolveCommitWaiters(entryIds: string[]): void {
+    for (const entryId of entryIds) {
+      const waiters = this.commitWaiters.get(entryId);
+      if (!waiters) continue;
+      this.commitWaiters.delete(entryId);
+      for (const waiter of waiters) {
+        waiter.resolve();
+      }
+    }
+  }
+
+  private rejectCommitWaiters(entryIds: string[], error: Error): void {
+    for (const entryId of entryIds) {
+      const waiters = this.commitWaiters.get(entryId);
+      if (!waiters) continue;
+      this.commitWaiters.delete(entryId);
+      for (const waiter of waiters) {
+        waiter.reject(error);
+      }
+    }
+  }
+
+  /**
    * 立即刷新持久化缓冲区（串行化保障，避免并发事务竞争丢日志）
    */
   async flushStorage(): Promise<void> {
@@ -221,17 +304,32 @@ export class LoggerService {
 
     const entriesToSave = [...this.writeBuffer];
     this.writeBuffer = [];
+    for (const entry of entriesToSave) {
+      this.inFlightEntryIds.add(entry.id);
+    }
 
     this.flushPromise = (async () => {
       try {
         await logStorage.saveLogs(entriesToSave);
+        // 仅在 IndexedDB 事务 oncomplete（saveLogs 正常返回）后才确认提交
+        this.resolveCommitWaiters(entriesToSave.map((entry) => entry.id));
       } catch (error) {
         // 持久化失败时回填待写入条目，等待下一次刷新重试，避免日志静默丢失；设置容量上限防止内存膨胀
         this.writeBuffer = [...entriesToSave, ...this.writeBuffer];
-        const overflow = this.writeBuffer.length - MAX_RETRY_BUFFER_SIZE;
+        const overflow = this.writeBuffer.length - this.maxRetryBufferSize;
         if (overflow > 0) {
+          const droppedEntries = this.writeBuffer.slice(0, overflow);
+          this.writeBuffer = this.writeBuffer.slice(-this.maxRetryBufferSize);
           this.droppedLogCount += overflow;
-          this.writeBuffer = this.writeBuffer.slice(-MAX_RETRY_BUFFER_SIZE);
+          // 被丢弃条目的等待方必须显式拒绝，且从幂等账本移除，防止补发确认被误判为已提交
+          for (const dropped of droppedEntries) {
+            this.queuedEntryIds.delete(dropped.id);
+            this.inFlightEntryIds.delete(dropped.id);
+          }
+          this.rejectCommitWaiters(
+            droppedEntries.map((entry) => entry.id),
+            new Error(`日志持久化失败且重试队列溢出，已丢弃 ${overflow} 条日志，无法确认提交`)
+          );
           console.error(
             `[LoggerService] 日志持久化失败且重试队列溢出，已丢弃 ${overflow} 条最旧日志（累计丢弃: ${this.droppedLogCount} 条）:`,
             error
@@ -240,6 +338,9 @@ export class LoggerService {
           console.error('[LoggerService] 日志持久化失败，已保留待重试:', error);
         }
       } finally {
+        for (const entry of entriesToSave) {
+          this.inFlightEntryIds.delete(entry.id);
+        }
         this.flushPromise = null;
       }
     })();
@@ -421,6 +522,34 @@ export class LoggerService {
   }
 
   /**
+   * 按 traceId 查询完整 Agent 执行时间线（先排空缓冲，确保包含最新事件）
+   */
+  async queryLogsByTrace(
+    traceId: string,
+    options?: AgentTraceQueryOptions
+  ): Promise<AgentTraceQueryResult> {
+    if (!this.ownsPersistentStorage) {
+      return { items: [], hasMore: false, totalScanned: 0 };
+    }
+    await this.flushStorage();
+    return logStorage.queryLogsByTrace(traceId, options);
+  }
+
+  /**
+   * 查询单个 Agent run 的执行时间线（先排空缓冲，按 sequence 升序分页）
+   */
+  async queryRunTimeline(
+    runId: string,
+    options?: AgentTraceQueryOptions
+  ): Promise<AgentTraceQueryResult> {
+    if (!this.ownsPersistentStorage) {
+      return { items: [], hasMore: false, totalScanned: 0 };
+    }
+    await this.flushStorage();
+    return logStorage.queryRunTimeline(runId, options);
+  }
+
+  /**
    * 手动触发清除 7 天前过期日志
    */
   async purgeOlderThan7Days(): Promise<number> {
@@ -446,6 +575,10 @@ export class LoggerService {
 
     this.writeBuffer = [];
     this.queuedEntryIds.clear();
+    this.inFlightEntryIds.clear();
+    // 日志被主动清空：所有挂起的提交确认必须显式拒绝，不得留下永远挂起的确认
+    const allWaiterIds = [...this.commitWaiters.keys()];
+    this.rejectCommitWaiters(allWaiterIds, new Error('日志已被清空，无法确认提交'));
     await logStorage.clearAllStoredLogs();
   }
 
@@ -467,9 +600,20 @@ export class LoggerService {
     if (this.writeBuffer.length > 0) {
       const entriesToSave = [...this.writeBuffer];
       this.writeBuffer = [];
+      for (const entry of entriesToSave) {
+        this.inFlightEntryIds.add(entry.id);
+      }
       try {
         await logStorage.saveLogs(entriesToSave);
+        this.resolveCommitWaiters(entriesToSave.map((entry) => entry.id));
       } catch (err) {
+        for (const entry of entriesToSave) {
+          this.inFlightEntryIds.delete(entry.id);
+        }
+        this.rejectCommitWaiters(
+          entriesToSave.map((entry) => entry.id),
+          new Error('应用关闭前排空日志失败，无法确认提交')
+        );
         console.error('[LoggerService] 应用关闭前排空日志失败:', err);
       }
     }

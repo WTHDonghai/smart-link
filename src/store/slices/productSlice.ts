@@ -16,6 +16,15 @@ import {
   deleteProductMapping,
 } from '../../services/productApi';
 import { collectProductsByHotel } from '../../services/crawlerBridge';
+import { getAgentCapabilities, startAgentProductMapping } from '../../services/agentBridge';
+import { buildProductMappingSnapshot, hasIncompleteMapping } from '../../utils/agent/productSnapshotBuilder';
+import type {
+  FieldMatch,
+  MatchGrade,
+  ProductMappingOutcome,
+  ProductMappingProgressEvent,
+  ProductMappingRunResult,
+} from '../../types/agent';
 import { addLog } from './systemLogSlice';
 
 export interface ProductState {
@@ -33,7 +42,67 @@ export interface ProductState {
   roomTypes: RoomTypeOption[];
   rateCodes: RatePlanOption[];
   reservationTypes: ReservationTypeOption[];
+  /** 唯一可编辑草稿源（设计 6.7：正式基线 / 当前草稿 / 只读评级元数据职责分离） */
+  drafts: Record<string, ProductDraftEdits>;
+  /** 自动映射的只读评级元数据，以产品复合键关联 */
+  insights: Record<string, ProductMappingInsight>;
+  /** 草稿修订号：人工编辑、重新采集、基线重载时递增，用于丢弃过期的自动填入 */
+  draftRevision: number;
+  autoMapping: ProductAutoMappingState;
 }
+
+export interface ProductDraftEdits {
+  roomType?: string;
+  rateCode?: string;
+  payType?: string;
+}
+
+export interface ProductMappingInsight {
+  runId: string;
+  overallGrade: MatchGrade;
+  outcome: ProductMappingOutcome;
+  roomType: FieldMatch;
+  rateCode: FieldMatch;
+  reservationType: FieldMatch;
+  /** 本次实际自动填入的草稿字段 */
+  appliedFields: Array<'roomType' | 'rateCode' | 'payType'>;
+  /** 该行存在人工草稿编辑，Agent 保留人工值未覆盖 */
+  manualProtected: boolean;
+  /** 人工在自动填入后修改过该行，原评级不再代表当前值 */
+  manuallyEdited: boolean;
+  appliedAt: string;
+}
+
+export interface ProductAutoMappingRunContext {
+  runId: string;
+  snapshotId: string;
+  collectionRunId: string;
+  /** 作用域比对字段：渠道切换会整体重置自动匹配状态，此处只需比对门店与酒店 */
+  extUnitCode: string;
+  unitId: string;
+  draftRevision: number;
+}
+
+export interface ProductAutoMappingState {
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
+  runContext: ProductAutoMappingRunContext | null;
+  processedProducts: number;
+  totalProducts: number;
+  error: string | null;
+  /** 版本校验失败时的丢弃原因（采集成功但自动填入被丢弃，必须显式展示） */
+  staleDiscardReason: string | null;
+  counts: ProductMappingRunResult['counts'] | null;
+}
+
+const initialAutoMappingState: ProductAutoMappingState = {
+  status: 'idle',
+  runContext: null,
+  processedProducts: 0,
+  totalProducts: 0,
+  error: null,
+  staleDiscardReason: null,
+  counts: null,
+};
 
 const initialState: ProductState = {
   filterChannel: '',
@@ -50,6 +119,10 @@ const initialState: ProductState = {
   roomTypes: [],
   rateCodes: [],
   reservationTypes: [],
+  drafts: {},
+  insights: {},
+  draftRevision: 0,
+  autoMapping: initialAutoMappingState,
 };
 
 /**
@@ -310,13 +383,86 @@ export const crawlOtaProductsThunk = createAsyncThunk(
   }
 );
 
+/**
+ * 异步 Thunk: 智能匹配（由用户经「智能匹配」按钮显式发起，2026-11-09 运营决策，见设计 10.1）。
+ * 快照在渲染层构建后交主进程校验执行；进度与结果经订阅通道回流（AppBootstrap 接线）。
+ * 返回 started=false 携带可读原因（功能未开启 / 无待映射产品），由界面显式反馈；
+ * 真实失败（字典缺失、作用域不全、启动被拒）以 rejectWithValue 显式报错。
+ */
+export const runAutoMappingThunk = createAsyncThunk(
+  'product/runAutoMapping',
+  async (
+    payload: { pmsChannelCode: string },
+    { dispatch, getState, rejectWithValue }
+  ) => {
+    try {
+      const state = (getState() as { product: ProductState }).product;
+      if (!state.filterChannel || !state.filterExtUnitCode || !state.filterUnitId) {
+        return rejectWithValue('请先选择已完成映射的渠道与酒店');
+      }
+
+      const capabilities = await getAgentCapabilities();
+      if (!capabilities.productMappingEnabled) {
+        return { started: false, reason: '产品自动映射功能未开启' };
+      }
+
+      // 无待映射产品时不发起空 run，原因返回给界面显式反馈
+      const pendingCount = state.products.filter(hasIncompleteMapping).length;
+      if (pendingCount === 0) {
+        return { started: false, reason: '当前产品均已配置完整映射，无待匹配项' };
+      }
+
+      const build = buildProductMappingSnapshot({
+        scope: {
+          channelCode: payload.pmsChannelCode,
+          extUnitCode: state.filterExtUnitCode,
+          unitId: state.filterUnitId,
+          unitType: state.filterUnitType || 'Property',
+          hotelName: state.filterHotelName,
+        },
+        products: state.products,
+        roomTypes: state.roomTypes,
+        rateCodes: state.rateCodes,
+        reservationTypes: state.reservationTypes,
+      });
+      if (!build.ok) {
+        return rejectWithValue(build.reason);
+      }
+
+      const started = await startAgentProductMapping(build.snapshot);
+      if (!started.accepted || !started.runId) {
+        return rejectWithValue(started.error || '启动自动匹配失败');
+      }
+
+      dispatch(
+        setAutoMappingRunStarted({
+          runId: started.runId,
+          totalProducts: build.snapshot.products.length,
+          runContext: {
+            runId: started.runId,
+            snapshotId: build.snapshot.snapshotId,
+            collectionRunId: build.snapshot.collectionRunId,
+            extUnitCode: state.filterExtUnitCode,
+            unitId: state.filterUnitId,
+            draftRevision: state.draftRevision,
+          },
+        })
+      );
+
+      return { started: true, runId: started.runId, totalProducts: build.snapshot.products.length };
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : String(error));
+    }
+  }
+);
+
 export const productSlice = createSlice({
   name: 'product',
   initialState,
   reducers: {
     setProductFilterChannel: (state, action: PayloadAction<string>) => {
       state.filterChannel = action.payload;
-      // 切换渠道时重置门店与数据，防止数据串味
+      // 切换渠道时重置门店与数据，防止数据串味；草稿与自动匹配状态随之作废
       state.filterExtUnitCode = '';
       state.filterHotelName = '';
       state.filterUnitId = '';
@@ -325,6 +471,10 @@ export const productSlice = createSlice({
       state.rateCodes = [];
       state.reservationTypes = [];
       state.error = null;
+      state.drafts = {};
+      state.insights = {};
+      state.autoMapping = { ...initialAutoMappingState };
+      state.draftRevision += 1;
     },
     setProductFilterHotel: (
       state,
@@ -341,27 +491,159 @@ export const productSlice = createSlice({
       state.filterUnitType = action.payload.unitType || 'Property';
       state.products = [];
       state.error = null;
+      state.drafts = {};
+      state.insights = {};
+      state.autoMapping = { ...initialAutoMappingState };
+      state.draftRevision += 1;
     },
     setProductSearch: (state, action: PayloadAction<string>) => {
       state.searchKeyword = action.payload;
     },
-    deleteProduct: (
+    /** 唯一草稿写入入口：人工编辑会递增修订号并标记对应评级元数据「已人工修改」 */
+    setProductDraft: (
       state,
-      action: PayloadAction<string | { otaRoomTypeId: string; otaBasicRoomId?: string }>
+      action: PayloadAction<{ key: string; field: keyof ProductDraftEdits; value: string }>
     ) => {
-      if (typeof action.payload === 'string') {
-        const targetId = action.payload;
-        state.products = state.products.filter(
-          (p) => p.id !== targetId && p.otaRoomTypeId !== targetId
-        );
-      } else {
-        const { otaRoomTypeId, otaBasicRoomId } = action.payload;
-        state.products = state.products.filter((p) => {
-          const isSameRoomType = p.otaRoomTypeId === otaRoomTypeId;
-          const isSameBasicRoom = (p.otaBasicRoomId || '') === (otaBasicRoomId || '');
-          return !(isSameRoomType && isSameBasicRoom);
-        });
+      const { key, field, value } = action.payload;
+      state.drafts[key] = { ...(state.drafts[key] || {}), [field]: value };
+      state.draftRevision += 1;
+      const insight = state.insights[key];
+      if (insight) {
+        insight.manuallyEdited = true;
       }
+    },
+    /** 保存成功后清除对应行草稿（草稿变化同样递增修订号，使在运行中的自动填入作废） */
+    clearProductDraftsForKeys: (state, action: PayloadAction<string[]>) => {
+      for (const key of action.payload) {
+        delete state.drafts[key];
+      }
+      if (action.payload.length > 0) {
+        state.draftRevision += 1;
+      }
+    },
+    setAutoMappingRunStarted: (
+      state,
+      action: PayloadAction<{ runId: string; totalProducts: number; runContext: ProductAutoMappingRunContext }>
+    ) => {
+      state.autoMapping = {
+        status: 'running',
+        runContext: action.payload.runContext,
+        processedProducts: 0,
+        totalProducts: action.payload.totalProducts,
+        error: null,
+        staleDiscardReason: null,
+        counts: null,
+      };
+    },
+    /** 非终态进度与无结果的终态事件（runId 匹配时生效） */
+    setAutoMappingProgress: (state, action: PayloadAction<ProductMappingProgressEvent>) => {
+      const event = action.payload;
+      if (!state.autoMapping.runContext || state.autoMapping.runContext.runId !== event.runId) return;
+
+      if (event.phase === 'failed' || event.phase === 'cancelled') {
+        state.autoMapping.status = event.phase;
+        state.autoMapping.error = event.error || null;
+        return;
+      }
+      if (state.autoMapping.status !== 'running') return;
+      state.autoMapping.processedProducts = event.processedProducts;
+      state.autoMapping.totalProducts = event.totalProducts;
+      if (event.phase === 'batch-failed' && event.error) {
+        state.autoMapping.error = event.error;
+      }
+    },
+    /**
+     * 应用映射终态结果：版本校验（作用域 + 快照 + 草稿修订号）通过后，
+     * 仅向未被人工保护的空字段写入草稿；过期写入整体丢弃并显式记录原因。
+     */
+    applyAutoMappingResult: (state, action: PayloadAction<ProductMappingRunResult>) => {
+      const result = action.payload;
+      const context = state.autoMapping.runContext;
+      if (!context || context.runId !== result.runId) return;
+
+      state.autoMapping.status = result.outcome;
+      state.autoMapping.counts = result.counts;
+      state.autoMapping.processedProducts = result.mappings.length + result.failedProducts.length;
+      state.autoMapping.totalProducts = result.counts.total;
+      if (result.failureReason) {
+        state.autoMapping.error = result.failureReason;
+      }
+
+      if (
+        context.extUnitCode !== state.filterExtUnitCode ||
+        context.unitId !== state.filterUnitId ||
+        state.draftRevision !== context.draftRevision
+      ) {
+        state.autoMapping.staleDiscardReason =
+          '匹配期间页面数据发生变化（切换酒店、重新采集或人工修改），自动填入已丢弃，请核对后重新匹配';
+        return;
+      }
+
+      if (result.outcome !== 'completed') return;
+
+      const appliedAt = new Date().toISOString();
+      for (const mapping of result.mappings) {
+        const product = state.products.find(
+          (item) => getProductIdentityKey(item) === mapping.productKey
+        );
+        if (!product) continue;
+
+        const draft = state.drafts[mapping.productKey];
+        const previousInsight = state.insights[mapping.productKey];
+        // 上一轮自动填入且用户从未编辑过的草稿属 Agent 自有：重新匹配时允许刷新（设计 6.7「重新匹配可生成新结果」）
+        const agentOwnedDraft = previousInsight !== undefined && !previousInsight.manuallyEdited;
+        const manualProtected =
+          Boolean(
+            draft && (draft.roomType !== undefined || draft.rateCode !== undefined || draft.payType !== undefined)
+          ) && !agentOwnedDraft;
+
+        const appliedFields: Array<'roomType' | 'rateCode' | 'payType'> = [];
+        if (!manualProtected) {
+          const nextDraft = { ...(draft || {}) };
+          // 字段可写入：产品值为空，且草稿字段为空或属 Agent 自有（可刷新旧建议值）
+          const fieldWritable = (productValue: string | undefined, draftValue: string | undefined): boolean =>
+            !productValue?.trim() && (draftValue === undefined || agentOwnedDraft);
+          if (mapping.roomType.selectedCode && fieldWritable(product.roomType, nextDraft.roomType)) {
+            nextDraft.roomType = mapping.roomType.selectedCode;
+            appliedFields.push('roomType');
+          }
+          if (mapping.rateCode.selectedCode && fieldWritable(product.rateCode, nextDraft.rateCode)) {
+            nextDraft.rateCode = mapping.rateCode.selectedCode;
+            appliedFields.push('rateCode');
+          }
+          if (mapping.reservationType.selectedCode && fieldWritable(product.payType, nextDraft.payType)) {
+            nextDraft.payType = mapping.reservationType.selectedCode;
+            appliedFields.push('payType');
+          }
+          if (appliedFields.length > 0) {
+            state.drafts[mapping.productKey] = nextDraft;
+          }
+        }
+
+        state.insights[mapping.productKey] = {
+          runId: result.runId,
+          overallGrade: mapping.overallGrade,
+          outcome: mapping.outcome,
+          roomType: mapping.roomType,
+          rateCode: mapping.rateCode,
+          reservationType: mapping.reservationType,
+          appliedFields,
+          manualProtected,
+          manuallyEdited: previousInsight?.manuallyEdited ?? false,
+          appliedAt,
+        };
+      }
+    },
+    deleteProduct: (state, action: PayloadAction<{ otaRoomTypeId: string; otaBasicRoomId?: string }>) => {
+      const { otaRoomTypeId, otaBasicRoomId } = action.payload;
+      const removeKey = getProductIdentityKey({ otaRoomTypeId, otaBasicRoomId });
+      state.products = state.products.filter((p) => {
+        const isSameRoomType = p.otaRoomTypeId === otaRoomTypeId;
+        const isSameBasicRoom = (p.otaBasicRoomId || '') === (otaBasicRoomId || '');
+        return !(isSameRoomType && isSameBasicRoom);
+      });
+      delete state.drafts[removeKey];
+      delete state.insights[removeKey];
     },
     clearProductState: (state) => {
       state.products = [];
@@ -369,6 +651,10 @@ export const productSlice = createSlice({
       state.rateCodes = [];
       state.reservationTypes = [];
       state.error = null;
+      state.drafts = {};
+      state.insights = {};
+      state.autoMapping = { ...initialAutoMappingState };
+      state.draftRevision += 1;
     },
   },
   extraReducers: (builder) => {
@@ -389,6 +675,8 @@ export const productSlice = createSlice({
         state.roomTypes = action.payload.roomTypes;
         state.rateCodes = action.payload.rateCodes;
         state.reservationTypes = action.payload.reservationTypes;
+        // 基线重载属于草稿修订：在途自动填入必须作废重比对（设计 6.7 版本校验）
+        state.draftRevision += 1;
       })
       .addCase(loadProductMappingsAndOptions.rejected, (state, action) => {
         state.isLoading = false;
@@ -483,6 +771,8 @@ export const productSlice = createSlice({
             hotelName: state.filterHotelName,
           }
         );
+        // 重新采集属于草稿修订：在途自动填入作废，人工草稿保留
+        state.draftRevision += 1;
       })
       .addCase(crawlOtaProductsThunk.rejected, (state, action) => {
         state.isCrawling = false;
@@ -497,6 +787,11 @@ export const {
   setProductSearch,
   deleteProduct,
   clearProductState,
+  setProductDraft,
+  clearProductDraftsForKeys,
+  setAutoMappingRunStarted,
+  setAutoMappingProgress,
+  applyAutoMappingResult,
 } = productSlice.actions;
 
 export default productSlice.reducer;

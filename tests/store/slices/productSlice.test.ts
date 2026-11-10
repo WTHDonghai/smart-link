@@ -40,20 +40,13 @@ describe('productSlice', () => {
   describe('filter and selection reducers', () => {
     it('updates channel and clears hotel scope on setProductFilterChannel', () => {
       const initialState: ProductState = {
+        ...productReducer(undefined, { type: '@@INIT' }),
         filterChannel: 'MEITUAN',
         filterExtUnitCode: 'POI-123',
         filterHotelName: '旧酒店',
         filterUnitId: '99',
-        filterUnitType: 'Property',
         searchKeyword: '大床',
-        isLoading: false,
-        isSaving: false,
-        isCrawling: false,
-        error: null,
         products: [{ otaRoomTypeId: '1', otaRoomTypeName: '测试', channelCode: 'MT', extUnitCode: '1', unitId: '1', unitType: 'Property', roomType: '', rateCode: '', payType: '', status: 'pending' }],
-        roomTypes: [],
-        rateCodes: [],
-        reservationTypes: [],
       };
 
       const nextState = productReducer(initialState, setProductFilterChannel('DOUYIN'));
@@ -90,7 +83,7 @@ describe('productSlice', () => {
       expect(nextState.searchKeyword).toBe('豪华房');
     });
 
-    it('deletes product by id or otaRoomTypeId', () => {
+    it('deletes product by composite key (otaRoomTypeId [+ otaBasicRoomId])', () => {
       const initialState: ProductState = {
         ...productReducer(undefined, { type: '@@INIT' }),
         products: [
@@ -123,11 +116,11 @@ describe('productSlice', () => {
         ],
       };
 
-      const stateAfterDeleteId = productReducer(initialState, deleteProduct('map-1'));
+      const stateAfterDeleteId = productReducer(initialState, deleteProduct({ otaRoomTypeId: 'G-100' }));
       expect(stateAfterDeleteId.products).toHaveLength(1);
       expect(stateAfterDeleteId.products[0].otaRoomTypeId).toBe('G-200');
 
-      const stateAfterDeleteRoomType = productReducer(stateAfterDeleteId, deleteProduct('G-200'));
+      const stateAfterDeleteRoomType = productReducer(stateAfterDeleteId, deleteProduct({ otaRoomTypeId: 'G-200' }));
       expect(stateAfterDeleteRoomType.products).toHaveLength(0);
     });
 

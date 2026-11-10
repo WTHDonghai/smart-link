@@ -13,6 +13,12 @@ import type {
   PlatformAuthTokens,
   SystemLogEntry,
 } from '../src/types';
+import type {
+  AgentCapabilities,
+  AgentLogPersistedAck,
+  ProductMappingProgressEvent,
+  ProductMappingSnapshot,
+} from '../src/types/agent';
 import type { AppUpdateState } from '../src/types/update';
 import { selectAppEnv } from '../src/types/env';
 
@@ -27,6 +33,9 @@ const crawlerApi: CrawlerBridgeApi = {
   },
   syncProfile: (channelCode?: string) => {
     return ipcRenderer.invoke('crawler:sync-profile', channelCode);
+  },
+  cancelChannelJob: (channelCode: string) => {
+    return ipcRenderer.invoke('crawler:cancel-channel-job', channelCode);
   },
 };
 
@@ -76,6 +85,35 @@ const logApi: LogBridgeApi = {
   },
 };
 
+const agentApi: HostBridgeApi['agent'] = {
+  confirmLogPersisted: (ack: AgentLogPersistedAck): Promise<{ accepted: boolean; error?: string }> => {
+    return ipcRenderer.invoke('host:log-persisted', ack);
+  },
+  getCapabilities: (): Promise<AgentCapabilities> => {
+    return ipcRenderer.invoke('agent:get-capabilities');
+  },
+  startProductMapping: (snapshot: ProductMappingSnapshot): Promise<{
+    accepted: boolean;
+    runId?: string;
+    error?: string;
+  }> => {
+    return ipcRenderer.invoke('agent:start-product-mapping', snapshot);
+  },
+  cancelProductMappingRun: (runId: string): Promise<{ accepted: boolean; error?: string }> => {
+    return ipcRenderer.invoke('agent:cancel-product-mapping', runId);
+  },
+  onProductMappingProgress: (
+    callback: (event: ProductMappingProgressEvent) => void
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: ProductMappingProgressEvent) =>
+      callback(payload);
+    ipcRenderer.on('agent:product-mapping-progress', listener);
+    return () => {
+      ipcRenderer.removeListener('agent:product-mapping-progress', listener);
+    };
+  },
+};
+
 const platformApi = {
   request: (options: import('../src/types').PlatformBridgeRequestOptions): Promise<import('../src/types').PlatformBridgeResponse> => {
     return ipcRenderer.invoke('platform:request', options);
@@ -107,6 +145,7 @@ contextBridge.exposeInMainWorld('host', {
   crawler: crawlerApi,
   duty: dutyApi,
   log: logApi,
+  agent: agentApi,
   update: updateApi,
   env: exposedEnv,
   platform: platformApi,
