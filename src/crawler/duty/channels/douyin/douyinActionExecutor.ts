@@ -241,7 +241,25 @@ export class DouyinActionExecutor {
       }
     }
 
-    if (!await isElementVisible(triggerBtn, ACTION_TIMEOUT.ELEMENT)) {
+    // 触发按钮有界轮询：点击卡片后详情抽屉需经 抽屉挂载 + 详情接口 + 渲染 才出现按钮
+    // （生产实测约 1s，慢尾更长）；isVisible 为零等待瞬时探测（timeout 参数被 Playwright 忽略），
+    // 单次探测必有竞态误报 CONFIRM_SUBMIT_NOT_FOUND（生产事故 2026-11-10），
+    // 对齐 confirmCancel「我知道了」按钮与接单后状态迁移的轮询范式
+    const triggerDeadline = Date.now() + getScaledTimeout(ACTION_TIMEOUT.NETWORK);
+    let triggerBtnVisible = await isElementVisible(triggerBtn, ACTION_TIMEOUT.PROBE);
+    while (!triggerBtnVisible && Date.now() <= triggerDeadline) {
+      // 若订单详情区域因列表重绘失焦，尝试重新激活卡片
+      if (orderCard && await isElementVisible(orderCard, ACTION_TIMEOUT.PROBE)) {
+        const hasDetail = await isElementVisible(scope.locator('#detailSection').first(), ACTION_TIMEOUT.PROBE);
+        if (!hasDetail) {
+          await visualClickLocator(page, orderCard, `重新激活订单「${cleanOrderId}」详情展示`);
+        }
+      }
+      await humanDelay(page, 300, 500);
+      triggerBtnVisible = await isElementVisible(triggerBtn, ACTION_TIMEOUT.PROBE);
+    }
+
+    if (!triggerBtnVisible) {
       throw new DutyExecutionError(
         `订单「${cleanOrderId}」未找到「填写确认号/接单」触发按钮`,
         DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
