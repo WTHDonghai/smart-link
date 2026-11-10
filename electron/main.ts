@@ -461,7 +461,7 @@ export function registerCrawlerIpcHandlers(): void {
         if (!extUnitCode) {
           throw new Error('未指定外部门店编码 extUnitCode');
         }
-        return await hotelCollectionEngine.collectProducts(
+        const result = await hotelCollectionEngine.collectProducts(
           {
             ...request,
             channelCode: code,
@@ -476,6 +476,8 @@ export function registerCrawlerIpcHandlers(): void {
             });
           }
         );
+        // 成功后的浏览器回收由引擎在持锁区间内完成（避免与值守启动竞态），此处不再触碰共享会话注册表
+        return result;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         return {

@@ -220,6 +220,26 @@ export class HotelCollectionEngine {
         message: `[CrawlerEngine] 渠道「${code}」门店「${request.otaHotelName || extUnitCode}」产品采集完成，共获取 ${products.length} 项商品 (耗时: ${(durationMs / 1000).toFixed(1)}s)`,
       });
 
+      // 产品采集成功后回收本次浏览器资源（2026-11-09 运营决策）：
+      // 在持锁区间内关闭本次会话，避免互斥释放后与值守启动竞态误杀共享会话；
+      // 登录态持久化在 Profile 目录，下次采集自动复用；失败/取消路径保留现场供登录或排查。
+      // 门店采集（collectHotels）不关闭：其后常紧跟产品采集，保留会话衔接。
+      try {
+        await session.close();
+        log({
+          level: 'INFO',
+          message: `[CrawlerEngine] 已关闭渠道「${code}」采集浏览器会话并回收资源`,
+        });
+      } catch (closeError) {
+        // 回收失败不改变采集成功的事实，如实记 WARN 供运维关注
+        log({
+          level: 'WARN',
+          message: `[CrawlerEngine] 渠道「${code}」采集浏览器会话关闭异常（不影响采集结果）: ${
+            closeError instanceof Error ? closeError.message : String(closeError)
+          }`,
+        });
+      }
+
       return {
         success: true,
         channelCode: code,

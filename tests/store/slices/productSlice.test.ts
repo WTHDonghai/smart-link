@@ -351,6 +351,50 @@ describe('productSlice', () => {
       expect(merged.some((p) => p.otaRoomTypeId === 'G-OLD' && !p.otaProductPresent)).toBe(true);
       expect(merged.some((p) => p.otaRoomTypeId === 'G-NEW' && p.otaProductPresent)).toBe(true);
     });
+
+    it('混合候选时本次全新采集产品置顶：全新 → 历史融合 → 未覆盖历史（2026-11-09 体验决策）', () => {
+      const historical: ProductMapping[] = [
+        {
+          id: 'hist-A',
+          channelCode: 'MT01',
+          extUnitCode: 'POI-1',
+          unitId: '1001',
+          unitType: 'Property',
+          otaRoomTypeId: 'G-A',
+          otaRoomTypeName: '已存在房型',
+          roomType: 'EXK',
+          rateCode: 'RACK',
+          payType: 'R01',
+          status: 'completed',
+        },
+        {
+          id: 'hist-LOST',
+          channelCode: 'MT01',
+          extUnitCode: 'POI-1',
+          unitId: '1001',
+          unitType: 'Property',
+          otaRoomTypeId: 'G-LOST',
+          otaRoomTypeName: '未被本轮抓到的历史房型',
+          roomType: 'DBL',
+          rateCode: 'BAR',
+          payType: 'R01',
+          status: 'completed',
+        },
+      ];
+      const candidates: DiscoveredProductCandidate[] = [
+        { otaChannelCode: 'MEITUAN', extUnitCode: 'POI-1', otaRoomTypeId: 'G-A', otaRoomTypeName: '已存在房型最新名', source: 'ota-collection' },
+        { otaChannelCode: 'MEITUAN', extUnitCode: 'POI-1', otaRoomTypeId: 'G-BRAND-NEW', otaRoomTypeName: '全新采集家庭房', source: 'ota-collection' },
+      ];
+
+      const merged = mergeCandidatesWithHistoricalMappings(historical, candidates, scope);
+
+      // 严密断言顺序：全新产品第一，其次融合候选，最后未覆盖历史
+      expect(merged.map((p) => p.otaRoomTypeId)).toEqual(['G-BRAND-NEW', 'G-A', 'G-LOST']);
+      expect(merged[0].status).toBe('pending');
+      expect(merged[0].source).toBe('ota-collection');
+      expect(merged[1].id).toBe('hist-A');
+      expect(merged[1].otaRoomTypeName).toBe('已存在房型最新名');
+    });
   });
 
   describe('async thunks', () => {

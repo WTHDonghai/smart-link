@@ -162,6 +162,7 @@ export function mergeCandidatesWithHistoricalMappings(
   }
 
   const mergedList: ProductMapping[] = [];
+  const brandNewList: ProductMapping[] = [];
   const processedHistorical = new Set<ProductMapping>();
 
   // 1. 处理采集到的候选
@@ -194,8 +195,8 @@ export function mergeCandidatesWithHistoricalMappings(
         source: 'merged',
       });
     } else {
-      // 全新采集候选：未映射内部房型、房价码，允许为空
-      mergedList.push({
+      // 全新采集候选：未映射内部房型、房价码，允许为空；单独收集待置顶（本次采集的新结果优先展示）
+      brandNewList.push({
         channelCode: scope.channelCode,
         extUnitCode: scope.extUnitCode,
         unitId: scope.unitId,
@@ -235,7 +236,8 @@ export function mergeCandidatesWithHistoricalMappings(
     }
   }
 
-  return mergedList;
+  // 3. 本次采集的全新产品置顶展示（待配置项优先进入视野），其余按采集/历史顺序
+  return [...brandNewList, ...mergedList];
 }
 
 /**

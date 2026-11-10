@@ -39,6 +39,7 @@ import { SearchableSelect } from '../common/SearchableSelect';
 import { StatusBadge } from '../common/StatusBadge';
 import { EmptyState } from '../common/EmptyState';
 import { Pagination } from '../common/Pagination';
+import { Modal } from '../common/Modal';
 
 export const ProductSyncView: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -71,6 +72,8 @@ export const ProductSyncView: React.FC = () => {
   // 本地交互状态（草稿与评级元数据统一由 Redux 维护，组件不再持有可编辑副本）
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [filterStatus, setFilterStatus] = useState<'all' | 'completed' | 'pending' | 'review'>('all');
+  /** 采集成功弹窗（新采集产品已置顶，弹窗引导下一步智能匹配） */
+  const [crawlSuccess, setCrawlSuccess] = useState<{ count: number } | null>(null);
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -489,13 +492,13 @@ export const ProductSyncView: React.FC = () => {
         })
       ).unwrap();
 
-      dispatch(
-        showToast({
-          title: 'OTA 产品采集完成',
-          description: `成功采集到 ${res.candidates.length} 项商品，已与平台映射合并展示；可点击「智能匹配」自动填写缺失的房型、房价码与预订类型`,
-          type: 'success',
-        })
-      );
+      // 采集成功：弹窗提示（新采集产品已置顶，弹窗引导下一步智能匹配）；
+      // 保障置顶可见性：跳回第 1 页；若当前筛选会拦住待配置项（已完成）则自动放宽
+      setCrawlSuccess({ count: res.candidates.length });
+      setCurrentPage(1);
+      if (filterStatus === 'completed') {
+        setFilterStatus('all');
+      }
       cancelCrawlRequestedRef.current = false;
 
       // 采集完成后不再自动发起智能匹配：由用户显式点击「智能匹配」发起（2026-11-09 运营决策，见设计 10.1）
@@ -1570,6 +1573,51 @@ export const ProductSyncView: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* 采集成功弹窗：新采集产品已置顶，引导下一步智能匹配（2026-11-09 体验决策） */}
+      <Modal
+        isOpen={crawlSuccess !== null}
+        onClose={() => setCrawlSuccess(null)}
+        maxWidth="md"
+        icon={<CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+        title="产品采集完成"
+        subtitle="采集结果已与平台历史映射合并展示"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setCrawlSuccess(null)}
+              className="h-8 px-3.5 text-xs font-semibold text-[#0b1c30] bg-white hover:bg-[#f2f2f2] border border-[#e2e8f0] rounded-lg transition-colors cursor-pointer"
+            >
+              关闭
+            </button>
+            <button
+              type="button"
+              disabled={autoMapping.status === 'running'}
+              onClick={() => {
+                setCrawlSuccess(null);
+                handleRunAutoMapping();
+              }}
+              title={autoMapping.status === 'running' ? '智能匹配进行中，可在顶部横幅查看进度' : '对未完成三项映射的产品自动填写建议值'}
+              className={`h-8 px-3.5 text-xs font-semibold rounded-lg transition-colors ${
+                autoMapping.status === 'running'
+                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                  : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 cursor-pointer'
+              }`}
+            >
+              立即智能匹配
+            </button>
+          </>
+        }
+      >
+        <div className="text-sm text-[#0b1c30] leading-6">
+          成功采集到 <strong className="font-bold text-[#004ac6] font-mono">{crawlSuccess?.count}</strong> 项商品，
+          本次新采集的产品已置顶展示。
+          <div className="mt-2 text-xs text-[#737686]">
+            可点击「立即智能匹配」自动填写缺失的房型、房价码与预订类型，完成后人工核对保存。
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
