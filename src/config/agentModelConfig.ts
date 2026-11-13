@@ -1,22 +1,27 @@
 /**
  * Agent 模型运行配置（仅主进程消费，P2 产品映射 / P3 异常诊断的模型客户端读取）。
  *
- * 依据 docs/architecture/llm-agent-integration-design.md 第 4.5 节：
- * - provider、模型、超时、并发、功能开关由运维经环境变量静默下发；客户主界面不提供网关 URL、Token 或调试参数；
- * - 密钥只存在于主进程环境变量，不进入安装包默认值、不进入 Renderer（APP_ENV_KEYS 快照）、不写入日志与报错信息。
+ * 依据 docs/architecture/llm-agent-integration-design.md 第 4.5 节与
+ * 《Agent 获取 AI 配置接口说明》：
+ * - 租户 AI 配置（baseUrl、apiKey、model、timeoutSeconds、enabled）由平台接口加密下发，
+ *   见 src/config/remoteAgentModelConfig.ts 与 src/services/agentAiConfigApi.ts；
+ * - apiKey 只来自远端租户配置，绝不回落到本机环境变量，也绝不进入 Renderer、日志或报错；
+ * - 环境变量仅保留功能开关、并发度与模型名缺省值（决策：仅模型名允许 env 兜底）。
  *
- * Fail-Fast：功能开关开启而必要配置缺失时立即抛错并逐项列明缺失键名，禁止用默认密钥或占位值兜底推进。
+ * Fail-Fast：功能开关开启而远端配置的必要字段缺失时立即抛错并逐项列明缺失项，禁止用占位值兜底推进。
  */
 
-import { PROCESS_ENV_KEYS, type ProcessEnvKeyName } from '@/src/types/env';
+import { PROCESS_ENV_KEYS } from '@/src/types/env';
 import { type EnvSource, readTrimmedEnv, isEnabledEnvValue } from '@/src/config/agentEnvReader';
+import {
+  readRemoteConfigExtraString,
+  type CachedRemoteAgentAiConfig,
+} from '@/src/config/remoteAgentModelConfig';
 
 export interface AgentModelConfig {
-  /** 模型供应商标识（openai / deepseek / qwen / anthropic / 自定义 OpenAI 兼容网关等） */
-  provider: string;
   /** 模型服务 Base URL（企业网关或供应商直连） */
   baseUrl: string;
-  /** 供应商密钥；严禁写入日志、报错或 Renderer */
+  /** 租户密钥；严禁写入日志、报错或 Renderer */
   apiKey: string;
   /** 产品映射任务使用的模型版本 */
   mappingModel: string;
@@ -42,7 +47,11 @@ export function readAgentFeatureSwitches(env: EnvSource = process.env): {
   };
 }
 
-function readPositiveInt(env: EnvSource, keyName: ProcessEnvKeyName, fallback: number): number {
+function readPositiveInt(
+  env: EnvSource,
+  keyName: keyof typeof PROCESS_ENV_KEYS,
+  fallback: number
+): number {
   const raw = readTrimmedEnv(env, keyName);
   if (!raw) return fallback;
   const parsed = Number(raw);
@@ -52,40 +61,57 @@ function readPositiveInt(env: EnvSource, keyName: ProcessEnvKeyName, fallback: n
   return parsed;
 }
 
-export function readAgentModelConfig(env: EnvSource = process.env): AgentModelConfig {
-  const productMappingEnabled = isEnabledEnvValue(readTrimmedEnv(env, 'agentProductMappingEnabled'));
-  const exceptionRecoveryEnabled = isEnabledEnvValue(readTrimmedEnv(env, 'agentExceptionRecoveryEnabled'));
+/**
+ * 合并远端租户配置与本地非敏感缺省值，得到两个 Agent 任务实际使用的运行配置。
+ *
+ * 合并优先级：
+ * - 功能开关：本地开关 AND 远端 enabled（远端关闭时 Agent 不得调用 AI）；
+ * - baseUrl / apiKey / timeout：严格取远端（载荷解析已保证 baseUrl 非空、timeout 缺省 30）；
+ * - mappingModel / diagnosisModel：extras 覆盖 > 远端 model > 环境变量缺省值。
+ */
+export function resolveAgentModelConfig(
+  remote: CachedRemoteAgentAiConfig,
+  env: EnvSource = process.env
+): AgentModelConfig {
+  const localSwitches = readAgentFeatureSwitches(env);
+  const aiEnabled = remote.payload.enabled;
 
   const config: AgentModelConfig = {
-    provider: readTrimmedEnv(env, 'agentModelProvider'),
-    baseUrl: readTrimmedEnv(env, 'agentModelBaseUrl'),
-    apiKey: readTrimmedEnv(env, 'agentModelApiKey'),
-    mappingModel: readTrimmedEnv(env, 'agentMappingModel'),
-    diagnosisModel: readTrimmedEnv(env, 'agentDiagnosisModel'),
-    timeoutMs: readPositiveInt(env, 'agentModelTimeoutMs', DEFAULT_AGENT_MODEL_TIMEOUT_MS),
-    maxConcurrency: readPositiveInt(env, 'agentModelMaxConcurrency', DEFAULT_AGENT_MODEL_MAX_CONCURRENCY),
-    productMappingEnabled,
-    exceptionRecoveryEnabled,
+    baseUrl: remote.payload.baseUrl,
+    apiKey: remote.payload.apiKey,
+    mappingModel:
+      readRemoteConfigExtraString(remote.payload, 'mappingModel') ||
+      remote.payload.model ||
+      readTrimmedEnv(env, 'agentMappingModel'),
+    diagnosisModel:
+      readRemoteConfigExtraString(remote.payload, 'diagnosisModel') ||
+      remote.payload.model ||
+      readTrimmedEnv(env, 'agentDiagnosisModel'),
+    timeoutMs: remote.payload.timeoutSeconds * 1000,
+    maxConcurrency: readPositiveInt(
+      env,
+      'agentModelMaxConcurrency',
+      DEFAULT_AGENT_MODEL_MAX_CONCURRENCY
+    ),
+    productMappingEnabled: localSwitches.productMappingEnabled && aiEnabled,
+    exceptionRecoveryEnabled: localSwitches.exceptionRecoveryEnabled && aiEnabled,
   };
 
-  // 两项功能开关均关闭时，Agent 不发起任何模型请求，配置不强制
-  if (!productMappingEnabled && !exceptionRecoveryEnabled) {
+  // 两项功能开关均关闭（或远端禁用 AI）时，Agent 不发起任何模型请求，配置不强制
+  if (!config.productMappingEnabled && !config.exceptionRecoveryEnabled) {
     return config;
   }
 
-  const missingKeys: string[] = [];
-  if (!config.provider) missingKeys.push(PROCESS_ENV_KEYS.agentModelProvider);
-  if (!config.baseUrl) missingKeys.push(PROCESS_ENV_KEYS.agentModelBaseUrl);
-  if (!config.apiKey) missingKeys.push(PROCESS_ENV_KEYS.agentModelApiKey);
-  if (productMappingEnabled && !config.mappingModel) missingKeys.push(PROCESS_ENV_KEYS.agentMappingModel);
-  if (exceptionRecoveryEnabled && !config.diagnosisModel) {
-    missingKeys.push(PROCESS_ENV_KEYS.agentDiagnosisModel);
-  }
+  const missingItems: string[] = [];
+  if (!config.baseUrl) missingItems.push('baseUrl');
+  if (!config.apiKey) missingItems.push('apiKey（租户 AI 配置）');
+  if (config.productMappingEnabled && !config.mappingModel) missingItems.push('mappingModel');
+  if (config.exceptionRecoveryEnabled && !config.diagnosisModel) missingItems.push('diagnosisModel');
 
-  if (missingKeys.length > 0) {
-    // 只回显缺失的键名，绝不回显 apiKey 等敏感值
+  if (missingItems.length > 0) {
+    // 只回显缺失项名称，绝不回显 apiKey 等敏感值
     throw new Error(
-      `Agent 功能已开启但模型配置缺失: ${missingKeys.join(', ')}。请在环境配置文件中补齐后重启应用。`
+      `Agent 功能已开启但 AI 配置缺失: ${missingItems.join(', ')}。请检查租户 AI 配置下发结果后重试。`
     );
   }
 

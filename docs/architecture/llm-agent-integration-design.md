@@ -205,6 +205,8 @@ AI SDK 能减少模型协议与工具循环代码，但当前还没有证明必�
 
 该模型代理是待建设的远端能力，不是 Electron IPC 缺失时的本地 HTTP fallback。若尚无代理，可在受控试验环境由主进程使用运维配置的密钥直连；不把长期密钥打包进安装包或 Renderer。
 
+**接入进展（2026-11-11）**：平台已提供租户 AI 配置下发接口（`/toolkit/toolbox/ai/crypto/public-key` 与 `/toolkit/toolbox/ai/config`，RSA-OAEP-256 + AES-256-GCM 混合加密）。客户端在主进程启动、登录后拉取并缓存 15 分钟；`apiKey` 只来自远端租户配置，环境变量不再保存供应商密钥。实现与契约见[Agent 租户 AI 配置下发](agent-ai-config-delivery.md)。
+
 ### 4.6 Alibaba Page Agent 的具体使用方式
 
 本次按官方 `v1.12.4` 源码核验，详细证据见[专项调研](../research/alibaba-page-agent-evaluation-2026-10-15.md)。[S9]

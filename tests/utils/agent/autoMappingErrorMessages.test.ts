@@ -36,6 +36,25 @@ describe('describeAutoMappingError 错误文案人性化', () => {
     );
   });
 
+  it('租户 AI 配置获取失败：不透出接口路径与错误码原文，给出重新登录引导', () => {
+    const output = describeAutoMappingError(
+      '获取租户 AI 配置失败: 请求 /toolkit/toolbox/ai/config 网络异常: fetch failed [cause] [ECONNRESET]'
+    );
+    expect(output).toBe('智能匹配服务配置获取失败，请稍后重试；若持续出现请重新登录');
+    expect(output).not.toContain('/toolkit');
+    expect(output).not.toContain('ECONNRESET');
+
+    const authOutput = describeAutoMappingError('获取租户 AI 配置失败: 平台授权缺失或已过期，等待自动续期同步后重试');
+    expect(authOutput).toBe('智能匹配服务配置获取失败，请稍后重试；若持续出现请重新登录');
+  });
+
+  it('租户未配置 AI 能力（AI_CONFIG_NOT_FOUND）：引导联系管理员开通', () => {
+    const output = describeAutoMappingError(
+      '获取租户 AI 配置失败: 获取租户 AI 配置失败（HTTP 404）：AI_CONFIG_NOT_FOUND'
+    );
+    expect(output).toBe('当前租户尚未开通智能匹配服务，请联系管理员完成配置');
+  });
+
   it('快照契约与追踪确认失败映射为业务文案', () => {
     expect(describeAutoMappingError('映射快照报文不符合契约')).toBe('匹配数据校验未通过，请重新采集产品后再试');
     expect(describeAutoMappingError('终态追踪确认失败: 等待超时')).toBe(

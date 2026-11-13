@@ -1,107 +1,142 @@
 import { describe, it, expect } from 'vitest';
 import {
-  readAgentModelConfig,
-  DEFAULT_AGENT_MODEL_TIMEOUT_MS,
+  resolveAgentModelConfig,
+  readAgentFeatureSwitches,
   DEFAULT_AGENT_MODEL_MAX_CONCURRENCY,
-} from '../../src/config/agentModelConfig';
-import { PROCESS_ENV_KEYS } from '../../src/types/env';
+} from '@/src/config/agentModelConfig';
+import type { CachedRemoteAgentAiConfig } from '@/src/config/remoteAgentModelConfig';
+import { PROCESS_ENV_KEYS } from '@/src/types/env';
 
 /**
- * Agent 模型配置预留（P0）：环境变量静默下发、Fail-Fast 校验、密钥不回显。
+ * Agent 模型配置：远端租户配置下发 + 本地非敏感缺省值合并、Fail-Fast、密钥不回显。
  */
 
-function buildEnabledEnv(
-  overrides?: Record<string, string>
-): Record<string, string | undefined> {
+function buildRemote(overrides: Partial<{
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutSeconds: number;
+  enabled: boolean;
+  extras: Record<string, unknown>;
+}> = {}): CachedRemoteAgentAiConfig {
+  return {
+    keyId: 'default',
+    loadedAt: 1_700_000_000_000,
+    expiresAt: 1_700_000_900_000,
+    payload: {
+      baseUrl: 'https://datapulse.example.com',
+      apiKey: 'sk-remote-secret',
+      model: 'qwen-vl-max',
+      timeoutSeconds: 30,
+      enabled: true,
+      extras: {},
+      ...overrides,
+    },
+  };
+}
+
+function buildEnabledEnv(overrides?: Record<string, string | undefined>): Record<string, string | undefined> {
   return {
     [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'true',
-    [PROCESS_ENV_KEYS.agentModelProvider]: 'deepseek',
-    [PROCESS_ENV_KEYS.agentModelBaseUrl]: 'https://gateway.example.com/v1',
-    [PROCESS_ENV_KEYS.agentModelApiKey]: 'sk-test-123',
-    [PROCESS_ENV_KEYS.agentMappingModel]: 'deepseek-chat',
     ...overrides,
   };
 }
 
-describe('readAgentModelConfig 功能开关与默认值', () => {
-  it('两项开关均未配置时返回关闭态配置，不强制任何模型项', () => {
-    const config = readAgentModelConfig({});
+describe('resolveAgentModelConfig 远端配置合并', () => {
+  it('默认使用远端的 baseUrl、apiKey、model 与 timeout', () => {
+    const config = resolveAgentModelConfig(buildRemote({ timeoutSeconds: 45 }), buildEnabledEnv());
+
+    expect(config.baseUrl).toBe('https://datapulse.example.com');
+    expect(config.apiKey).toBe('sk-remote-secret');
+    expect(config.mappingModel).toBe('qwen-vl-max');
+    expect(config.diagnosisModel).toBe('qwen-vl-max');
+    expect(config.timeoutMs).toBe(45_000);
+    expect(config.productMappingEnabled).toBe(true);
+  });
+
+  it('extras.mappingModel / diagnosisModel 优先，缺省共用远端 model', () => {
+    const config = resolveAgentModelConfig(
+      buildRemote({
+        extras: { mappingModel: ' qwen-max ', diagnosisModel: 'qwen-vl-plus' },
+      }),
+      buildEnabledEnv({ [PROCESS_ENV_KEYS.agentExceptionRecoveryEnabled]: 'true' })
+    );
+
+    expect(config.mappingModel).toBe('qwen-max');
+    expect(config.diagnosisModel).toBe('qwen-vl-plus');
+  });
+
+  it('apiKey 严格来自远端：环境变量中的密钥被忽略', () => {
+    const config = resolveAgentModelConfig(
+      buildRemote({ apiKey: 'sk-remote' }),
+      buildEnabledEnv({ SMARTLINK_AGENT_MODEL_API_KEY: 'sk-env-should-be-ignored' })
+    );
+
+    expect(config.apiKey).toBe('sk-remote');
+  });
+
+  it('远端 enabled=false 时强制关闭两项功能，不调用模型', () => {
+    const config = resolveAgentModelConfig(
+      buildRemote({ enabled: false }),
+      buildEnabledEnv({ [PROCESS_ENV_KEYS.agentExceptionRecoveryEnabled]: 'true' })
+    );
+
     expect(config.productMappingEnabled).toBe(false);
     expect(config.exceptionRecoveryEnabled).toBe(false);
-    expect(config.provider).toBe('');
-    expect(config.timeoutMs).toBe(DEFAULT_AGENT_MODEL_TIMEOUT_MS);
+  });
+
+  it('远端模型为空时使用环境变量缺省模型', () => {
+    const config = resolveAgentModelConfig(
+      buildRemote({ model: '' }),
+      buildEnabledEnv({ [PROCESS_ENV_KEYS.agentMappingModel]: 'deepseek-chat' })
+    );
+
+    expect(config.mappingModel).toBe('deepseek-chat');
+  });
+
+  it('开关均关闭时不校验配置，直接返回关闭态', () => {
+    const config = resolveAgentModelConfig(buildRemote({ model: '' }), {});
+    expect(config.productMappingEnabled).toBe(false);
+    expect(config.exceptionRecoveryEnabled).toBe(false);
+    expect(config.timeoutMs).toBe(30_000);
     expect(config.maxConcurrency).toBe(DEFAULT_AGENT_MODEL_MAX_CONCURRENCY);
   });
+});
 
-  it('开关支持 1/true/yes/on，空串与 false/0 视为关闭', () => {
-    expect(readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: '1' })).productMappingEnabled).toBe(true);
-    expect(readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'ON' })).productMappingEnabled).toBe(true);
-    expect(readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'false' })).productMappingEnabled).toBe(false);
-    expect(readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: '' })).productMappingEnabled).toBe(false);
+describe('resolveAgentModelConfig Fail-Fast 校验', () => {
+  it('开启产品映射但远端未下发模型：列明缺失项且不回显密钥', () => {
+    try {
+      resolveAgentModelConfig(buildRemote({ model: '' }), buildEnabledEnv());
+      throw new Error('expected throw');
+    } catch (error) {
+      const message = String((error as Error).message);
+      expect(message).toContain('Agent 功能已开启但 AI 配置缺失');
+      expect(message).toContain('mappingModel');
+      expect(message).not.toContain('sk-remote-secret');
+    }
   });
 
-  it('完整配置被精确解析（去除首尾空白，数值项为正整数）', () => {
-    const config = readAgentModelConfig(
-      buildEnabledEnv({
-        [PROCESS_ENV_KEYS.agentModelProvider]: '  qwen  ',
-        [PROCESS_ENV_KEYS.agentModelTimeoutMs]: '45000',
-        [PROCESS_ENV_KEYS.agentModelMaxConcurrency]: '3',
-      })
-    );
-    expect(config.provider).toBe('qwen');
-    expect(config.mappingModel).toBe('deepseek-chat');
-    expect(config.timeoutMs).toBe(45000);
-    expect(config.maxConcurrency).toBe(3);
+  it('apiKey 为空时列明「租户 AI 配置」缺失', () => {
+    expect(() =>
+      resolveAgentModelConfig(buildRemote({ apiKey: '' }), buildEnabledEnv())
+    ).toThrow('apiKey（租户 AI 配置）');
   });
 
-  it('数值项非法时立即报错并指明键名', () => {
+  it('数值型缺省项非法时立即报错并指明键名', () => {
     expect(() =>
-      readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentModelTimeoutMs]: 'abc' }))
-    ).toThrow('SMARTLINK_AGENT_MODEL_TIMEOUT_MS 必须为正整数，当前值非法: abc');
-    expect(() =>
-      readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentModelMaxConcurrency]: '0' }))
+      resolveAgentModelConfig(
+        buildRemote(),
+        buildEnabledEnv({ [PROCESS_ENV_KEYS.agentModelMaxConcurrency]: '0' })
+      )
     ).toThrow('SMARTLINK_AGENT_MODEL_MAX_CONCURRENCY 必须为正整数，当前值非法: 0');
   });
 });
 
-describe('readAgentModelConfig Fail-Fast 校验', () => {
-  it('开启产品映射但基础配置缺失：逐项列明缺失键，不兜底推进', () => {
-    expect(() => readAgentModelConfig({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'true' })).toThrow(
-      'Agent 功能已开启但模型配置缺失: SMARTLINK_AGENT_MODEL_PROVIDER, SMARTLINK_AGENT_MODEL_BASE_URL, SMARTLINK_AGENT_MODEL_API_KEY, SMARTLINK_AGENT_MAPPING_MODEL。请在环境配置文件中补齐后重启应用。'
-    );
-  });
-
-  it('开启异常处置时额外要求诊断模型', () => {
-    const env = buildEnabledEnv({
-      [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'false',
-      [PROCESS_ENV_KEYS.agentExceptionRecoveryEnabled]: 'true',
-      [PROCESS_ENV_KEYS.agentDiagnosisModel]: '',
-    });
-    expect(() => readAgentModelConfig(env)).toThrow(
-      'Agent 功能已开启但模型配置缺失: SMARTLINK_AGENT_DIAGNOSIS_MODEL。请在环境配置文件中补齐后重启应用。'
-    );
-  });
-
-  it('空白字符串视为缺失（手工填写残留空格不得静默通过）', () => {
-    expect(() =>
-      readAgentModelConfig(buildEnabledEnv({ [PROCESS_ENV_KEYS.agentModelBaseUrl]: '   ' }))
-    ).toThrow('Agent 功能已开启但模型配置缺失: SMARTLINK_AGENT_MODEL_BASE_URL。');
-  });
-
-  it('报错信息绝不回显 API Key 等敏感值', () => {
-    const secret = 'sk-super-secret-value';
-    let errorMessage = '';
-    try {
-      readAgentModelConfig(
-        buildEnabledEnv({
-          [PROCESS_ENV_KEYS.agentModelApiKey]: secret,
-          [PROCESS_ENV_KEYS.agentModelBaseUrl]: '',
-        })
-      );
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    }
-    expect(errorMessage).toContain('SMARTLINK_AGENT_MODEL_BASE_URL');
-    expect(errorMessage).not.toContain(secret);
+describe('readAgentFeatureSwitches', () => {
+  it('支持 1/true/yes/on，空串与 false/0 视为关闭', () => {
+    expect(readAgentFeatureSwitches({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: '1' }).productMappingEnabled).toBe(true);
+    expect(readAgentFeatureSwitches({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'ON' }).productMappingEnabled).toBe(true);
+    expect(readAgentFeatureSwitches({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: 'false' }).productMappingEnabled).toBe(false);
+    expect(readAgentFeatureSwitches({ [PROCESS_ENV_KEYS.agentProductMappingEnabled]: '' }).productMappingEnabled).toBe(false);
   });
 });

@@ -13,9 +13,11 @@ const OPERATIONAL_PREFIXES: readonly RegExp[] = [
   /^映射总预算（时间）耗尽/,
 ];
 
-/** 原始技术错误 → 业务文案 */
+/** 原始技术错误 → 业务文案（按序匹配，更具体的模式放在通用模式之前） */
 const RAW_ERROR_PATTERNS: ReadonlyArray<{ pattern: RegExp; copy: string }> = [
-  { pattern: /模型配置缺失/, copy: '智能匹配服务尚未完成配置，请联系管理员处理后再使用' },
+  { pattern: /模型配置缺失|AI 配置缺失/, copy: '智能匹配服务尚未完成配置，请联系管理员处理后再使用' },
+  { pattern: /AI_CONFIG_NOT_FOUND/, copy: '当前租户尚未开通智能匹配服务，请联系管理员完成配置' },
+  { pattern: /获取租户 AI 配置失败|平台授权缺失或已过期/, copy: '智能匹配服务配置获取失败，请稍后重试；若持续出现请重新登录' },
   { pattern: /模型服务返回 HTTP/, copy: '智能匹配服务暂时不可用，请稍后重试；若持续失败请联系管理员' },
   { pattern: /模型请求超时/, copy: '智能匹配服务响应超时，请检查网络后重试' },
   { pattern: /模型请求传输失败/, copy: '无法连接智能匹配服务，请检查网络后重试' },

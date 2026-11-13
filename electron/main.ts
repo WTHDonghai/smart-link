@@ -18,7 +18,11 @@ import {
   clearPlatformTokenFile,
 } from '../src/crawler/duty/platformTokenStore';
 import { stationIdentityManager } from '../src/crawler/duty/stationIdentity';
-import { saveTokensToStorage, clearTokensFromStorage } from '../src/services/platformAuth';
+import {
+  saveTokensToStorage,
+  clearTokensFromStorage,
+  loadTokensFromStorage,
+} from '../src/services/platformAuth';
 import type {
   HotelCrawlRequest,
   HotelCrawlResult,
@@ -44,10 +48,11 @@ import { agentTraceLedger } from '../src/agent/agentTraceLedger';
 import { AgentTraceEmitter } from '../src/agent/agentTraceEmitter';
 import { runProductMappingWorkflow } from '../src/agent/productMappingWorkflow';
 import {
-  readAgentModelConfig,
+  resolveAgentModelConfig,
   readAgentFeatureSwitches,
-  DEFAULT_AGENT_MODEL_TIMEOUT_MS,
 } from '../src/config/agentModelConfig';
+import { remoteAgentAiConfigProvider, hasUsableAccessToken } from '../src/config/remoteAgentModelConfig';
+import { describeAgentAiConfigForLog } from '../src/services/agentAiConfigApi';
 import { readAgentNotificationConfig, type AgentNotificationConfig } from '../src/config/agentNotificationConfig';
 import { NotificationDeduplicator } from '../src/agent/notificationDeduplicator';
 import {
@@ -114,9 +119,58 @@ function publishMappingProgress(event: ProductMappingProgressEvent): void {
   }
 }
 
+/**
+ * 是否存在「可立即使用」的登录态（主进程内存）。
+ * Access Token 只有 60 秒有效期，过期后由渲染进程单飞续期并经 duty:sync-tokens 同步；
+ * 主进程不主动续期，也不在持有过期 Token 时发起注定 401 的请求。
+ */
+function hasUsablePlatformAccessToken(): boolean {
+  try {
+    return hasUsableAccessToken(loadTokensFromStorage());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 后台拉取/刷新租户 AI 配置。
+ * 只记录 keyId、enabled 与安全错误摘要，绝不记录 apiKey、AES 密钥或密文。
+ */
+function refreshRemoteAgentAiConfig(
+  reason: string,
+  options: { force?: boolean } = {}
+): void {
+  // 两项功能开关均关闭时 Agent 不会发起任何模型请求，无需拉取租户密钥
+  const switches = readAgentFeatureSwitches();
+  if (!switches.productMappingEnabled && !switches.exceptionRecoveryEnabled) return;
+  if (!hasUsablePlatformAccessToken()) return;
+
+  const wasFresh = remoteAgentAiConfigProvider.isFresh();
+  void remoteAgentAiConfigProvider
+    .ensureLoaded(options)
+    .then((config) => {
+      // 缓存命中（无网络请求）不打日志，避免每 30 秒的 Token 同步刷屏
+      if (!wasFresh) {
+        logger.info(
+          `租户 AI 配置已加载（${reason}）: keyId=${config.keyId}, ${describeAgentAiConfigForLog(config.payload)}`
+        );
+      }
+    })
+    .catch((error: unknown) => {
+      logger.warn(`租户 AI 配置加载失败（${reason}）: ${describeErrorMessage(error)}`);
+    });
+}
+
 function registerAgentIpcHandlers(): void {
   ipcMain.handle('agent:get-capabilities', () => {
-    return readAgentFeatureSwitches();
+    const switches = readAgentFeatureSwitches();
+    const remoteSnapshot = remoteAgentAiConfigProvider.getSnapshot();
+    // 远端 enabled=false 时 Agent 不得调用 AI，能力查询同步反映该状态
+    const aiEnabled = remoteSnapshot ? remoteSnapshot.payload.enabled : true;
+    return {
+      productMappingEnabled: switches.productMappingEnabled && aiEnabled,
+      exceptionRecoveryEnabled: switches.exceptionRecoveryEnabled && aiEnabled,
+    };
   });
 
   // P3 异常诊断旁路：功能开启时注册，未开启保持零开销。
@@ -126,13 +180,34 @@ function registerAgentIpcHandlers(): void {
   dutyOrchestrationEngine.registerIncidentHandler((capture) => {
     if (!readAgentFeatureSwitches().exceptionRecoveryEnabled) return;
 
-    let modelConfig: ReturnType<typeof readAgentModelConfig> | null = null;
+    let modelConfig: ReturnType<typeof resolveAgentModelConfig> | null = null;
     let modelConfigError: string | null = null;
-    try {
-      modelConfig = readAgentModelConfig();
-    } catch (error) {
-      modelConfigError = describeErrorMessage(error);
-      logger.error(`异常诊断模型配置缺失，本次退回确定性模板告警: ${modelConfigError}`);
+
+    // 诊断路径不阻塞告警：先用当前快照，缓存过期或未加载时在后台刷新
+    const remoteSnapshot = remoteAgentAiConfigProvider.getSnapshot();
+    if (remoteSnapshot) {
+      try {
+        const resolved = resolveAgentModelConfig(remoteSnapshot);
+        if (resolved.exceptionRecoveryEnabled) {
+          modelConfig = resolved;
+        } else {
+          // 远端 enabled=false 或本地开关关闭：保留确定性模板告警，不调用模型
+          modelConfigError = '租户 AI 配置已禁用';
+        }
+      } catch (error) {
+        modelConfigError = describeErrorMessage(error);
+      }
+      if (!remoteAgentAiConfigProvider.isFresh()) {
+        refreshRemoteAgentAiConfig('缓存过期');
+      }
+    } else {
+      modelConfigError =
+        remoteAgentAiConfigProvider.getLastError() ?? '租户 AI 配置尚未加载';
+      refreshRemoteAgentAiConfig('异常诊断前按需加载');
+    }
+
+    if (modelConfigError) {
+      logger.error(`异常诊断 AI 配置不可用，本次退回确定性模板告警: ${modelConfigError}`);
     }
 
     let notificationConfig: AgentNotificationConfig;
@@ -165,7 +240,7 @@ function registerAgentIpcHandlers(): void {
             model: modelConfig.diagnosisModel,
           }
         : {}),
-      timeoutMs: modelConfig?.timeoutMs ?? DEFAULT_AGENT_MODEL_TIMEOUT_MS,
+      timeoutMs: modelConfig?.timeoutMs ?? 30_000,
       // 配置缺失：注入必败模型调用，让工作流走既有的确定性模板告警路径
       ...(modelConfigError
         ? {
@@ -182,17 +257,35 @@ function registerAgentIpcHandlers(): void {
     });
   });
 
-  ipcMain.handle('agent:start-product-mapping', (_event, payload: unknown) => {
+  ipcMain.handle('agent:start-product-mapping', async (_event, payload: unknown) => {
     if (!isProductMappingSnapshot(payload)) {
+      logger.warn('产品自动映射启动被拒: 映射快照报文不符合契约');
       return { accepted: false, error: '映射快照报文不符合契约' };
     }
+    if (!readAgentFeatureSwitches().productMappingEnabled) {
+      return { accepted: false, error: '产品自动映射功能未开启' };
+    }
 
-    // 开关已开但配置缺失/非法时立即失败，不用占位配置兜底推进
-    let config: ReturnType<typeof readAgentModelConfig>;
+    // 开关已开但远端配置缺失/非法时立即失败，不用占位配置或本机密钥兜底推进
+    let remoteSnapshot: Awaited<ReturnType<typeof remoteAgentAiConfigProvider.ensureLoaded>>;
     try {
-      config = readAgentModelConfig();
+      remoteSnapshot = await remoteAgentAiConfigProvider.ensureLoaded();
     } catch (error) {
-      return { accepted: false, error: describeErrorMessage(error) };
+      const message = describeErrorMessage(error);
+      logger.warn(`产品自动映射启动被拒: 获取租户 AI 配置失败: ${message}`);
+      return {
+        accepted: false,
+        error: `获取租户 AI 配置失败: ${message}`,
+      };
+    }
+
+    let config: ReturnType<typeof resolveAgentModelConfig>;
+    try {
+      config = resolveAgentModelConfig(remoteSnapshot);
+    } catch (error) {
+      const message = describeErrorMessage(error);
+      logger.warn(`产品自动映射启动被拒: ${message}`);
+      return { accepted: false, error: message };
     }
     if (!config.productMappingEnabled) {
       return { accepted: false, error: '产品自动映射功能未开启' };
@@ -668,12 +761,18 @@ export function registerDutyIpcHandlers(): void {
       stationIdentityManager.setPlatformBaseUrl(tokens.platformBaseUrl);
     }
 
+    // Token 同步可能来自登录、切换租户或每 30 秒一次的自动续期：
+    // 按需加载，缓存仍新鲜时不重复请求，避免把 Token 续期放大成配置接口压力
+    refreshRemoteAgentAiConfig('Token 同步');
+
     return { success: true };
   });
 
   ipcMain.handle('duty:clear-tokens', async () => {
     clearTokensFromStorage();
     clearPlatformTokenFile();
+    // 退出登录即丢弃内存中的租户密钥，避免被后续操作误用
+    remoteAgentAiConfigProvider.clear();
     return { success: true };
   });
 
@@ -979,7 +1078,13 @@ if (process.type === 'browser') {
     process.env[PROCESS_ENV_KEYS.userDataDir] = app.getPath('userData');
 
     // 初始化已持久化的文旅平台 Token 凭据至 Node 内存
-    initNodePlatformTokens();
+    const restoredTokens = initNodePlatformTokens();
+
+    // 有可用登录态时在启动阶段拉取租户 AI 配置（不阻塞窗口创建）。
+    // 持久化 Access Token 已过期时不发注定失败的请求，等渲染进程续期后的 Token 同步再拉
+    if (restoredTokens?.accessToken) {
+      refreshRemoteAgentAiConfig('应用启动');
+    }
 
     registerMainLogIpcHandlers();
     registerAgentIpcHandlers();
