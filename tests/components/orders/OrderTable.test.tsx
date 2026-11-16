@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { OrderTable } from '../../../src/components/orders/OrderTable';
-import type { ToolkitOrder } from '../../../src/types';
+import { OrderTable } from '@/src/components/orders/OrderTable';
+import type { ToolkitOrder } from '@/src/types';
 
 describe('OrderTable 高密订单表格组件', () => {
   const mockOrders: ToolkitOrder[] = [
@@ -27,6 +27,9 @@ describe('OrderTable 高密订单表格组件', () => {
         ],
       },
       status: 'FAILED',
+      orderType: 'NEW',
+      createdTime: '2026-09-30 14:20:00',
+      remark: '需要无烟楼层',
       errorMessage: '文旅房型未绑定映射',
       allowedActions: ['EDIT', 'IMPORT', 'DELETE'],
     },
@@ -49,6 +52,8 @@ describe('OrderTable 高密订单表格组件', () => {
         pricing: [],
       },
       status: 'SUCCESS',
+      orderType: 'MODIFY',
+      createdTime: '2026-09-30 15:10:00',
       pmsOrderId: 'PMS-888899',
       allowedActions: ['CANCEL'],
     },
@@ -71,12 +76,14 @@ describe('OrderTable 高密订单表格组件', () => {
         pricing: [],
       },
       status: 'PENDING',
+      orderType: 'CANCEL',
       allowedActions: [],
     },
   ];
 
   const defaultProps = {
     orders: mockOrders,
+    total: 4,
     onViewDetail: vi.fn(),
     onEdit: vi.fn(),
     onImport: vi.fn(),
@@ -84,28 +91,66 @@ describe('OrderTable 高密订单表格组件', () => {
     onCancel: vi.fn(),
   };
 
-  it('空订单列表时展示 EmptyState 组件', () => {
+  it('空订单列表时展示 EmptyState 组件及总条数 0', () => {
     const html = renderToStaticMarkup(
-      <OrderTable {...defaultProps} orders={[]} />
+      <OrderTable {...defaultProps} orders={[]} total={0} />
     );
 
+    expect(html).toContain('订单列表 (共 0 条)');
     expect(html).toContain('暂无符合条件的订单记录');
     expect(html).toContain('可以尝试调整筛选状态、日期区间或搜索关键字');
   });
 
-  it('展示各订单的酒店、OTA单号、抵离日期、金额与渠道徽标', () => {
+  it('完整渲染 15 个标准列表表头字段与各列数据', () => {
     const html = renderToStaticMarkup(<OrderTable {...defaultProps} />);
 
-    expect(html).toContain('隐居江南度假酒店');
+    // 顶部总条数标题
+    expect(html).toContain('订单列表 (共 4 条)');
+
+    // 15 个表头字段
+    const headers = [
+      'OTA订单号',
+      '客人',
+      '手机号',
+      '抵离日期',
+      '房型',
+      '房价码',
+      '预订类型',
+      '渠道',
+      '酒店',
+      '每日房价',
+      '备注',
+      '搬单时间',
+      '状态',
+      '类型',
+      '操作',
+    ];
+    for (const header of headers) {
+      expect(html).toContain(`>${header}</th>`);
+    }
+
+    // 具体行数据断言
     expect(html).toContain('MT-987654321');
     expect(html).toContain('title="点击查看订单详情"');
     expect(html).toContain('title="复制订单号"');
-    expect(html).toContain('aria-label="复制订单号"');
+    expect(html).toContain('张三');
+    expect(html).toContain('13800001111');
     expect(html).toContain('2026-10-01');
     expect(html).toContain('至 2026-10-03 (2晚)');
-    expect(html).toContain('¥400.00');
     expect(html).toContain('豪华大床房');
-    expect(html).toContain('张三 · 13800001111');
+    expect(html).toContain('OTA');
+    expect(html).toContain('在线预付');
+    expect(html).toContain('隐居江南度假酒店');
+    expect(html).toContain('10-01:');
+    expect(html).toContain('+1晚');
+    expect(html).toContain('每日房价明细 (2晚)');
+    expect(html).toContain('¥200.00');
+    expect(html).toContain('¥400.00');
+    expect(html).toContain('需要无烟楼层');
+    expect(html).toContain('2026-09-30 14:20');
+    expect(html).toContain('新订');
+    expect(html).toContain('修改');
+    expect(html).toContain('取消');
   });
 
   it('操作列统一收起：默认折叠展示更多操作按钮与只读状态', () => {
@@ -202,5 +247,24 @@ describe('OrderTable 高密订单表格组件', () => {
     expect(html).toContain('>抖</div>');
     expect(html).toContain('title="抖音"');
     expect(html).not.toContain('>61</div>');
+  });
+
+  it('当订单仅返回 unitId 未携带 unitName 时，自动通过 pmsProperties 或酒店映射反查显示酒店名称', () => {
+    const idOnlyOrder: ToolkitOrder = {
+      ...mockOrders[0],
+      id: 'ord-id-only',
+      unitId: '900881',
+      unitName: '',
+    };
+
+    const html = renderToStaticMarkup(
+      <OrderTable
+        {...defaultProps}
+        orders={[idOnlyOrder]}
+        pmsProperties={[{ id: '900881', name: '莫干山竹海温泉度假酒店' }]}
+      />
+    );
+
+    expect(html).toContain('莫干山竹海温泉度假酒店');
   });
 });

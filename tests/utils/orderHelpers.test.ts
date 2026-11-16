@@ -7,9 +7,14 @@ import {
   formatCurrency,
   calculateNightsAndPricing,
   getOrderStatusMeta,
+  getOrderTypeMeta,
+  isToolkitOrderType,
+  resolveOrderHotelName,
+  buildOrderHotelOptions,
+  buildOrderChannelOptions,
   buildImportPayloadFromOrder,
-} from '../../src/utils/orderHelpers';
-import type { OrderStatus, ToolkitOrder } from '../../src/types';
+} from '@/src/utils/orderHelpers';
+import type { OrderStatus, ToolkitOrder, HotelMapping, PlatformProperty, OTAChannel } from '@/src/types';
 
 describe('orderHelpers', () => {
   describe('isOrderSuccess', () => {
@@ -268,6 +273,92 @@ describe('orderHelpers', () => {
         label: 'UNKNOWN_STATUS',
         tone: 'neutral',
       });
+    });
+  });
+
+  describe('getOrderTypeMeta & isToolkitOrderType', () => {
+    it('narrows valid ToolkitOrderType values and rejects unknown values', () => {
+      expect(isToolkitOrderType('NEW')).toBe(true);
+      expect(isToolkitOrderType('MODIFY')).toBe(true);
+      expect(isToolkitOrderType('CANCEL')).toBe(true);
+      expect(isToolkitOrderType('CANCELLED')).toBe(true);
+      expect(isToolkitOrderType('UNKNOWN')).toBe(false);
+      expect(isToolkitOrderType(undefined)).toBe(false);
+    });
+
+    it('returns correct label and tone for each order type', () => {
+      expect(getOrderTypeMeta('NEW')).toEqual({ label: '新订', tone: 'info' });
+      expect(getOrderTypeMeta('new')).toEqual({ label: '新订', tone: 'info' });
+      expect(getOrderTypeMeta('MODIFY')).toEqual({ label: '修改', tone: 'warning' });
+      expect(getOrderTypeMeta('CANCEL')).toEqual({ label: '取消', tone: 'neutral' });
+      expect(getOrderTypeMeta('CANCELLED')).toEqual({ label: '取消', tone: 'neutral' });
+      expect(getOrderTypeMeta(undefined)).toEqual({ label: '-', tone: 'neutral' });
+      expect(getOrderTypeMeta('')).toEqual({ label: '-', tone: 'neutral' });
+      expect(getOrderTypeMeta('CUSTOM')).toEqual({ label: 'CUSTOM', tone: 'neutral' });
+    });
+  });
+
+  describe('resolveOrderHotelName, buildOrderHotelOptions & buildOrderChannelOptions', () => {
+    it('resolves hotel name from pmsProperties or hotel mappings when order only has unitId', () => {
+      const pmsProperties: PlatformProperty[] = [
+        { id: '10001', name: '杭州西湖国宾馆', code: 'XHGBG' },
+      ];
+      const hotels = [
+        {
+          id: 'hm-1',
+          pmsHotelId: '10002',
+          pmsHotelName: '10002', // 当后端未返回 unitName 时 pmsHotelName 会等于 ID
+          otaHotelName: '溪畔云居度假酒店（美团店）',
+          otaChannelCode: 'MEITUAN',
+        },
+      ] as unknown as HotelMapping[];
+
+      expect(
+        resolveOrderHotelName({ unitId: '10001', unitName: '' }, hotels, pmsProperties)
+      ).toBe('杭州西湖国宾馆');
+
+      expect(
+        resolveOrderHotelName({ unitId: '10002', unitName: '10002', otaChannel: 'MEITUAN' }, hotels, pmsProperties)
+      ).toBe('溪畔云居度假酒店（美团店）');
+    });
+
+    it('deduplicates hotel options across pmsProperties, HotelMapping and ToolkitOrder lists', () => {
+      const hotels = [
+        {
+          id: 'h1',
+          unitId: 'U01',
+          unitName: '西湖国宾馆',
+          otaHotelName: '杭州西湖国宾馆（美团店）',
+        },
+      ] as unknown as HotelMapping[];
+      const orders = [
+        { id: 'o1', unitId: 'U01', unitName: '西湖国宾馆' },
+        { id: 'o2', unitId: 'U02', unitName: '溪畔度假酒店' },
+      ] as unknown as ToolkitOrder[];
+
+      expect(buildOrderHotelOptions(hotels, orders)).toEqual([
+        { label: '西湖国宾馆', value: 'U01', subtext: '杭州西湖国宾馆（美团店）' },
+        { label: '溪畔度假酒店', value: 'U02' },
+      ]);
+    });
+
+    it('prefers mapped channels and falls back to catalog when none are mapped', () => {
+      const channels = [
+        { id: 'mt', code: 'MEITUAN', name: '美团酒店', isMapped: true },
+        { id: 'dy', code: 'DOUYIN', name: '抖音生活服务', isMapped: false },
+      ] as unknown as OTAChannel[];
+      const catalog = [
+        { id: 'mt', code: 'MEITUAN', name: '美团酒店' },
+        { id: 'ct', code: 'CTRIP', name: '携程旅行' },
+      ] as unknown as OTAChannel[];
+
+      expect(buildOrderChannelOptions(channels, catalog)).toEqual([
+        { label: '美团酒店', value: 'MEITUAN', subtext: 'MEITUAN' },
+      ]);
+      expect(buildOrderChannelOptions([], catalog)).toEqual([
+        { label: '美团酒店', value: 'MEITUAN', subtext: 'MEITUAN' },
+        { label: '携程旅行', value: 'CTRIP', subtext: 'CTRIP' },
+      ]);
     });
   });
 });

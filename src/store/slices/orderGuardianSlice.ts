@@ -84,10 +84,14 @@ export interface OrderGuardianState {
 const initialFilters: ToolkitOrderFilters = {
   page: 1,
   pageSize: 20,
-  status: 'all',
-  query: '',
-  arrivalStart: '',
-  arrivalEnd: '',
+  unitId: '',
+  otaChannel: '',
+  status: '',
+  orderType: '',
+  otaOrderId: '',
+  contactName: '',
+  createdStart: '',
+  createdEnd: '',
 };
 
 const initialStatistics: ToolkitOrderStatistics = {
@@ -446,17 +450,41 @@ export const orderGuardianSlice = createSlice({
   name: 'orderGuardian',
   initialState,
   reducers: {
+    setFilterUnitId: (state, action: PayloadAction<string | undefined>) => {
+      state.filters.unitId = action.payload || '';
+      state.filters.page = 1;
+    },
+    setFilterChannel: (state, action: PayloadAction<string | undefined>) => {
+      state.filters.otaChannel = action.payload || '';
+      state.filters.page = 1;
+    },
     setFilterStatus: (state, action: PayloadAction<string>) => {
       state.filters.status = action.payload;
       state.filters.page = 1;
     },
-    setFilterQuery: (state, action: PayloadAction<string>) => {
-      state.filters.query = action.payload;
+    setFilterOrderType: (state, action: PayloadAction<string>) => {
+      state.filters.orderType = action.payload;
+      state.filters.page = 1;
+    },
+    setFilterOtaOrderId: (state, action: PayloadAction<string>) => {
+      state.filters.otaOrderId = action.payload;
+      state.filters.page = 1;
+    },
+    setFilterContactName: (state, action: PayloadAction<string>) => {
+      state.filters.contactName = action.payload;
+      state.filters.page = 1;
     },
     setDateRange: (state, action: PayloadAction<{ startDate: string; endDate: string }>) => {
-      state.filters.arrivalStart = action.payload.startDate;
-      state.filters.arrivalEnd = action.payload.endDate;
+      state.filters.createdStart = action.payload.startDate;
+      state.filters.createdEnd = action.payload.endDate;
       state.filters.page = 1;
+    },
+    patchFilters: (state, action: PayloadAction<Partial<ToolkitOrderFilters>>) => {
+      state.filters = {
+        ...state.filters,
+        ...action.payload,
+        page: action.payload.page ?? 1,
+      };
     },
     setPagination: (state, action: PayloadAction<{ page: number; pageSize?: number }>) => {
       state.filters.page = action.payload.page;
@@ -466,14 +494,6 @@ export const orderGuardianSlice = createSlice({
     },
     resetFilters: (state) => {
       state.filters = { ...initialFilters };
-    },
-    setFilterUnitId: (state, action: PayloadAction<string | undefined>) => {
-      state.filters.unitId = action.payload;
-      state.filters.page = 1;
-    },
-    setFilterChannel: (state, action: PayloadAction<string | undefined>) => {
-      state.filters.otaChannel = action.payload;
-      state.filters.page = 1;
     },
     closeEditDrawer: (state) => {
       state.activeEditOrder = null;
@@ -623,13 +643,16 @@ export const selectGuardianStats = createSelector(
 );
 
 export const {
-  setFilterStatus,
-  setFilterQuery,
-  setDateRange,
-  setPagination,
-  resetFilters,
   setFilterUnitId,
   setFilterChannel,
+  setFilterStatus,
+  setFilterOrderType,
+  setFilterOtaOrderId,
+  setFilterContactName,
+  setDateRange,
+  patchFilters,
+  setPagination,
+  resetFilters,
   closeEditDrawer,
 } = orderGuardianSlice.actions;
 

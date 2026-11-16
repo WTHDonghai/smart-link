@@ -49,6 +49,7 @@ export interface DutyBridgeApi {
     channelCode: string;
     template?: string | null;
   }): Promise<{ success: boolean; error?: string }>;
+  notifyHostActive?(): Promise<{ success: boolean; error?: string }>;
 }
 
 export interface LogBridgeApi {

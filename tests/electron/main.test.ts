@@ -220,6 +220,38 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(result.error).toBeUndefined();
     });
 
+    it('正确注册 duty:notify-host-active 处理器并调度 handleHostActive', async () => {
+      registerDutyIpcHandlers();
+
+      expect(ipcHandlers.has('duty:notify-host-active')).toBe(true);
+
+      const handleActiveSpy = vi.spyOn(dutyOrchestrationEngine, 'handleHostActive').mockResolvedValueOnce();
+
+      const handler = ipcHandlers.get('duty:notify-host-active')!;
+      const result = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent)) as {
+        success: boolean;
+        error?: string;
+      };
+
+      expect(handleActiveSpy).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
+    it('duty:notify-host-active 遇到异常时返回错误信息且不崩溃', async () => {
+      registerDutyIpcHandlers();
+      vi.spyOn(dutyOrchestrationEngine, 'handleHostActive').mockRejectedValueOnce(new Error('网络未就绪'));
+
+      const handler = ipcHandlers.get('duty:notify-host-active')!;
+      const result = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent)) as {
+        success: boolean;
+        error?: string;
+      };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('网络未就绪');
+    });
+
     it('任一 Token 持久化路径失败时 IPC 不返回成功', async () => {
       registerDutyIpcHandlers();
       const handler = ipcHandlers.get('duty:sync-tokens')!;

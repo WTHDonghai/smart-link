@@ -14,6 +14,7 @@ import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/sl
 import {
   syncDutyTokens,
   clearDutyTokens,
+  notifyHostActive,
 } from './services/dutyBridge';
 import {
   subscribeHostLogs,
@@ -95,7 +96,13 @@ export default function App() {
       dispatch(updateTokenState());
     }, 10000);
 
-    // 4. 监听系统休眠唤醒、获得焦点、网络恢复，即时校验与静默续期（300ms 轻量防抖避免事件连发）
+    // 4. 监听网络恢复与系统唤醒
+    // 注意：网络恢复 (online) 无论窗口是否可见/后台最小化，均须立即通知主进程同步工位状态与自愈；
+    // 窗口可见性 (visibilitychange/focus) 则附加 Token 校验
+    const handleNetworkOnline = () => {
+      void notifyHostActive().catch(() => {});
+    };
+
     let wakeupTimer: ReturnType<typeof setTimeout> | null = null;
     const handleWakeupOrReconnect = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
@@ -103,6 +110,7 @@ export default function App() {
         wakeupTimer = setTimeout(() => {
           dispatch(updateTokenState());
           void platformAuthService.checkAndRefreshImmediately();
+          void notifyHostActive().catch(() => {});
         }, 300);
       }
     };
@@ -111,7 +119,7 @@ export default function App() {
       document.addEventListener('visibilitychange', handleWakeupOrReconnect);
     }
     window.addEventListener('focus', handleWakeupOrReconnect);
-    window.addEventListener('online', handleWakeupOrReconnect);
+    window.addEventListener('online', handleNetworkOnline);
 
     return () => {
       if (wakeupTimer) clearTimeout(wakeupTimer);
@@ -124,7 +132,7 @@ export default function App() {
         document.removeEventListener('visibilitychange', handleWakeupOrReconnect);
       }
       window.removeEventListener('focus', handleWakeupOrReconnect);
-      window.removeEventListener('online', handleWakeupOrReconnect);
+      window.removeEventListener('online', handleNetworkOnline);
     };
   }, [dispatch]);
 

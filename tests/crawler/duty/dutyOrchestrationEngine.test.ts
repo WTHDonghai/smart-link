@@ -8,6 +8,8 @@ import type {
   DutyTaskExecutionResult,
   DutyUnhandledOrderSummary,
 } from '../../../src/crawler/duty/dutyContracts';
+import type { DutyOrderStatus } from '../../../src/crawler/duty/dutyTaskContext';
+import type { DutyTaskLogSink } from '../../../src/crawler/duty/dutyTaskLogger';
 import type { DutyClaimedTask, SystemLogEntry } from '../../../src/types';
 import * as stationIdentityModule from '../../../src/crawler/duty/stationIdentity';
 import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
@@ -24,9 +26,20 @@ class MockChannelRunner implements ChannelDutyRunner {
   public executeResult: DutyTaskExecutionResult = { status: 'SUCCEEDED', result: { test: true } };
   public confirmImportEnabled = true;
   public supportedTaskTypes?: readonly import('../../../src/crawler/duty/dutyContracts').SupportedDutyTaskType[];
+  public sessionAlive = true;
+  public sessionLostHandler?: () => void;
+  public unhandledOrders: DutyUnhandledOrderSummary[] = [];
 
   public setConfirmImportEnabled(enabled: boolean): void {
     this.confirmImportEnabled = enabled;
+  }
+
+  public isSessionAlive(): boolean {
+    return this.sessionAlive;
+  }
+
+  public setSessionLostHandler(handler?: () => void): void {
+    this.sessionLostHandler = handler;
   }
 
   constructor(channelCode = 'TEST_CHANNEL') {
@@ -39,16 +52,22 @@ class MockChannelRunner implements ChannelDutyRunner {
 
   public async start(): Promise<void> {
     this.running = true;
+    this.sessionAlive = true;
     this.startCalls++;
   }
 
   public async stop(): Promise<void> {
     this.running = false;
+    this.sessionAlive = false;
     this.stopCalls++;
   }
 
-  public async collectUnhandledOrders(): Promise<DutyUnhandledOrderSummary[]> {
-    return [];
+  public async collectUnhandledOrders(
+    _orderStatus?: DutyOrderStatus,
+    _audit?: DutyTaskLogSink,
+    _channelId?: string
+  ): Promise<DutyUnhandledOrderSummary[]> {
+    return this.unhandledOrders;
   }
 
   public async inspectOrderDetail(otaOrderId: string): Promise<Record<string, unknown>> {
@@ -94,9 +113,7 @@ describe('dutyOrchestrationEngine', () => {
 
   afterEach(async () => {
     try {
-      if (mockRunner.isRunning()) {
-        await engine.stopDuty('MOCK_OTA');
-      }
+      await engine.stopAllDuty();
     } catch {
       // ignore teardown
     } finally {
@@ -222,6 +239,27 @@ describe('dutyOrchestrationEngine', () => {
       expect(secondRes.success).toBe(true);
       expect(secondRes.error).toBeUndefined();
       expect(mockRunner.startCalls).toBe(1);
+    });
+
+    it('当 Runner 处于僵尸态 (running=true 但 sessionAlive=false) 时，再次调用 startDuty 能够穿透并先 stop 后重新 start', async () => {
+      const firstRes = await engine.startDuty('MOCK_OTA');
+      expect(firstRes.success).toBe(true);
+      expect(mockRunner.startCalls).toBe(1);
+      expect(mockRunner.stopCalls).toBe(0);
+
+      // 模拟底层浏览器关闭导致僵尸态
+      mockRunner.sessionAlive = false;
+
+      // 再次调用 startDuty：必须穿透早退逻辑，先安全 stop 再重新 start
+      const secondRes = await engine.startDuty('MOCK_OTA');
+      expect(secondRes.success).toBe(true);
+      expect(mockRunner.stopCalls).toBe(1);
+      expect(mockRunner.startCalls).toBe(2);
+      expect(mockRunner.running).toBe(true);
+      expect(mockRunner.isSessionAlive()).toBe(true);
+
+      const status = engine.getChannelDutyStatus();
+      expect(status['MOCK_OTA'].status).toBe('RUNNING');
     });
 
     it('should stop duty runner, transition state to STOPPED and report STOP state', async () => {
@@ -430,6 +468,232 @@ describe('dutyOrchestrationEngine', () => {
           retryable: true,
         })
       );
+    });
+  });
+
+  describe('会话失联 (Session Lost) 与别名渠道联动降级', () => {
+    it('registerRunner 应自动向 runner 挂载 sessionLostHandler', () => {
+      const runner = new MockChannelRunner('AUTO_WATCH_OTA');
+      expect(runner.sessionLostHandler).toBeUndefined();
+      engine.registerRunner(runner);
+      expect(typeof runner.sessionLostHandler).toBe('function');
+    });
+
+    it('当共享会话 Runner 触发 sessionLost 时，主渠道与别名派生渠道均降级为 DEGRADED，记录 WARN 日志，并即时向中台同步', async () => {
+      const sharedRunner = new MockChannelRunner('SHARED_MT');
+      engine.registerRunner(sharedRunner);
+      engine.registerRunnerAlias('SHARED_MT_BIZ', sharedRunner);
+
+      engine.setMeituanBizSplitEnabled(true);
+      await engine.startDuty('SHARED_MT');
+
+      expect(engine.getChannelDutyStatus()['SHARED_MT'].status).toBe('RUNNING');
+      expect(engine.getChannelDutyStatus()['SHARED_MT_BIZ'].status).toBe('RUNNING');
+
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState');
+
+      // 触发 session lost 回调（如用户手动关闭浏览器窗口或底层进程意外退出）
+      sharedRunner.sessionLostHandler!();
+
+      // 验证主渠道与别名派生渠道均转为 DEGRADED 状态并带有明确原因
+      const statusAfter = engine.getChannelDutyStatus();
+      expect(statusAfter['SHARED_MT'].status).toBe('DEGRADED');
+      expect(statusAfter['SHARED_MT'].error).toContain('浏览器会话或页面已意外关闭');
+      expect(statusAfter['SHARED_MT_BIZ'].status).toBe('DEGRADED');
+      expect(statusAfter['SHARED_MT_BIZ'].error).toContain('浏览器会话或页面已意外关闭');
+
+      // 关键断言：会话失联时立即向中台同步真实工位目标（不等 60s 心跳）
+      // 由于没有其他存活渠道，上报 targets 为空且标记 offline
+      expect(reportSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationId: 'st-unit-test-1',
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              status: 'STOP',
+              otaCollectionTargets: [],
+            }),
+          ]),
+        })
+      );
+
+      // 验证审计日志记录了 WARN 级别的 DUTY_RUNNER_SESSION_LOST
+      const logs = engine.getRecentDutyLogs();
+      const lostLog = logs.find((l) => l.event === 'DUTY_RUNNER_SESSION_LOST');
+      expect(lostLog).toBeDefined();
+      expect(lostLog?.level).toBe('WARN');
+      expect(lostLog?.channelId).toBe('SHARED_MT');
+
+      await engine.stopDuty('SHARED_MT');
+    });
+
+    it('当存在多个不同 Runner 时，一个 Runner 的 sessionLost 不影响其他健康 Runner 的状态与上报', async () => {
+      const runnerA = new MockChannelRunner('CHANNEL_A');
+      const runnerB = new MockChannelRunner('CHANNEL_B');
+      engine.registerRunner(runnerA);
+      engine.registerRunner(runnerB);
+
+      await engine.startDuty('CHANNEL_A');
+      await engine.startDuty('CHANNEL_B');
+
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState').mockClear();
+
+      // runnerA 窗口失联
+      runnerA.sessionLostHandler!();
+
+      const status = engine.getChannelDutyStatus();
+      expect(status['CHANNEL_A'].status).toBe('DEGRADED');
+      expect(status['CHANNEL_B'].status).toBe('RUNNING');
+
+      // 中台应立即收到仅包含 CHANNEL_B 的存活目标上报
+      expect(reportSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationId: 'st-unit-test-1',
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              status: 'RUNNING',
+              otaCollectionTargets: [{ otaChannelCode: 'CHANNEL_B' }],
+            }),
+          ]),
+        })
+      );
+
+      await engine.stopDuty('CHANNEL_A');
+      await engine.stopDuty('CHANNEL_B');
+    });
+  });
+
+  describe('启动/重启即时主动巡检补偿 (runBootstrapCollect)', () => {
+    it('startDuty 成功后触发首轮主动巡检，若发现待确认订单，立即创建下游入单任务且绝不调用 submitDutyTaskResult', async () => {
+      const runner = new MockChannelRunner('BOOTSTRAP_OTA');
+      engine.registerRunner(runner);
+      runner.unhandledOrders = [
+        { orderId: 'MT-BOOTSTRAP-001', hotelId: 'HOTEL-101', cancelOrder: false },
+        { orderId: 'MT-BOOTSTRAP-002', hotelId: 'HOTEL-102', cancelOrder: true },
+      ];
+
+      const createTasksSpy = vi.spyOn(dutyRuntimeApi, 'createDutyTasks').mockResolvedValue(undefined);
+      const submitSpy = vi.spyOn(dutyRuntimeApi, 'submitDutyTaskResult');
+
+      await engine.startDuty('BOOTSTRAP_OTA');
+
+      // 等待异步巡检微任务完成
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(createTasksSpy).toHaveBeenCalledTimes(1);
+      expect(createTasksSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationId: 'st-unit-test-1',
+          appId: 'smart-link',
+          items: [
+            expect.objectContaining({
+              msgType: 'OTA_IMPORT_ORDER',
+              businessId: 'MT-BOOTSTRAP-001',
+              unitId: 'HOTEL-101',
+            }),
+            expect.objectContaining({
+              msgType: 'OTA_CANCEL_ORDER',
+              businessId: 'MT-BOOTSTRAP-002',
+            }),
+          ],
+        })
+      );
+
+      // 核心断言：首轮主动巡检属于客户端主动探活，绝对不得调用 submitDutyTaskResult（无 taskId）
+      expect(submitSpy).not.toHaveBeenCalled();
+
+      // 验证审计日志
+      const logs = engine.getRecentDutyLogs();
+      expect(logs.some((l) => l.event === 'DUTY_BOOTSTRAP_COLLECT_START')).toBe(true);
+      expect(logs.some((l) => l.event === 'DUTY_BOOTSTRAP_COLLECT_SUCCESS')).toBe(true);
+
+      await engine.stopDuty('BOOTSTRAP_OTA');
+    });
+
+    it('首轮巡检未发现订单时，记录 INFO 日志且不调用 createDutyTasks', async () => {
+      const runner = new MockChannelRunner('EMPTY_BOOTSTRAP_OTA');
+      engine.registerRunner(runner);
+      runner.unhandledOrders = [];
+
+      const createTasksSpy = vi.spyOn(dutyRuntimeApi, 'createDutyTasks');
+      await engine.startDuty('EMPTY_BOOTSTRAP_OTA');
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(createTasksSpy).not.toHaveBeenCalled();
+
+      const logs = engine.getRecentDutyLogs();
+      const emptyLog = logs.find(
+        (l) => l.event === 'DUTY_BOOTSTRAP_COLLECT_SUCCESS' && l.channelId === 'EMPTY_BOOTSTRAP_OTA'
+      );
+      expect(emptyLog).toBeDefined();
+      expect(emptyLog?.message).toContain('暂无待确认订单');
+
+      await engine.stopDuty('EMPTY_BOOTSTRAP_OTA');
+    });
+
+    it('首轮巡检在美团渠道且开启商旅分流时，同时对 MEITUAN 与 MEITUANBIZ 进行订单巡检', async () => {
+      const meituanRunner = new MockChannelRunner('MEITUAN');
+      engine.registerRunner(meituanRunner);
+      engine.registerRunnerAlias('MEITUANBIZ', meituanRunner);
+
+      const collectCalls: string[] = [];
+      meituanRunner.collectUnhandledOrders = vi.fn().mockImplementation((_payload, _logCb, targetChannel) => {
+        collectCalls.push(targetChannel || 'UNKNOWN');
+        return Promise.resolve([]);
+      });
+
+      engine.setMeituanBizSplitEnabled(true);
+      await engine.startDuty('MEITUAN');
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(collectCalls).toContain('MEITUAN');
+      expect(collectCalls).toContain('MEITUANBIZ');
+
+      await engine.stopDuty('MEITUAN');
+    });
+  });
+
+  describe('主机网络恢复与唤醒同步 (handleHostActive)', () => {
+    it('当存在活跃渠道时，handleHostActive 立即向中台同步实际状态消除心跳盲区', async () => {
+      await engine.startDuty('MOCK_OTA');
+
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState').mockClear();
+
+      await engine.handleHostActive();
+
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      expect(reportSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationId: 'st-unit-test-1',
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              status: 'RUNNING',
+              otaCollectionTargets: [{ otaChannelCode: 'MOCK_OTA' }],
+            }),
+          ]),
+        })
+      );
+    });
+
+    it('当没有活跃渠道时，handleHostActive 早退不上报', async () => {
+      await engine.stopDuty('MOCK_OTA');
+
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState').mockClear();
+
+      await engine.handleHostActive();
+
+      expect(reportSpy).not.toHaveBeenCalled();
+    });
+
+    it('当中台工位身份尚未初始化时，handleHostActive 安全早退', async () => {
+      const freshEngine = new DutyOrchestrationEngine();
+      freshEngine.registerRunner(new MockChannelRunner('TEST_OTA'));
+      const reportSpy = vi.spyOn(dutyRuntimeApi, 'reportDutyActualState').mockClear();
+
+      await freshEngine.handleHostActive();
+
+      expect(reportSpy).not.toHaveBeenCalled();
     });
   });
 

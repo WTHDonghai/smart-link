@@ -25,10 +25,10 @@ flowchart TD
 
     subgraph OrderMonitoring["2. 文旅订单监控与人工运维 (Client SDK -> 中台 REST)"]
       M1["挂载『订单值守』工作区"] --> M2["并发请求: GET /toolkit/orders/statistics 与 GET /toolkit/orders (首屏)"]
-      M2 --> M3["多维筛选: 状态 Tabs (全部/待确认/成功/失败/取消/导入中) + 日期起止 + 搜索框"]
+      M2 --> M3["多维筛选: 酒店 + 渠道 + 状态 + 类型 + OTA订单号 + 客人姓名 + 搬单日期起止"]
       M3 --> M4["重新拉取对应条件的订单列表"]
       
-      M4 --> M5{"点击订单行操作菜单 TableRowActions"}
+      M4 --> M5{"点击订单行操作列折叠菜单"}
       M5 -->|"状态为 FAILED"| ACT_FAIL["开放动作: 编辑 (EDIT) / 导入 (IMPORT) / 删除 (DELETE)"]
       M5 -->|"状态为 SUCCESS"| ACT_SUCC["开放动作: 取消 (CANCEL)"]
       M5 -->|"PENDING / IMPORTING / CANCEL"| ACT_DIS["全部禁用并提示状态原因"]
@@ -85,8 +85,8 @@ src/
         ├── OrderGuardianView.tsx    # 主工作区视图: 整合渠道值守与文旅订单面板
         ├── ChannelDutyPanel.tsx     # 渠道值守卡片与协调器徽标 (复用 ChannelBadge)
         ├── OrderStatsCards.tsx      # 4 个关键指标卡片 (今日导入、待确认、已导入、失败)
-        ├── OrderFilterBar.tsx       # 状态 Tabs + 日期起止 + 搜索输入
-        ├── OrderTable.tsx           # 高密表格 (复用 TableRowActions 与 ChannelBadge)
+        ├── OrderFilterBar.tsx       # 多维查询栏: 酒店/渠道/状态/类型下拉 + OTA订单号/客人姓名输入 + 搬单日期起止
+        ├── OrderTable.tsx           # 15列高密表格 (含订单列表总数顶栏、复用 StatusBadge 与 ChannelBadge)
         └── EditOrderDrawer.tsx      # 右侧滑出抽屉: 房型/房价码下拉联动 + 动态每日价格拆分计算
 ```
 
@@ -95,7 +95,7 @@ src/
 ## 4. 关键接口与数据契约
 
 ### 4.1 Toolkit 订单管理接口 (由渲染层调用)
-- 列表查询：`GET /${TOOLKIT_MODULE}/orders`（参数：`current`, `size`, `status`, `query`, `arrivalStart`, `arrivalEnd`, `showAll: true`）
+- 列表查询：`GET /${TOOLKIT_MODULE}/orders`（参数：`current`, `size`, `unitId`, `otaChannel`, `status`, `orderType`, `otaOrderId`, `contactName`, `createdStart`, `createdEnd`, `showAll: true`）
 - 指标统计：`GET /${TOOLKIT_MODULE}/orders/statistics`（返回：`todayTotal`, `pendingCount`, `successCount`, `failedCount`）
 - 订单详情：`GET /${TOOLKIT_MODULE}/orders/:id`
 - 订单编辑保存：`PUT /${TOOLKIT_MODULE}/orders/:id`（仅保存编辑修改草稿，不触发 PMS 导入）

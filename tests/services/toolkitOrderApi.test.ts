@@ -3,6 +3,7 @@ import {
   normalizeToolkitOrder,
   normalizeToolkitOrderFilters,
   ORDER_STATUSES,
+  ORDER_TYPES,
   fetchToolkitOrders,
   fetchToolkitStatistics,
   fetchToolkitOrderDetails,
@@ -56,6 +57,8 @@ describe('toolkitOrderApi', () => {
           ],
         },
         status: 'FAILED',
+        orderType: 'new',
+        createdTime: '2026-09-17 10:30:00',
         errorMessage: '房型未映射',
       };
 
@@ -70,8 +73,21 @@ describe('toolkitOrderApi', () => {
       expect(result.booking.nights).toBe(2);
       expect(result.booking.totalPrice).toBe(450);
       expect(result.status).toBe('FAILED');
+      expect(result.orderType).toBe('NEW');
+      expect(result.createdTime).toBe('2026-09-17 10:30:00');
       expect(result.errorMessage).toBe('房型未映射');
       expect(result.allowedActions).toEqual(['EDIT', 'IMPORT', 'DELETE']);
+    });
+
+    it('falls back to type and createdAt when orderType and createdTime are provided under alias keys', () => {
+      const result = normalizeToolkitOrder({
+        id: '2',
+        status: 'SUCCESS',
+        type: 'modify',
+        createdAt: '2026-09-18 12:00:00',
+      });
+      expect(result.orderType).toBe('MODIFY');
+      expect(result.createdTime).toBe('2026-09-18 12:00:00');
     });
 
     it('assigns CANCEL allowedAction for SUCCESS status', () => {
@@ -82,7 +98,7 @@ describe('toolkitOrderApi', () => {
   });
 
   describe('normalizeToolkitOrderFilters', () => {
-    it('exports the standard ORDER_STATUSES constant', () => {
+    it('exports the standard ORDER_STATUSES and ORDER_TYPES constants', () => {
       expect(ORDER_STATUSES).toEqual([
         'PENDING',
         'SUCCESS',
@@ -90,47 +106,60 @@ describe('toolkitOrderApi', () => {
         'CANCEL',
         'IMPORTING',
       ]);
+      expect(ORDER_TYPES).toEqual(['NEW', 'MODIFY', 'CANCEL']);
     });
 
     it('provides standard default filter values', () => {
       const filters = normalizeToolkitOrderFilters({});
       expect(filters.page).toBe(1);
       expect(filters.pageSize).toBe(20);
+      expect(filters.unitId).toBe('');
+      expect(filters.otaChannel).toBe('');
       expect(filters.status).toBe('');
-      expect(filters.query).toBe('');
-      expect(filters.arrivalStart).toBe('');
-      expect(filters.arrivalEnd).toBe('');
+      expect(filters.orderType).toBe('');
+      expect(filters.otaOrderId).toBe('');
+      expect(filters.contactName).toBe('');
+      expect(filters.createdStart).toBe('');
+      expect(filters.createdEnd).toBe('');
     });
 
-    it('normalizes status and converts "all" / "ALL" to empty string', () => {
+    it('normalizes status and orderType and converts "all" / "ALL" to empty string', () => {
       expect(normalizeToolkitOrderFilters({ status: 'all' }).status).toBe('');
       expect(normalizeToolkitOrderFilters({ status: 'ALL' }).status).toBe('');
       expect(normalizeToolkitOrderFilters({ status: 'pending' }).status).toBe('PENDING');
       expect(normalizeToolkitOrderFilters({ status: 'SUCCESS' }).status).toBe('SUCCESS');
+
+      expect(normalizeToolkitOrderFilters({ orderType: 'all' }).orderType).toBe('');
+      expect(normalizeToolkitOrderFilters({ orderType: 'new' }).orderType).toBe('NEW');
+      expect(normalizeToolkitOrderFilters({ orderType: 'MODIFY' }).orderType).toBe('MODIFY');
+      expect(normalizeToolkitOrderFilters({ orderType: 'cancel' }).orderType).toBe('CANCEL');
     });
 
-    it('throws when status is unsupported', () => {
+    it('throws when status or orderType is unsupported', () => {
       expect(() => normalizeToolkitOrderFilters({ status: 'UNKNOWN_STATUS' })).toThrow(
         '不支持的订单状态：UNKNOWN_STATUS'
       );
-    });
-
-    it('validates arrival date formats and rejects invalid dates', () => {
-      expect(() => normalizeToolkitOrderFilters({ arrivalStart: '2026-99-99' })).toThrow(
-        '入住开始日期格式无效。'
-      );
-      expect(() => normalizeToolkitOrderFilters({ arrivalEnd: 'invalid-date' })).toThrow(
-        '入住结束日期格式无效。'
+      expect(() => normalizeToolkitOrderFilters({ orderType: 'UNKNOWN_TYPE' })).toThrow(
+        '不支持的订单类型：UNKNOWN_TYPE'
       );
     });
 
-    it('rejects inverted arrival date ranges (arrivalStart > arrivalEnd)', () => {
+    it('validates created date formats and rejects invalid dates', () => {
+      expect(() => normalizeToolkitOrderFilters({ createdStart: '2026-99-99' })).toThrow(
+        '搬单开始日期格式无效。'
+      );
+      expect(() => normalizeToolkitOrderFilters({ createdEnd: 'invalid-date' })).toThrow(
+        '搬单结束日期格式无效。'
+      );
+    });
+
+    it('rejects inverted created date ranges (createdStart > createdEnd)', () => {
       expect(() =>
         normalizeToolkitOrderFilters({
-          arrivalStart: '2026-10-06',
-          arrivalEnd: '2026-10-05',
+          createdStart: '2026-10-06',
+          createdEnd: '2026-10-05',
         })
-      ).toThrow('入住开始日期不能晚于结束日期。');
+      ).toThrow('搬单开始日期不能晚于结束日期。');
     });
 
     it('clamps page and pageSize to valid boundaries', () => {
@@ -147,24 +176,26 @@ describe('toolkitOrderApi', () => {
       expect(filters3.pageSize).toBe(20);
     });
 
-    it('trims query and preserves unitId / otaChannel', () => {
+    it('trims otaOrderId / contactName and preserves unitId / otaChannel', () => {
       const filters = normalizeToolkitOrderFilters({
-        query: '   李四   ',
+        otaOrderId: '  MT20260917  ',
+        contactName: '   李四   ',
         unitId: 'unit_123',
         otaChannel: 'meituan',
       });
-      expect(filters.query).toBe('李四');
+      expect(filters.otaOrderId).toBe('MT20260917');
+      expect(filters.contactName).toBe('李四');
       expect(filters.unitId).toBe('unit_123');
       expect(filters.otaChannel).toBe('MEITUAN');
     });
   });
 
   describe('fetchToolkitOrders', () => {
-    it('queries orders with proper query parameters including unitId and otaChannel', async () => {
+    it('queries orders with proper query parameters including unitId, otaChannel, status, orderType, otaOrderId, contactName, createdStart and createdEnd', async () => {
       mockRequest.mockResolvedValueOnce({
         records: [
-          { id: '1', otaOrderId: 'O1', status: 'FAILED' },
-          { id: '2', otaOrderId: 'O2', status: 'SUCCESS' },
+          { id: '1', otaOrderId: 'O1', status: 'FAILED', orderType: 'NEW' },
+          { id: '2', otaOrderId: 'O2', status: 'SUCCESS', orderType: 'MODIFY' },
         ],
         total: 2,
         current: 1,
@@ -174,12 +205,14 @@ describe('toolkitOrderApi', () => {
       const result = await fetchToolkitOrders({
         page: 1,
         pageSize: 20,
-        status: 'FAILED',
-        query: '张三',
-        arrivalStart: '2026-10-01',
-        arrivalEnd: '2026-10-05',
         unitId: 'unit_100',
         otaChannel: 'MEITUAN',
+        status: 'FAILED',
+        orderType: 'NEW',
+        otaOrderId: 'O1',
+        contactName: '张三',
+        createdStart: '2026-10-01',
+        createdEnd: '2026-10-05',
       });
 
       expect(mockRequest).toHaveBeenCalledTimes(1);
@@ -187,12 +220,14 @@ describe('toolkitOrderApi', () => {
       expect(urlCalled).toContain(ORDER_ENDPOINTS.ORDERS);
       expect(urlCalled).toContain('current=1');
       expect(urlCalled).toContain('size=20');
-      expect(urlCalled).toContain('status=FAILED');
-      expect(urlCalled).toContain('query=%E5%BC%A0%E4%B8%89');
-      expect(urlCalled).toContain('arrivalStart=2026-10-01+00%3A00%3A00');
-      expect(urlCalled).toContain('arrivalEnd=2026-10-05+23%3A59%3A59');
       expect(urlCalled).toContain('unitId=unit_100');
       expect(urlCalled).toContain('otaChannel=MEITUAN');
+      expect(urlCalled).toContain('status=FAILED');
+      expect(urlCalled).toContain('orderType=NEW');
+      expect(urlCalled).toContain('otaOrderId=O1');
+      expect(urlCalled).toContain('contactName=%E5%BC%A0%E4%B8%89');
+      expect(urlCalled).toContain('createdStart=2026-10-01+00%3A00%3A00');
+      expect(urlCalled).toContain('createdEnd=2026-10-05+23%3A59%3A59');
       expect(urlCalled).toContain('showAll=true');
 
       expect(result.total).toBe(2);

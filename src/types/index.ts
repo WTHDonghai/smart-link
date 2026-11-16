@@ -24,6 +24,7 @@ export interface OTAChannelMappingRecord {
   channelId: string;
   channelCode: string;
   channelName: string;
+  companyCode?: string;
   status: string;
 }
 
@@ -32,6 +33,7 @@ export interface SaveChannelMappingPayloadItem {
   otaChannelName?: string;
   channelCode: string;
   channelId: string;
+  companyCode?: string;
   status?: string;
 }
 
@@ -52,6 +54,7 @@ export interface OTAChannel {
   channelId?: string;
   channelCode?: string;
   channelName?: string;
+  companyCode?: string;
   mappingId?: string;
   isMapped?: boolean;
   protocolSchema?: ChannelProtocolSchema;
@@ -391,6 +394,11 @@ export interface GuardianStats {
 export type ToolkitOrderStatus = 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCEL' | 'IMPORTING';
 
 /**
+ * 文旅中台订单类型
+ */
+export type ToolkitOrderType = 'NEW' | 'MODIFY' | 'CANCEL' | 'CANCELLED';
+
+/**
  * 订单允许执行的人工操作类型
  */
 export type ToolkitOrderAction = 'EDIT' | 'IMPORT' | 'DELETE' | 'CANCEL';
@@ -429,6 +437,8 @@ export interface ToolkitOrder {
     pricing: NightlyPricing[];
   };
   status: ToolkitOrderStatus;
+  orderType?: ToolkitOrderType;
+  createdTime?: string;
   errorMessage?: string;
   pmsOrderId?: string;
   remark?: string;
@@ -452,12 +462,14 @@ export interface ToolkitOrderStatistics {
 export interface ToolkitOrderFilters {
   page: number;
   pageSize: number;
+  unitId: string;
+  otaChannel: string;
   status: string;
-  query: string;
-  arrivalStart: string;
-  arrivalEnd: string;
-  unitId?: string;
-  otaChannel?: string;
+  orderType: string;
+  otaOrderId: string;
+  contactName: string;
+  createdStart: string;
+  createdEnd: string;
 }
 
 /**

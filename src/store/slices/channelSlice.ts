@@ -323,6 +323,7 @@ export const saveChannelMapping = createAsyncThunk<
     pmsChannelId: string;
     channelCode: string;
     pmsChannelName?: string;
+    companyCode?: string;
     status?: string;
   },
   { rejectValue: string }
@@ -333,6 +334,7 @@ export const saveChannelMapping = createAsyncThunk<
       otaChannelName: param.otaChannelName,
       channelCode: param.channelCode,
       channelId: param.pmsChannelId,
+      companyCode: param.companyCode,
       status: param.status || 'A',
     };
 
@@ -480,6 +482,7 @@ export const channelSlice = createSlice({
         channelId: existingMapping?.channelId,
         channelCode: existingMapping?.channelCode,
         channelName: existingMapping?.channelName,
+        companyCode: existingMapping?.companyCode,
         mappingId: existingMapping?.mappingId,
         isMapped: !!existingMapping,
         todayOrders: 0,
@@ -501,6 +504,24 @@ export const channelSlice = createSlice({
         ch.targetSystem = action.payload.targetSystem;
       }
     },
+    updateChannelCompanyCode: (
+      state,
+      action: PayloadAction<{ channelId: string; companyCode: string }>
+    ) => {
+      const ch = state.channels.find(c => c.id === action.payload.channelId);
+      if (!ch) return;
+
+      ch.companyCode = action.payload.companyCode;
+
+      // 与已保存映射的议单位不一致时标记为待保存（与切换文旅渠道的判定保持一致）
+      const existingMapping = state.mappings.find(
+        m => m.otaChannelCode.toUpperCase() === ch.code.toUpperCase()
+      );
+      ch.isMapped =
+        !!existingMapping &&
+        existingMapping.channelId === ch.channelId &&
+        (existingMapping.companyCode || '') === action.payload.companyCode.trim();
+    },
     selectCulturalTourismChannel: (
       state,
       action: PayloadAction<{
@@ -516,6 +537,7 @@ export const channelSlice = createSlice({
           ch.channelId = '';
           ch.channelCode = '';
           ch.channelName = '';
+          ch.companyCode = '';
           ch.targetSystem = '';
           ch.isMapped = false;
         } else {
@@ -527,7 +549,10 @@ export const channelSlice = createSlice({
           const existingMapping = state.mappings.find(
             m => m.otaChannelCode.toUpperCase() === ch.code.toUpperCase()
           );
-          ch.isMapped = !!existingMapping && existingMapping.channelId === action.payload.pmsChannelId;
+          ch.isMapped =
+            !!existingMapping &&
+            existingMapping.channelId === action.payload.pmsChannelId &&
+            (existingMapping.companyCode || '') === (ch.companyCode || '').trim();
         }
       }
     },
@@ -676,6 +701,7 @@ export const channelSlice = createSlice({
             existing.channelId = mapping.channelId;
             existing.channelCode = mapping.channelCode;
             existing.channelName = mapping.channelName;
+            existing.companyCode = mapping.companyCode;
             existing.mappingId = mapping.mappingId || mapping.id;
             existing.targetSystem = mapping.channelCode;
             existing.isMapped = true;
@@ -690,6 +716,7 @@ export const channelSlice = createSlice({
               channelId: mapping.channelId,
               channelCode: mapping.channelCode,
               channelName: mapping.channelName,
+              companyCode: mapping.companyCode,
               mappingId: mapping.mappingId || mapping.id,
               isMapped: true,
               todayOrders: 0,
@@ -707,6 +734,7 @@ export const channelSlice = createSlice({
               channelId: mapping.channelId,
               channelCode: mapping.channelCode,
               channelName: mapping.channelName,
+              companyCode: mapping.companyCode,
               mappingId: mapping.mappingId || mapping.id,
               isMapped: true,
               remarkTemplate: '',
@@ -762,6 +790,7 @@ export const channelSlice = createSlice({
           ch.channelId = action.payload.savedPayload.channelId;
           ch.channelCode = action.payload.savedPayload.channelCode;
           ch.channelName = resolvedChannelName || ch.channelName;
+          ch.companyCode = action.payload.savedPayload.companyCode;
           ch.targetSystem = action.payload.savedPayload.channelCode;
           ch.mappingId = resolvedMappingId;
           ch.isMapped = true;
@@ -776,6 +805,7 @@ export const channelSlice = createSlice({
           channelId: action.payload.savedPayload.channelId,
           channelCode: action.payload.savedPayload.channelCode,
           channelName: resolvedChannelName || ch?.channelName || action.payload.savedPayload.channelCode,
+          companyCode: action.payload.savedPayload.companyCode,
           status: action.payload.savedPayload.status || 'A',
         };
 
@@ -876,6 +906,7 @@ export const {
   addChannelById,
   removeChannel,
   updateChannelTargetSystem,
+  updateChannelCompanyCode,
   selectCulturalTourismChannel,
   updateChannelFieldMapping,
   toggleChannelField,

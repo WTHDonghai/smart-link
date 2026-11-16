@@ -8,6 +8,7 @@ import {
   stopDutyByChannel,
   syncDutyTokens,
   updateDutyTemplateCache,
+  notifyHostActive,
 } from '../../src/services/dutyBridge';
 import type { PlatformAuthTokens } from '../../src/types';
 
@@ -34,6 +35,7 @@ function installDutyApi() {
     syncTokens: vi.fn().mockResolvedValue({ success: true }),
     clearTokens: vi.fn().mockResolvedValue({ success: true }),
     updateTemplateCache: vi.fn().mockResolvedValue({ success: true }),
+    notifyHostActive: vi.fn().mockResolvedValue({ success: true }),
   };
   hostWindow.host = { duty };
   return duty;
@@ -111,6 +113,20 @@ describe('dutyBridge', () => {
       await expect(
         updateDutyTemplateCache({ channelCode: 'MEITUAN', template: '新模板' })
       ).rejects.toThrow('更新失败: 渠道未就绪');
+    });
+  });
+
+  describe('notifyHostActive', () => {
+    it('safely degrades when host or notifyHostActive is not available', async () => {
+      delete hostWindow.host;
+      await expect(notifyHostActive()).resolves.toBeUndefined();
+    });
+
+    it('invokes host.duty.notifyHostActive and handles silent completion', async () => {
+      const duty = installDutyApi();
+      await notifyHostActive();
+
+      expect(duty.notifyHostActive).toHaveBeenCalledTimes(1);
     });
   });
 });

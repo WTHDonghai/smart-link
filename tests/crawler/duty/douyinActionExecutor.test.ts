@@ -331,20 +331,54 @@ describe('DouyinActionExecutor (Single Responsibility & DOM Reality Benchmark)',
     });
 
     it('should click orderCard to expand detail, but throw CONFIRM_SUBMIT_NOT_FOUND if trigger button is not visible', async () => {
-      const executor = new DouyinActionExecutor();
-      const { mockPage, mockCard, mockTriggerBtn } = createMockEnvironment({ triggerBtnVisible: false });
+      // 压缩轮询预算（触发按钮有界轮询等待引入，预算默认 8s 会超出单测 5s 超时）
+      vi.stubEnv('SMARTLINK_TIMING_SCALE', '0.001');
+      try {
+        const executor = new DouyinActionExecutor();
+        const { mockPage, mockCard, mockTriggerBtn } = createMockEnvironment({ triggerBtnVisible: false });
 
-      await expect(
-        executor.confirmImport(mockPage, 'CF-123', 'DY-ORDER-888', {
+        await expect(
+          executor.confirmImport(mockPage, 'CF-123', 'DY-ORDER-888', {
+            refreshOrderList: vi.fn(),
+          })
+        ).rejects.toMatchObject({
+          errorCode: DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
+          retryable: false,
+        });
+
+        expect(mockCard.click).toHaveBeenCalled();
+        expect(mockTriggerBtn.click).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('生产事故回归：「填写确认号」触发按钮抽屉延迟渲染时应轮询等待而非竞态误报 CONFIRM_SUBMIT_NOT_FOUND', async () => {
+      // 压缩轮询预算（有界轮询引入，预算默认 8s 会超出单测 5s 超时）
+      vi.stubEnv('SMARTLINK_TIMING_SCALE', '0.001');
+      try {
+        const executor = new DouyinActionExecutor();
+        const { mockPage, mockCard, mockTriggerBtn } = createMockEnvironment();
+        // 模拟生产实测时序：点击卡片后抽屉挂载+详情接口+渲染存在明显延迟，
+        // 前 5 次探测均不可见、第 6 次探测（deadline 内最后一次重探）才可见
+        // （网页上按钮实际存在，与客户机器日志现象一致）
+        let probeCount = 0;
+        mockTriggerBtn.isVisible = vi.fn().mockImplementation(async () => {
+          probeCount++;
+          return probeCount >= 6;
+        });
+
+        const result = await executor.confirmImport(mockPage, 'CF-LATE-RENDER', 'DY-ORDER-888', {
           refreshOrderList: vi.fn(),
-        })
-      ).rejects.toMatchObject({
-        errorCode: DouyinDutyErrorCode.CONFIRM_SUBMIT_NOT_FOUND,
-        retryable: false,
-      });
+        });
 
-      expect(mockCard.click).toHaveBeenCalled();
-      expect(mockTriggerBtn.click).not.toHaveBeenCalled();
+        // 严密断言：轮询吸收了渲染延迟，最终点击了按钮而非误报失败
+        expect(result).toBeUndefined();
+        expect(mockTriggerBtn.isVisible).toHaveBeenCalledTimes(6);
+        expect(mockTriggerBtn.click).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('should click triggerBtn, but throw CONFIRM_INPUT_NOT_FOUND if popover confirm container does not appear', async () => {
