@@ -6,6 +6,7 @@ import { addLog, hydrateLogsFromStorage } from '../store/slices/systemLogSlice';
 import { applyAutoMappingResult, setAutoMappingProgress } from '../store/slices/productSlice';
 import { subscribeAgentProductMappingProgress } from '../services/agentBridge';
 import { logger } from '../services/logger';
+import { startLogUploadScheduler } from '../services/logUploadScheduler';
 import { initGlobalErrorLogging } from '../services/globalErrorLogger';
 import App from '../App';
 import '../index.css';
@@ -38,6 +39,10 @@ export async function startApp(root: HTMLElement): Promise<void> {
 
   // 确保在 logger.init 完成（包含 7 天淘汰清理）后再从存储水合历史日志，彻底避免竞态
   void store.dispatch(hydrateLogsFromStorage());
+
+  // 日志每日自动上传调度：启动补传昨日 + 跨日窗口上传当天收口日志
+  // （未登录时调度内部显式跳过，等待后续窗口；失败仅落 ERROR 日志，不阻断应用）
+  startLogUploadScheduler();
 
   createRoot(root).render(
     <StrictMode>

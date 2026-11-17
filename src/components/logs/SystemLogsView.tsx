@@ -17,6 +17,7 @@ import {
 } from '../../store/slices/systemLogSlice';
 import { showToast } from '../../store/slices/appSlice';
 import { syncDutyStatusThunk } from '../../store/slices/orderGuardianSlice';
+import { uploadLogsManually } from '../../services/logUploadScheduler';
 import { TASK_STAGES } from '../../utils/taskStage';
 import { isLogQuerySyntaxValid } from '../../utils/logQuery';
 import { getTodayDateString, getPastDateString } from '../../utils/logDate';
@@ -34,6 +35,7 @@ import {
   Calendar,
   RotateCcw,
   AlertTriangle,
+  CloudUpload,
 } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
 import { LogTaskMetaChips } from './LogTaskMetaChips';
@@ -68,6 +70,51 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
   const [expandAllApiPayloads, setExpandAllApiPayloads] = useState(defaultExpandApiPayloads);
   const [toggledLogIds, setToggledLogIds] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isUploadingLogs, setIsUploadingLogs] = useState(false);
+
+  const handleUploadLogs = async () => {
+    if (isUploadingLogs) return;
+    setIsUploadingLogs(true);
+    try {
+      const summary = await uploadLogsManually();
+      if (summary.uploadedDates.length > 0) {
+        dispatch(
+          showToast({
+            type: 'success',
+            title: '日志上传完成',
+            description: `已上传 ${summary.uploadedDates.join('、')} 的运行日志`,
+          })
+        );
+      } else if (summary.skippedNoAuth) {
+        dispatch(
+          showToast({
+            type: 'warning',
+            title: '日志未上传',
+            description: '尚未完成平台授权登录，请先登录后再上传日志',
+          })
+        );
+      } else {
+        dispatch(
+          showToast({
+            type: 'info',
+            title: '没有可上传的日志',
+            description: '今天与昨天暂无运行日志记录',
+          })
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '网络或存储服务异常';
+      dispatch(
+        showToast({
+          type: 'error',
+          title: '日志上传失败',
+          description: message,
+        })
+      );
+    } finally {
+      setIsUploadingLogs(false);
+    }
+  };
 
   const isPayloadExpanded = (logId: string) => {
     const isToggled = toggledLogIds.has(logId);
@@ -380,6 +427,17 @@ export const SystemLogsView: React.FC<SystemLogsViewProps> = ({
           >
             <Download className="w-3.5 h-3.5" />
             <span>导出</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleUploadLogs()}
+            disabled={isUploadingLogs}
+            className="h-8.5 px-3 bg-white border border-[#dce9ff] text-[#434655] hover:text-[#0b1c30] hover:bg-[#eff4ff] disabled:opacity-60 disabled:cursor-not-allowed rounded-lg text-xs font-medium shadow-2xs transition-colors select-none inline-flex items-center gap-1.5"
+            title="将今天与昨天的运行日志上传至云端"
+          >
+            <CloudUpload className="w-3.5 h-3.5" />
+            <span>{isUploadingLogs ? '上传中…' : '上传日志'}</span>
           </button>
 
           <button
