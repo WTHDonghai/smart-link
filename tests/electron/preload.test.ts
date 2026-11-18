@@ -8,6 +8,7 @@ const { exposeInMainWorldMock, ipcRendererMock } = vi.hoisted(() => {
       invoke: vi.fn(),
       on: vi.fn(),
       removeListener: vi.fn(),
+      send: vi.fn(),
     },
   };
 });
@@ -151,5 +152,27 @@ describe('desktop preload log subscription', () => {
 
     unsubscribe();
     expect(ipcRendererMock.removeListener).toHaveBeenCalledWith('agent:product-mapping-progress', registeredListener);
+  });
+
+  it('update bridge delegates confirm/defer to dedicated channels and sends input heartbeat without invoke', async () => {
+    const host = exposedHost;
+    ipcRendererMock.invoke.mockClear();
+    ipcRendererMock.invoke.mockResolvedValueOnce({ status: 'installing' });
+    ipcRendererMock.invoke.mockResolvedValueOnce({ status: 'available' });
+
+    expect(host.update).toBeDefined();
+    const confirmed = await host.update.confirmInstall();
+    expect(ipcRendererMock.invoke).toHaveBeenNthCalledWith(1, 'app-update:confirm-install');
+    expect(confirmed).toEqual({ status: 'installing' });
+
+    const deferred = await host.update.deferInstall();
+    expect(ipcRendererMock.invoke).toHaveBeenNthCalledWith(2, 'app-update:defer-install');
+    expect(deferred).toEqual({ status: 'available' });
+
+    ipcRendererMock.send.mockClear();
+    host.update.notifyUserInput();
+    expect(ipcRendererMock.send).toHaveBeenCalledWith('host:user-input-heartbeat');
+    // 心跳是单向通知，绝不走 invoke
+    expect(ipcRendererMock.invoke).toHaveBeenCalledTimes(2);
   });
 });

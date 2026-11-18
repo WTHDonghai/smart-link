@@ -48,6 +48,9 @@ describe('application entry host guard', () => {
         getState: () => Promise.reject(new Error('not called')),
         checkForUpdate: () => Promise.reject(new Error('not called')),
         installUpdate: () => Promise.reject(new Error('not called')),
+        confirmInstall: () => Promise.reject(new Error('not called')),
+        deferInstall: () => Promise.reject(new Error('not called')),
+        notifyUserInput: () => undefined,
         onUpdateState: () => () => undefined,
       } satisfies AppUpdateBridgeApi,
       agent: {

@@ -43,9 +43,17 @@ export interface DesktopUpdateServiceOptions {
   onState?: (state: AppUpdateState) => void;
   scheduler?: DesktopUpdateScheduler;
   readDescriptor: (input: { checkId: string }) => Promise<AppUpdateDescriptor | null>;
+  /** 自动安装总开关（关闭时退化为手动模式，仅角标提醒） */
+  autoInstallEnabled?: boolean;
+  /** 前台判定：用户正在操作应用（窗口聚焦 + 近期有输入）时弹窗交由用户决策 */
+  isUserPresent?: () => boolean;
+  /** 采集互斥检查：存在活跃采集作业时自动安装顺延，避免中断手工作业 */
+  hasActiveCollectionJobs?: () => boolean;
 }
 
 export const DESKTOP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+/** 前台判定：弹窗挂起等待用户决策的超时，超时按「晚点安装」降级 */
+export const UPDATE_CONFIRM_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEAN_INSTALL_MESSAGE = '更新包已就绪，正在停止值守任务并安装新版本。';
 type ElectronUpdaterModule = typeof electronUpdater;
 const electronUpdaterWithDefault = electronUpdater as ElectronUpdaterModule & {
@@ -92,11 +100,18 @@ export class DesktopUpdateService {
   private readonly onState: (state: AppUpdateState) => void;
   private readonly readDescriptor: (input: { checkId: string }) => Promise<AppUpdateDescriptor | null>;
   private readonly scheduler: DesktopUpdateScheduler;
+  private readonly autoInstallEnabled: boolean;
+  private readonly isUserPresent: () => boolean;
+  private readonly hasActiveCollectionJobs: () => boolean;
   private currentState: AppUpdateState;
   private availableVersion = '';
   private operation: Promise<AppUpdateState> | null = null;
   private periodicTimer: unknown = null;
   private descriptor: AppUpdateDescriptor | null = null;
+  /** 弹窗挂起上下文：仅持超时定时器，超时按「晚点安装」降级 */
+  private pendingConfirm: { timer: NodeJS.Timeout } | null = null;
+  /** 本轮检查已弹过窗且用户选择顺延的目标版本，避免同一版本反复打扰 */
+  private deferredVersion = '';
 
   constructor(options: DesktopUpdateServiceOptions) {
     this.canUpdate = options.canUpdate;
@@ -106,6 +121,9 @@ export class DesktopUpdateService {
     this.readDescriptor = options.readDescriptor;
     this.scheduler = options.scheduler || createDefaultScheduler();
     this.updater = options.updater || resolveAutoUpdater();
+    this.autoInstallEnabled = options.autoInstallEnabled ?? true;
+    this.isUserPresent = options.isUserPresent || (() => false);
+    this.hasActiveCollectionJobs = options.hasActiveCollectionJobs || (() => false);
     this.currentState = this.createState(options.canUpdate ? 'idle' : 'unavailable');
 
     this.updater.autoDownload = false;
@@ -126,8 +144,17 @@ export class DesktopUpdateService {
       return this.operation;
     }
 
-    this.operation = this.runCheck({ checkId: randomUUID() });
-    return await this.operation;
+    const checkOperation = this.runCheck({ checkId: randomUUID() });
+    this.operation = checkOperation;
+    try {
+      return await checkOperation;
+    } finally {
+      // runCheck 成功分支可能已把 operation 换成自动安装流程（evaluateAutoInstall），
+      // 仅当仍指向本次检查时才清理，避免误清安装互斥
+      if (this.operation === checkOperation) {
+        this.operation = null;
+      }
+    }
   }
 
   async install(): Promise<AppUpdateState> {
@@ -149,6 +176,115 @@ export class DesktopUpdateService {
 
     this.operation = this.runInstall();
     return await this.operation;
+  }
+
+  /**
+   * 弹窗「立刻安装」：清除确认挂起态并走与手动安装一致的下载安装链路。
+   * 无挂起弹窗时等价于手动 install()（侧边栏角标点击复用）。
+   */
+  async confirmInstall(): Promise<AppUpdateState> {
+    if (!this.canUpdate) {
+      return this.unavailableState();
+    }
+    this.clearPendingConfirm();
+    return await this.install();
+  }
+
+  /**
+   * 弹窗「晚点安装」：本轮放弃，回到 available 等待下一轮周期检查重新决策。
+   * 记录 deferredVersion 防止同一版本在挂起窗口内反复弹窗。
+   */
+  deferInstall(): AppUpdateState {
+    if (!this.canUpdate) {
+      return this.unavailableState();
+    }
+    this.clearPendingConfirm();
+    this.deferredVersion = this.availableVersion;
+    logger.info('[系统更新] 用户选择晚点安装，等待下一轮检查', {
+      module: 'SYSTEM',
+      meta: { currentVersion: this.currentVersion, targetVersion: this.availableVersion },
+    });
+    return this.state();
+  }
+
+  /** 清除弹窗挂起态（决策完成或超时），确认倒计时归零并回到 available */
+  private clearPendingConfirm(): void {
+    if (!this.pendingConfirm) {
+      return;
+    }
+    clearTimeout(this.pendingConfirm.timer);
+    this.pendingConfirm = null;
+    this.setState({
+      ...this.createState('available'),
+      targetVersion: this.availableVersion,
+    });
+  }
+
+  /**
+   * 更新检查确认 available 后的自动安装决策入口：
+   * - 自动安装关闭 → 维持手动模式
+   * - 用户正在前台操作 → 挂起确认弹窗，等待 IPC 决策或超时顺延
+   * - 无人值守且无采集作业 → 直接触发安装
+   * - 无人值守但有采集作业 → 记日志顺延至下一轮检查
+   */
+  private evaluateAutoInstall(): void {
+    if (!this.autoInstallEnabled) {
+      return;
+    }
+    if (this.currentState.status !== 'available') {
+      return;
+    }
+
+    if (this.isUserPresent()) {
+      if (this.availableVersion === this.deferredVersion || this.pendingConfirm) {
+        return;
+      }
+      this.beginConfirmWindow();
+      return;
+    }
+
+    if (this.hasActiveCollectionJobs()) {
+      logger.info('[系统更新] 检测到采集作业进行中，自动安装顺延至下一轮检查', {
+        module: 'SYSTEM',
+        meta: { currentVersion: this.currentVersion, targetVersion: this.availableVersion },
+      });
+      return;
+    }
+
+    logger.info('[系统更新] 无人值守，自动开始安装', {
+      module: 'SYSTEM',
+      meta: { currentVersion: this.currentVersion, targetVersion: this.availableVersion },
+    });
+    this.operation = this.runInstall();
+    this.operation.catch(() => undefined);
+  }
+
+  /** 挂起确认弹窗：推送 pendingConfirmation 状态并启动超时降级定时器 */
+  private beginConfirmWindow(): void {
+    const deadline = Date.now() + UPDATE_CONFIRM_TIMEOUT_MS;
+    this.setState({
+      ...this.createState('available', {
+        pendingConfirmation: true,
+        confirmDeadlineAt: deadline,
+      }),
+      targetVersion: this.availableVersion,
+    });
+    logger.info('[系统更新] 用户正在操作，挂起安装确认弹窗', {
+      module: 'SYSTEM',
+      meta: { currentVersion: this.currentVersion, targetVersion: this.availableVersion },
+    });
+
+    const timer = setTimeout(() => {
+      logger.info('[系统更新] 确认弹窗超时无决策，按晚点安装顺延', {
+        module: 'SYSTEM',
+        meta: { currentVersion: this.currentVersion, targetVersion: this.availableVersion },
+      });
+      this.deferInstall();
+    }, UPDATE_CONFIRM_TIMEOUT_MS);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this.pendingConfirm = { timer };
   }
 
   startPeriodicChecks(intervalMs = DESKTOP_UPDATE_CHECK_INTERVAL_MS): void {
@@ -176,7 +312,13 @@ export class DesktopUpdateService {
     return state;
   }
 
-  private createState(status: AppUpdateState['status']): AppUpdateState {
+  private createState(
+    status: AppUpdateState['status'],
+    confirm: { pendingConfirmation: boolean; confirmDeadlineAt: number | null } = {
+      pendingConfirmation: false,
+      confirmDeadlineAt: null,
+    }
+  ): AppUpdateState {
     return {
       canUpdate: this.canUpdate,
       status,
@@ -184,6 +326,8 @@ export class DesktopUpdateService {
       targetVersion: '',
       progressPercent: null,
       message: '',
+      pendingConfirmation: confirm.pendingConfirmation,
+      confirmDeadlineAt: confirm.confirmDeadlineAt,
     };
   }
 
@@ -292,12 +436,16 @@ export class DesktopUpdateService {
       if (feedVersion !== descriptor.version) {
         throw new Error('平台更新版本与更新源 latest.yml 不一致');
       }
+      // update-available 事件先于 checkForUpdates resolve 到达（状态已置 available），
+      // 此 if 是描述符路径的状态兜底；自动安装决策必须独立于它执行
       if (this.currentState.status === 'checking') {
         this.setState({
           ...this.createState('available'),
           targetVersion: this.availableVersion,
         });
       }
+      // 新版本确认后进入自动安装决策（弹窗 / 静默 / 顺延）
+      this.evaluateAutoInstall();
       logger.info('[系统更新] 更新检查完成', {
         module: 'SYSTEM',
         details: `平台目标版本: ${descriptor.version}`,
@@ -319,8 +467,6 @@ export class DesktopUpdateService {
         details: errorMessage(error),
       });
       return this.state();
-    } finally {
-      this.operation = null;
     }
   }
 

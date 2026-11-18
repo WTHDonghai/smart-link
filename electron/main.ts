@@ -346,6 +346,16 @@ function publishDesktopUpdateState(state: AppUpdateState): void {
   }
 }
 
+/** 用户输入活跃判定窗口：窗口聚焦 + 窗口期内有渲染层上报的鼠标/键盘输入才算「用户在场」 */
+const USER_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+let lastUserInputAt = 0;
+
+function isUserPresentForUpdate(): boolean {
+  const focused = mainWindow && !mainWindow.isDestroyed() ? mainWindow.isFocused() : false;
+  const recentlyActive = Date.now() - lastUserInputAt < USER_ACTIVE_WINDOW_MS;
+  return Boolean(focused) && recentlyActive;
+}
+
 function createDesktopUpdateService(): DesktopUpdateService {
   const updateMetadataPath = path.join(process.resourcesPath, 'app-update.yml');
   const canUpdate = app.isPackaged && fs.existsSync(updateMetadataPath);
@@ -366,6 +376,12 @@ function createDesktopUpdateService(): DesktopUpdateService {
     teardownApplicationResources,
     onState: publishDesktopUpdateState,
     readDescriptor: readPlatformUpdateDescriptor,
+    autoInstallEnabled: true,
+    isUserPresent: isUserPresentForUpdate,
+    hasActiveCollectionJobs: () => {
+      // 任一渠道存在活跃采集作业（门店或产品采集）即视为占用，自动安装顺延
+      return ['MEITUAN', 'DOUYIN'].some((code) => hotelCollectionEngine.isChannelActive(code));
+    },
   });
 }
 
@@ -395,6 +411,12 @@ export function registerDesktopUpdateIpcHandlers(service: DesktopUpdateService):
   ipcMain.handle('app-update:get-state', () => service.state());
   ipcMain.handle('app-update:check', () => service.check());
   ipcMain.handle('app-update:install', () => service.install());
+  ipcMain.handle('app-update:confirm-install', () => service.confirmInstall());
+  ipcMain.handle('app-update:defer-install', () => service.deferInstall());
+  // 渲染层用户输入活跃心跳：仅刷新时间戳，单向通知无返回
+  ipcMain.on('host:user-input-heartbeat', () => {
+    lastUserInputAt = Date.now();
+  });
 }
 
 if (process.type === 'browser') {

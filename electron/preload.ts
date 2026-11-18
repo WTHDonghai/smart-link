@@ -129,6 +129,11 @@ const updateApi: HostBridgeApi['update'] = {
   getState: () => ipcRenderer.invoke('app-update:get-state'),
   checkForUpdate: () => ipcRenderer.invoke('app-update:check'),
   installUpdate: () => ipcRenderer.invoke('app-update:install'),
+  confirmInstall: () => ipcRenderer.invoke('app-update:confirm-install'),
+  deferInstall: () => ipcRenderer.invoke('app-update:defer-install'),
+  notifyUserInput: () => {
+    ipcRenderer.send('host:user-input-heartbeat');
+  },
   onUpdateState: (callback: (state: AppUpdateState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => callback(state);
     ipcRenderer.on('host:update-state', listener);

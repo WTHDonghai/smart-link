@@ -16,6 +16,8 @@ function createUpdateState(overrides: Partial<AppUpdateState> = {}): AppUpdateSt
     targetVersion: '',
     progressPercent: null,
     message: '',
+    pendingConfirmation: false,
+    confirmDeadlineAt: null,
     ...overrides,
   };
 }
@@ -33,6 +35,8 @@ describe('appSlice', () => {
       targetVersion: '',
       progressPercent: null,
       message: '',
+      pendingConfirmation: false,
+      confirmDeadlineAt: null,
     });
     expect(state.toast).toBeNull();
   });

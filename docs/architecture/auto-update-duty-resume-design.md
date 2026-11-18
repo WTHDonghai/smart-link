@@ -1,7 +1,7 @@
 # 桌面端自动更新与值守自恢复设计 (Auto Update & Duty Resume)
 
-> 文档状态：P1 已实施（值守自恢复，见 §6）；P2/P3 待实施
-> 适用模块：`electron/desktopUpdateService.ts`, `electron/main.ts`, `src/crawler/duty/dutyOrchestrationEngine.ts`, `src/crawler/duty/dutyAutostartStore.ts`, `src/hooks/useAppUpdate.ts`, `src/components/sidebar/Sidebar.tsx`
+> 文档状态：P1、P2 已实施；P3 待实施
+> 适用模块：`electron/desktopUpdateService.ts`, `electron/main.ts`, `electron/preload.ts`, `src/crawler/duty/dutyOrchestrationEngine.ts`, `src/crawler/duty/dutyAutostartStore.ts`, `src/hooks/useAppUpdate.ts`, `src/components/update/UpdateConfirmModal.tsx`, `src/components/sidebar/Sidebar.tsx`
 > 关联文档：`electron-runtime-architecture.md`、`order-guardian-design.md`
 
 ---
@@ -43,9 +43,17 @@ flowchart TD
     R4 --> R5["值守恢复，闭环完成"]
 ```
 
-## 3. 更新触发策略：前台检测与弹窗决策
+## 3. 更新触发策略：前台检测与弹窗决策（P2 已实施）
 
 > 本节为方案核心增量：静默安装触发时，若用户正在前台操作，弹窗交由用户决策；否则保持全自动。
+>
+> 实施落位（2026-11-18）：
+> - 决策核心：`DesktopUpdateService.evaluateAutoInstall()`（`runCheck` 确认 available 后调用；注意 electron-updater 的 `update-available` 事件先于 `checkForUpdates()` resolve 到达，决策入口必须置于状态兜底 if 之外）
+> - 服务新选项：`autoInstallEnabled` / `isUserPresent` / `hasActiveCollectionJobs`；新公开方法 `confirmInstall()` / `deferInstall()`；常量 `UPDATE_CONFIRM_TIMEOUT_MS`（10min）、main 侧 `USER_ACTIVE_WINDOW_MS`（5min）
+> - 互斥保持：`evaluateAutoInstall` 直接静默安装时会接管 `this.operation`，`check()` 的 finally 以「仍指向本次检查对象」为条件清理，避免误清安装互斥
+> - 前台判定：`main.ts` `isUserPresentForUpdate()`（`mainWindow.isFocused()` + 渲染层经 `host:user-input-heartbeat` IPC 上报的输入时间戳，30s 节流，5min 窗口）
+> - 渲染层：`UpdateConfirmModal`（`src/components/update/`，复用 Modal，`closeOnBackdrop=false`，倒计时基于 `confirmDeadlineAt`）；`useAppUpdate` 暴露 `confirmInstall`/`deferInstall`；`useUserInputHeartbeat` 挂于 App 根组件（登录门禁内外均生效）
+> - 测试：`desktopUpdateService.test.ts` 决策矩阵 8 例（含 fake timer 超时降级）、`UpdateConfirmModal.test.tsx` 5 例、`preload.test.ts` 桥接 1 例
 
 ### 3.1 决策矩阵
 

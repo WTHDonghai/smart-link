@@ -24,6 +24,8 @@ const initialState: AppState = {
     targetVersion: '',
     progressPercent: null,
     message: '',
+    pendingConfirmation: false,
+    confirmDeadlineAt: null,
   },
   toast: null,
 };

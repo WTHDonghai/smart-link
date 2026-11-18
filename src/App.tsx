@@ -9,6 +9,7 @@ import { SystemLogsView } from './components/logs/SystemLogsView';
 import { RemarkTemplateModal } from './components/channels/RemarkTemplateModal';
 import { PlatformLoginView } from './components/auth/PlatformLoginView';
 import { ToastNotification } from './components/common/ToastNotification';
+import { UpdateConfirmModal } from './components/update/UpdateConfirmModal';
 import { platformAuthService, classifyAuthError, loadTokensFromStorage } from './services/platformAuth';
 import { updateTokenState, tokenRefreshed, authFailed, logout } from './store/slices/authSlice';
 import {
@@ -23,12 +24,15 @@ import {
 import { addLog, addLogs } from './store/slices/systemLogSlice';
 import { logger } from './services/logger';
 import { syncDutyStatusThunk } from './store/slices/orderGuardianSlice';
+import { useUserInputHeartbeat } from './hooks/useAppUpdate';
 
 export default function App() {
   const dispatch = useAppDispatch();
   const currentTab = useAppSelector((state) => state.app.currentTab);
   const collapsed = useAppSelector((state) => state.app.sidebarCollapsed);
   const authStatus = useAppSelector((state) => state.auth.status);
+  // 用户输入活跃心跳：更新自动安装时机的前台判定依据，与登录态无关
+  useUserInputHeartbeat();
 
   useEffect(() => {
     // 1. 订阅 Token 变更广播，无论是登录、后台调度还是业务 API 401 自动刷新，均实时同步 Redux 内存及后台 Node 宿主
@@ -141,6 +145,7 @@ export default function App() {
     return (
       <>
         <PlatformLoginView />
+        <UpdateConfirmModal />
         <ToastNotification />
       </>
     );
@@ -171,6 +176,7 @@ export default function App() {
 
       {/* Overlay Modals & Drawers */}
       <RemarkTemplateModal />
+      <UpdateConfirmModal />
       <ToastNotification />
     </div>
   );

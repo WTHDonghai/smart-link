@@ -14,6 +14,8 @@ function createUpdateState(overrides: Partial<AppUpdateState>): AppUpdateState {
     targetVersion: '',
     progressPercent: null,
     message: '',
+    pendingConfirmation: false,
+    confirmDeadlineAt: null,
     ...overrides,
   };
 }
