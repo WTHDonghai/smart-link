@@ -30,6 +30,11 @@ import { hotelCollectionEngine } from '../engine';
 import { resolveChannelMeta } from '@/src/utils/channelMeta';
 import { describeErrorMessage, describeErrorCauses } from '@/src/utils/errorCauses';
 import { setMeituanBizSplitEnabled } from './channels/meituan/meituanOrderFilter';
+import {
+  loadDutyAutostart,
+  saveDutyAutostart,
+  type DutyAutostartSnapshot,
+} from './dutyAutostartStore';
 
 export interface TaskResultPayloadOptions {
   status: DutyTaskWireStatus;
@@ -188,6 +193,89 @@ export class DutyOrchestrationEngine {
 
   public isConfirmImportEnabled(): boolean {
     return this.confirmImportEnabled;
+  }
+
+  /**
+   * 持久化当前值守自恢复清单：仅记录主渠道（别名渠道是派生态，恢复时由主渠道联动重建）
+   * 与商旅分流开关。由 main.ts 在值守启停 IPC 成功分支调用，写入失败仅告警不阻断值守操作。
+   */
+  public persistDutyAutostart(): { success: boolean; error?: string } {
+    const primaryChannels = this.getActiveChannelCodes().filter(
+      (code) => !this.aliasToPrimary.has(code)
+    );
+    return saveDutyAutostart({
+      channels: primaryChannels,
+      meituanBizSplitEnabled: this.meituanBizSplitEnabled,
+    });
+  }
+
+  /**
+   * 应用启动时的值守自恢复：读取持久化清单，先同步商旅分流开关（别名渠道联动的触发信号），
+   * 再逐渠道串行 startDuty（共享浏览器会话不能并发唤起）。单渠道恢复失败显式告警后继续，
+   * 不阻断其他渠道——自恢复是尽力补偿，各渠道互不依赖。
+   */
+  public async resumeDutyFromAutostart(): Promise<{ resumed: string[]; failed: Array<{ channelCode: string; error: string }> }> {
+    const snapshot = loadDutyAutostart();
+    if (snapshot.channels.length === 0) {
+      return { resumed: [], failed: [] };
+    }
+
+    this.appendDutyLog({
+      level: 'INFO',
+      module: 'DUTY_TASK',
+      event: 'DUTY_AUTOSTART_RESUME_BEGIN',
+      message: `[值守恢复] 检测到自恢复清单，开始恢复 ${snapshot.channels.length} 个渠道值守: ${snapshot.channels.join('、')}`,
+      details: `清单渠道: ${snapshot.channels.join(', ')} | 商旅分流: ${snapshot.meituanBizSplitEnabled ? '开启' : '关闭'}`,
+    });
+
+    // 恢复前先还原商旅分流开关：主渠道启动时的别名渠道联动激活依赖该信号
+    if (snapshot.meituanBizSplitEnabled) {
+      this.setMeituanBizSplitEnabled(true);
+    }
+
+    const resumed: string[] = [];
+    const failed: Array<{ channelCode: string; error: string }> = [];
+    for (const code of snapshot.channels) {
+      try {
+        const result = await this.startDuty(code);
+        if (!result.success) {
+          failed.push({ channelCode: code, error: result.error || '值守恢复失败' });
+          continue;
+        }
+        resumed.push(code);
+        this.appendDutyLog({
+          level: 'INFO',
+          module: 'DUTY_TASK',
+          event: 'DUTY_AUTOSTART_RESUME_CHANNEL_OK',
+          channelId: code,
+          message: `[值守恢复] 渠道「${code}」值守已自动恢复`,
+          details: `渠道: ${code} | 状态: RUNNING`,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        failed.push({ channelCode: code, error: msg });
+        this.appendDutyLog({
+          level: 'WARN',
+          module: 'DUTY_TASK',
+          event: 'DUTY_AUTOSTART_RESUME_CHANNEL_FAILED',
+          channelId: code,
+          message: `[值守恢复] 渠道「${code}」自动恢复失败，已跳过: ${msg}`,
+          details: err instanceof Error ? err.stack ?? msg : msg,
+        });
+      }
+    }
+
+    this.appendDutyLog({
+      level: failed.length > 0 ? 'WARN' : 'INFO',
+      module: 'DUTY_TASK',
+      event: 'DUTY_AUTOSTART_RESUME_DONE',
+      message: `[值守恢复] 自恢复流程完成: 成功 ${resumed.length} 个${failed.length > 0 ? `，失败 ${failed.length} 个（${failed.map((f) => `${f.channelCode}: ${f.error}`).join('；')}）` : ''}`,
+      details: `成功: ${resumed.join(', ') || '无'} | 失败: ${failed.map((f) => f.channelCode).join(', ') || '无'}`,
+    });
+
+    // 恢复结束按实际结果刷新清单：失败渠道不再留在清单里反复重试，下次启停重新落盘
+    this.persistDutyAutostart();
+    return { resumed, failed };
   }
 
   public registerRunner(runner: ChannelDutyRunner): void {

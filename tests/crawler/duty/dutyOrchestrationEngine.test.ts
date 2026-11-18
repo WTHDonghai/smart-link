@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import {
   DutyOrchestrationEngine,
   buildTaskResultPayload,
@@ -16,6 +19,11 @@ import * as dutyRuntimeApi from '../../../src/services/dutyRuntimeApi';
 import { SYSTEM_TIMING } from '../../../src/config/timing';
 import { hotelCollectionEngine } from '../../../src/crawler/engine';
 import { logger } from '../../../src/services/logger';
+import { PROCESS_ENV_KEYS } from '../../../src/types/env';
+import {
+  loadDutyAutostart,
+  saveDutyAutostart,
+} from '../../../src/crawler/duty/dutyAutostartStore';
 
 class MockChannelRunner implements ChannelDutyRunner {
   public channelCode: string;
@@ -651,6 +659,125 @@ describe('dutyOrchestrationEngine', () => {
       expect(collectCalls).toContain('MEITUANBIZ');
 
       await engine.stopDuty('MEITUAN');
+    });
+  });
+
+  describe('值守自恢复 (persistDutyAutostart & resumeDutyFromAutostart)', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smartlink-autostart-engine-test-'));
+      process.env[PROCESS_ENV_KEYS.userDataDir] = tempDir;
+    });
+
+    afterEach(() => {
+      delete process.env[PROCESS_ENV_KEYS.userDataDir];
+      try {
+        if (fs.existsSync(tempDir)) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    it('persistDutyAutostart 只落盘主渠道并剔除别名渠道 MEITUANBIZ', async () => {
+      const meituanRunner = new MockChannelRunner('MEITUAN');
+      engine.registerRunner(meituanRunner);
+      engine.registerRunnerAlias('MEITUANBIZ', meituanRunner);
+      engine.setMeituanBizSplitEnabled(true);
+
+      await engine.startDuty('MEITUAN');
+      const result = engine.persistDutyAutostart();
+      expect(result.success).toBe(true);
+
+      const snapshot = loadDutyAutostart();
+      // MEITUANBIZ 是派生态，恢复时由主渠道联动重建，绝不能出现在清单里
+      expect(snapshot.channels).toEqual(['MEITUAN']);
+      expect(snapshot.meituanBizSplitEnabled).toBe(true);
+
+      await engine.stopDuty('MEITUAN');
+    });
+
+    it('resumeDutyFromAutostart 空清单时早退且不触发任何渠道启动', async () => {
+      const startSpy = vi.spyOn(engine, 'startDuty');
+      const result = await engine.resumeDutyFromAutostart();
+
+      expect(result).toEqual({ resumed: [], failed: [] });
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it('resumeDutyFromAutostart 恢复清单渠道并先还原商旅分流开关', async () => {
+      saveDutyAutostart({ channels: ['MOCK_OTA'], meituanBizSplitEnabled: true });
+
+      // 通过恢复 MEITUAN 主渠道验证分流开关还原:别名渠道联动激活依赖该信号
+      const meituanRunner = new MockChannelRunner('MEITUAN');
+      engine.registerRunner(meituanRunner);
+      engine.registerRunnerAlias('MEITUANBIZ', meituanRunner);
+      saveDutyAutostart({ channels: ['MEITUAN'], meituanBizSplitEnabled: true });
+
+      const result = await engine.resumeDutyFromAutostart();
+
+      expect(result.resumed).toEqual(['MEITUAN']);
+      expect(result.failed).toEqual([]);
+      expect(meituanRunner.running).toBe(true);
+
+      // 分流开关还原成功:别名渠道随主渠道联动进入 RUNNING
+      const status = engine.getChannelDutyStatus();
+      expect(status['MEITUAN'].status).toBe('RUNNING');
+      expect(status['MEITUANBIZ'].status).toBe('RUNNING');
+
+      const logs = engine.getRecentDutyLogs();
+      expect(logs.some((l) => l.event === 'DUTY_AUTOSTART_RESUME_BEGIN')).toBe(true);
+      expect(logs.some((l) => l.event === 'DUTY_AUTOSTART_RESUME_CHANNEL_OK' && l.channelId === 'MEITUAN')).toBe(true);
+
+      await engine.stopDuty('MEITUAN');
+    });
+
+    it('resumeDutyFromAutostart 单渠道失败时跳过该渠道并继续恢复其余渠道', async () => {
+      const okRunner = new MockChannelRunner('OK_OTA');
+      engine.registerRunner(okRunner);
+      const failRunner = new MockChannelRunner('FAIL_OTA');
+      failRunner.start = vi.fn().mockRejectedValue(new Error('浏览器驱动启动失败'));
+      engine.registerRunner(failRunner);
+
+      saveDutyAutostart({ channels: ['FAIL_OTA', 'OK_OTA'], meituanBizSplitEnabled: false });
+
+      const result = await engine.resumeDutyFromAutostart();
+
+      expect(result.resumed).toEqual(['OK_OTA']);
+      expect(result.failed).toEqual([
+        { channelCode: 'FAIL_OTA', error: '浏览器驱动启动失败' },
+      ]);
+      expect(okRunner.running).toBe(true);
+
+      // 恢复结束按实际结果刷新清单:失败渠道不再残留
+      const snapshot = loadDutyAutostart();
+      expect(snapshot.channels).toEqual(['OK_OTA']);
+
+      const logs = engine.getRecentDutyLogs();
+      const doneLog = logs.find((l) => l.event === 'DUTY_AUTOSTART_RESUME_DONE');
+      expect(doneLog).toBeDefined();
+      expect(doneLog?.level).toBe('WARN');
+      expect(doneLog?.message).toContain('失败 1 个');
+    });
+
+    it('resumeDutyFromAutostart 恢复成功后刷新清单并记录 INFO 完成日志', async () => {
+      const runner = new MockChannelRunner('SOLO_OTA');
+      engine.registerRunner(runner);
+      saveDutyAutostart({ channels: ['SOLO_OTA'], meituanBizSplitEnabled: false });
+
+      const result = await engine.resumeDutyFromAutostart();
+
+      expect(result.resumed).toEqual(['SOLO_OTA']);
+      expect(result.failed).toEqual([]);
+
+      const logs = engine.getRecentDutyLogs();
+      const doneLog = logs.find((l) => l.event === 'DUTY_AUTOSTART_RESUME_DONE');
+      expect(doneLog).toBeDefined();
+      expect(doneLog?.level).toBe('INFO');
+
+      await engine.stopDuty('SOLO_OTA');
     });
   });
 

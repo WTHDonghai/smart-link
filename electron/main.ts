@@ -679,7 +679,11 @@ export function registerDutyIpcHandlers(): void {
     }
     try {
       const res = await dutyOrchestrationEngine.startDuty(code);
-      return { success: res.success, error: res.error } satisfies DesktopOperationResult;
+      const result = { success: res.success, error: res.error } satisfies DesktopOperationResult;
+      if (result.success) {
+        dutyOrchestrationEngine.persistDutyAutostart();
+      }
+      return result;
     } catch (err) {
       return {
         success: false,
@@ -695,7 +699,11 @@ export function registerDutyIpcHandlers(): void {
     }
     try {
       const res = await dutyOrchestrationEngine.stopDuty(code);
-      return { success: res.success, error: res.error } satisfies DesktopOperationResult;
+      const result = { success: res.success, error: res.error } satisfies DesktopOperationResult;
+      if (result.success) {
+        dutyOrchestrationEngine.persistDutyAutostart();
+      }
+      return result;
     } catch (err) {
       return {
         success: false,
@@ -804,7 +812,11 @@ export function registerDutyIpcHandlers(): void {
   ipcMain.handle('duty:stop-all', async () => {
     try {
       const result = await dutyOrchestrationEngine.stopAllDuty();
-      return { success: result.success, error: result.error } satisfies DesktopOperationResult;
+      const ipcResult = { success: result.success, error: result.error } satisfies DesktopOperationResult;
+      if (ipcResult.success) {
+        dutyOrchestrationEngine.persistDutyAutostart();
+      }
+      return ipcResult;
     } catch (err) {
       return {
         success: false,
@@ -1109,6 +1121,9 @@ if (process.type === 'browser') {
     await createMainWindow();
     void desktopUpdateService?.check();
     desktopUpdateService?.startPeriodicChecks();
+
+    // 值守自恢复：读取持久化清单并串行恢复渠道值守，失败渠道显式告警后跳过（尽力补偿，不阻塞主流程）
+    void dutyOrchestrationEngine.resumeDutyFromAutostart();
 
     app.on('activate', async () => {
       if (BrowserWindow.getAllWindows().length === 0) {

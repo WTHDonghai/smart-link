@@ -220,6 +220,60 @@ describe('Electron main 资源回收与退出调度 (teardownApplicationResource
       expect(result.error).toBeUndefined();
     });
 
+    it('duty:start 成功后刷新值守自恢复清单，失败时不刷新', async () => {
+      registerDutyIpcHandlers();
+      expect(ipcHandlers.has('duty:start')).toBe(true);
+      const handler = ipcHandlers.get('duty:start')!;
+
+      const persistSpy = vi.spyOn(dutyOrchestrationEngine, 'persistDutyAutostart').mockReturnValue({ success: true });
+
+      vi.spyOn(dutyOrchestrationEngine, 'startDuty').mockResolvedValueOnce({ success: true });
+      const okResult = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MOCK_OTA')) as {
+        success: boolean;
+      };
+      expect(okResult.success).toBe(true);
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+
+      vi.spyOn(dutyOrchestrationEngine, 'startDuty').mockResolvedValueOnce({ success: false, error: '会话未就绪' });
+      const failResult = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MOCK_OTA')) as {
+        success: boolean;
+        error?: string;
+      };
+      expect(failResult.success).toBe(false);
+      expect(failResult.error).toBe('会话未就绪');
+      // 失败分支不得刷新清单
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('duty:stop 成功后刷新值守自恢复清单', async () => {
+      registerDutyIpcHandlers();
+      expect(ipcHandlers.has('duty:stop')).toBe(true);
+      const handler = ipcHandlers.get('duty:stop')!;
+
+      const persistSpy = vi.spyOn(dutyOrchestrationEngine, 'persistDutyAutostart').mockReturnValue({ success: true });
+      vi.spyOn(dutyOrchestrationEngine, 'stopDuty').mockResolvedValueOnce({ success: true });
+
+      const result = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent, 'MOCK_OTA')) as {
+        success: boolean;
+      };
+      expect(result.success).toBe(true);
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('duty:stop-all 成功后刷新值守自恢复清单', async () => {
+      registerDutyIpcHandlers();
+      const handler = ipcHandlers.get('duty:stop-all')!;
+
+      const persistSpy = vi.spyOn(dutyOrchestrationEngine, 'persistDutyAutostart').mockReturnValue({ success: true });
+      vi.spyOn(dutyOrchestrationEngine, 'stopAllDuty').mockResolvedValueOnce({ success: true });
+
+      const result = (await handler(undefined as unknown as Electron.IpcMainInvokeEvent)) as {
+        success: boolean;
+      };
+      expect(result.success).toBe(true);
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('正确注册 duty:notify-host-active 处理器并调度 handleHostActive', async () => {
       registerDutyIpcHandlers();
 
