@@ -43,6 +43,10 @@ import { PROCESS_ENV_KEYS } from '../src/types/env';
 import {
   DesktopUpdateService,
 } from './desktopUpdateService';
+import {
+  loadUpdateSettings,
+  saveUpdateSettings,
+} from './updateSettingsStore';
 import { isAgentLogPersistedAck, isProductMappingSnapshot } from '../src/types/agent';
 import { agentTraceLedger } from '../src/agent/agentTraceLedger';
 import { AgentTraceEmitter } from '../src/agent/agentTraceEmitter';
@@ -376,7 +380,8 @@ function createDesktopUpdateService(): DesktopUpdateService {
     teardownApplicationResources,
     onState: publishDesktopUpdateState,
     readDescriptor: readPlatformUpdateDescriptor,
-    autoInstallEnabled: true,
+    // 自动安装开关走设置文件动态读取（设置界面实时生效），默认开启
+    readAutoInstallEnabled: () => loadUpdateSettings().autoInstallEnabled,
     isUserPresent: isUserPresentForUpdate,
     hasActiveCollectionJobs: () => {
       // 任一渠道存在活跃采集作业（门店或产品采集）即视为占用，自动安装顺延
@@ -413,6 +418,15 @@ export function registerDesktopUpdateIpcHandlers(service: DesktopUpdateService):
   ipcMain.handle('app-update:install', () => service.install());
   ipcMain.handle('app-update:confirm-install', () => service.confirmInstall());
   ipcMain.handle('app-update:defer-install', () => service.deferInstall());
+  ipcMain.handle('app-update:get-settings', () => loadUpdateSettings());
+  ipcMain.handle('app-update:set-auto-install', (_event, enabled: boolean) => {
+    const result = saveUpdateSettings({ autoInstallEnabled: Boolean(enabled) });
+    logger.info('[系统更新] 用户调整自动安装开关', {
+      module: 'SYSTEM',
+      details: `自动安装: ${enabled ? '开启' : '关闭'}${result.success ? '' : ` | ${result.error}`}`,
+    });
+    return result;
+  });
   // 渲染层用户输入活跃心跳：仅刷新时间戳，单向通知无返回
   ipcMain.on('host:user-input-heartbeat', () => {
     lastUserInputAt = Date.now();

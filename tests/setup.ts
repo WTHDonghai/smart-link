@@ -41,6 +41,8 @@ const desktopHost: HostBridgeApi = {
     confirmInstall: () => Promise.reject(new Error('测试未预期确认安装更新')),
     deferInstall: () => Promise.reject(new Error('测试未预期顺延安装更新')),
     notifyUserInput: () => undefined,
+    getSettings: () => Promise.reject(new Error('测试未预期查询更新设置')),
+    setAutoInstallEnabled: () => Promise.reject(new Error('测试未预期设置自动安装开关')),
     onUpdateState: () => () => undefined,
   } satisfies AppUpdateBridgeApi,
   env: {},

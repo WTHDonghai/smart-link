@@ -25,6 +25,11 @@ export interface AppUpdateDescriptor {
   feedUrl: string;
 }
 
+/** 更新设置（设置界面读写，持久化于主进程 userData） */
+export interface AppUpdateSettings {
+  autoInstallEnabled: boolean;
+}
+
 export interface AppUpdateBridgeApi {
   getState(): Promise<AppUpdateState>;
   checkForUpdate(): Promise<AppUpdateState>;
@@ -35,5 +40,7 @@ export interface AppUpdateBridgeApi {
   deferInstall(): Promise<AppUpdateState>;
   /** 渲染层用户输入活跃心跳（更新安装时机的前台判定依据），单向通知无返回 */
   notifyUserInput(): void;
+  getSettings(): Promise<AppUpdateSettings>;
+  setAutoInstallEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
   onUpdateState(listener: (state: AppUpdateState) => void): () => void;
 }

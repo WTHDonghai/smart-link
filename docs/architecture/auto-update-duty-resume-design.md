@@ -1,7 +1,7 @@
 # 桌面端自动更新与值守自恢复设计 (Auto Update & Duty Resume)
 
-> 文档状态：P1、P2 已实施；P3 待实施
-> 适用模块：`electron/desktopUpdateService.ts`, `electron/main.ts`, `electron/preload.ts`, `src/crawler/duty/dutyOrchestrationEngine.ts`, `src/crawler/duty/dutyAutostartStore.ts`, `src/hooks/useAppUpdate.ts`, `src/components/update/UpdateConfirmModal.tsx`, `src/components/sidebar/Sidebar.tsx`
+> 文档状态：P1、P2 已实施；P3 的本地设置界面变体已实施（见 §3.3）；平台下发 P3 待平台侧排期
+> 适用模块：`electron/desktopUpdateService.ts`, `electron/main.ts`, `electron/preload.ts`, `electron/updateSettingsStore.ts`, `src/crawler/duty/dutyOrchestrationEngine.ts`, `src/crawler/duty/dutyAutostartStore.ts`, `src/hooks/useAppUpdate.ts`, `src/components/update/UpdateConfirmModal.tsx`, `src/components/update/UpdateSettingsModal.tsx`, `src/components/sidebar/Sidebar.tsx`
 > 关联文档：`electron-runtime-architecture.md`、`order-guardian-design.md`
 
 ---
@@ -245,6 +245,11 @@ async function resumeDutyFromPersistedState() {
 手工验收：打包版 Windows 全链路演练——开双渠道值守 → 触发更新 → 观察弹窗决策/无人值守静默两条路径 → 重启后渠道状态、中台工位上报、停机窗口订单补偿三查。
 
 ## 10. 分期落地建议
+
+### 3.3 本地设置开关（已实施，P3 的客户端侧变体）
+
+> 实施落位（2026-11-18）：`electron/updateSettingsStore.ts`（`${userData}/update-settings.json`，版本号校验 + 0o600，损坏按默认值 `autoInstallEnabled: true` 处理）；服务选项改为 `readAutoInstallEnabled()` 动态读取器，`evaluateAutoInstall` 每次决策时调用，设置界面实时生效；IPC `app-update:get-settings` / `app-update:set-auto-install`；渲染层 `UpdateSettingsModal`（侧边栏版本区齿轮入口，展开/收起态均有），单一「自动更新」开关，无冗余说明文案。
+> 与平台下发 P3 的关系：不互斥，将来可共存取 AND（任一方关闭即不自动装）；本地开关提供现场级控制，平台下发提供远程灰度与紧急刹车能力。
 
 | 期 | 内容 | 量级 |
 | --- | --- | --- |

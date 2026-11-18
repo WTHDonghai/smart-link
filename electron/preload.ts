@@ -131,6 +131,10 @@ const updateApi: HostBridgeApi['update'] = {
   installUpdate: () => ipcRenderer.invoke('app-update:install'),
   confirmInstall: () => ipcRenderer.invoke('app-update:confirm-install'),
   deferInstall: () => ipcRenderer.invoke('app-update:defer-install'),
+  getSettings: () => ipcRenderer.invoke('app-update:get-settings'),
+  setAutoInstallEnabled: (enabled: boolean) => {
+    return ipcRenderer.invoke('app-update:set-auto-install', enabled);
+  },
   notifyUserInput: () => {
     ipcRenderer.send('host:user-input-heartbeat');
   },

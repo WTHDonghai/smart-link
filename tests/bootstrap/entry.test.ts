@@ -51,6 +51,8 @@ describe('application entry host guard', () => {
         confirmInstall: () => Promise.reject(new Error('not called')),
         deferInstall: () => Promise.reject(new Error('not called')),
         notifyUserInput: () => undefined,
+        getSettings: () => Promise.reject(new Error('not called')),
+        setAutoInstallEnabled: () => Promise.reject(new Error('not called')),
         onUpdateState: () => () => undefined,
       } satisfies AppUpdateBridgeApi,
       agent: {

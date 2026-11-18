@@ -159,7 +159,7 @@ describe('DesktopUpdateService', () => {
       teardownApplicationResources: teardownMock,
       updater,
       readDescriptor: createDescriptorReader(),
-      autoInstallEnabled: false,
+      readAutoInstallEnabled: () => false,
     });
 
     const state = await service.check();
@@ -229,7 +229,7 @@ describe('DesktopUpdateService', () => {
       updater,
       onState: (state) => updater.states.push(state),
       readDescriptor: createDescriptorReader(),
-      autoInstallEnabled: false,
+      readAutoInstallEnabled: () => false,
     });
     await service.check();
     updater.states.length = 0;
@@ -358,7 +358,7 @@ describe('DesktopUpdateService', () => {
       teardownApplicationResources: teardownMock,
       updater,
       readDescriptor: createDescriptorReader(),
-      autoInstallEnabled: false,
+      readAutoInstallEnabled: () => false,
     });
     await service.check();
 
@@ -466,7 +466,7 @@ describe('DesktopUpdateService', () => {
         teardownApplicationResources: teardownMock,
         updater,
         readDescriptor: createDescriptorReader(),
-        autoInstallEnabled: false,
+        readAutoInstallEnabled: () => false,
         isUserPresent: () => true,
       });
 
@@ -476,6 +476,29 @@ describe('DesktopUpdateService', () => {
       expect(state.pendingConfirmation).toBe(false);
       expect(state.confirmDeadlineAt).toBeNull();
       expect(updater.downloadCount).toBe(0);
+    });
+
+    it('开关动态切换立即生效：关闭后检查不再弹窗，重新开启后恢复弹窗', async () => {
+      const { teardown: teardownMock } = createTeardown();
+      let autoInstallEnabled = false;
+      const service = new DesktopUpdateService({
+        canUpdate: true,
+        currentVersion: '1.0.0',
+        teardownApplicationResources: teardownMock,
+        updater,
+        readDescriptor: createDescriptorReader(),
+        readAutoInstallEnabled: () => autoInstallEnabled,
+        isUserPresent: () => true,
+      });
+
+      // 开关关闭：手动模式，不弹窗
+      await service.check();
+      expect(service.state().pendingConfirmation).toBe(false);
+
+      // 设置界面实时开启：下一次检查恢复弹窗决策
+      autoInstallEnabled = true;
+      await service.check();
+      expect(service.state().pendingConfirmation).toBe(true);
     });
 
     it('deferInstall 清除挂起态并记录顺延版本，同轮重复检查不再弹窗', async () => {

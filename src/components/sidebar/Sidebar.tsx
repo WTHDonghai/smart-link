@@ -5,18 +5,20 @@ import { useAppUpdate } from '../../hooks/useAppUpdate';
 import { logout } from '../../store/slices/authSlice';
 import { selectGuardianStats } from '../../store/slices/orderGuardianSlice';
 import { NavTab } from '../../types';
-import { 
-  ArrowLeftRight, 
-  Building2, 
+import {
+  ArrowLeftRight,
+  Building2,
   BedDouble,
-  ShieldCheck, 
-  FileText, 
+  ShieldCheck,
+  FileText,
   Menu,
   Download,
   RefreshCw,
-  LogOut
+  LogOut,
+  Settings2
 } from 'lucide-react';
 import { XiruanLogoMark } from '../common/XiruanLogo';
+import { UpdateSettingsModal } from '../update/UpdateSettingsModal';
 
 interface NavItem {
   id: NavTab;
@@ -46,6 +48,7 @@ export const Sidebar: React.FC = () => {
   const latestVersion = update.targetVersion;
   const updateProgress = update.progressPercent ?? 0;
   const [tenantMenuOpen, setTenantMenuOpen] = React.useState(false);
+  const [updateSettingsOpen, setUpdateSettingsOpen] = React.useState(false);
   const tenantMenuRef = React.useRef<HTMLDivElement>(null);
   const tenantTriggerRef = React.useRef<HTMLDivElement>(null);
 
@@ -281,6 +284,15 @@ export const Sidebar: React.FC = () => {
                 )}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setUpdateSettingsOpen(true)}
+              className="w-8 h-8 rounded-lg hover:bg-[#eff4ff] text-[#737686] hover:text-[#004ac6] flex items-center justify-center cursor-pointer transition-colors"
+              aria-label="更新设置"
+              title="更新设置"
+            >
+              <Settings2 className="w-4 h-4" />
+            </button>
           </div>
         ) : (
           /* Expanded Mode: Single-line clean representation */
@@ -308,7 +320,7 @@ export const Sidebar: React.FC = () => {
                 </button>
               </div>
 
-              {/* 版本号 / 更新下载动作 */}
+              {/* 版本号 / 更新下载动作 / 更新设置 */}
               <div className="flex items-center gap-1.5 shrink-0">
                 {(hasUpdate || isUpdating) ? (
                   <button
@@ -336,13 +348,22 @@ export const Sidebar: React.FC = () => {
                     <span>{version}</span>
                   </div>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setUpdateSettingsOpen(true)}
+                  className="w-6 h-6 rounded-md hover:bg-[#eff4ff] text-[#737686] hover:text-[#004ac6] flex items-center justify-center cursor-pointer transition-colors"
+                  aria-label="更新设置"
+                  title="更新设置"
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
 
             {/* 更新中的微型进度条 */}
             {isUpdating && (
               <div className="w-full bg-[#e2e8f0] h-1 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="bg-[#004ac6] h-full rounded-full transition-all duration-150"
                   style={{ width: `${updateProgress}%` }}
                 />
@@ -351,6 +372,12 @@ export const Sidebar: React.FC = () => {
           </div>
         )}
       </div>
+
+      <UpdateSettingsModal
+        isOpen={updateSettingsOpen}
+        onClose={() => setUpdateSettingsOpen(false)}
+        onToast={(toast) => dispatch(showToast(toast))}
+      />
     </aside>
   );
 };

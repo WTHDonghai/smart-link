@@ -43,8 +43,11 @@ export interface DesktopUpdateServiceOptions {
   onState?: (state: AppUpdateState) => void;
   scheduler?: DesktopUpdateScheduler;
   readDescriptor: (input: { checkId: string }) => Promise<AppUpdateDescriptor | null>;
-  /** 自动安装总开关（关闭时退化为手动模式，仅角标提醒） */
-  autoInstallEnabled?: boolean;
+  /**
+   * 自动安装总开关读取器：每次安装决策时调用（设置界面可实时开关，关闭后退化为手动模式）。
+   * 缺省恒为 true。
+   */
+  readAutoInstallEnabled?: () => boolean;
   /** 前台判定：用户正在操作应用（窗口聚焦 + 近期有输入）时弹窗交由用户决策 */
   isUserPresent?: () => boolean;
   /** 采集互斥检查：存在活跃采集作业时自动安装顺延，避免中断手工作业 */
@@ -100,7 +103,7 @@ export class DesktopUpdateService {
   private readonly onState: (state: AppUpdateState) => void;
   private readonly readDescriptor: (input: { checkId: string }) => Promise<AppUpdateDescriptor | null>;
   private readonly scheduler: DesktopUpdateScheduler;
-  private readonly autoInstallEnabled: boolean;
+  private readonly readAutoInstallEnabled: () => boolean;
   private readonly isUserPresent: () => boolean;
   private readonly hasActiveCollectionJobs: () => boolean;
   private currentState: AppUpdateState;
@@ -121,7 +124,7 @@ export class DesktopUpdateService {
     this.readDescriptor = options.readDescriptor;
     this.scheduler = options.scheduler || createDefaultScheduler();
     this.updater = options.updater || resolveAutoUpdater();
-    this.autoInstallEnabled = options.autoInstallEnabled ?? true;
+    this.readAutoInstallEnabled = options.readAutoInstallEnabled || (() => true);
     this.isUserPresent = options.isUserPresent || (() => false);
     this.hasActiveCollectionJobs = options.hasActiveCollectionJobs || (() => false);
     this.currentState = this.createState(options.canUpdate ? 'idle' : 'unavailable');
@@ -228,7 +231,8 @@ export class DesktopUpdateService {
    * - 无人值守但有采集作业 → 记日志顺延至下一轮检查
    */
   private evaluateAutoInstall(): void {
-    if (!this.autoInstallEnabled) {
+    // 每次决策时动态读取：设置界面实时开关立即生效，无需重建服务
+    if (!this.readAutoInstallEnabled()) {
       return;
     }
     if (this.currentState.status !== 'available') {
